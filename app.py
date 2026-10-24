@@ -83,10 +83,51 @@ except ImportError:
                             return self._g.decrypt(self._n, ct, self._aad or None)
                     return _GCMWrap(key, nc)
 
-from flask import (
-    Flask, request, jsonify, session, redirect, Response, send_from_directory, render_template_string
-)
-from werkzeug.utils import secure_filename
+try:
+    from flask import (
+        Flask, request, jsonify, session, redirect, Response, send_from_directory, render_template_string
+    )
+except ImportError:
+    class Flask:
+        def __init__(self, *a, **kw):
+            self.config = {}
+        def route(self, *a, **kw):
+            return lambda fn: fn
+        def errorhandler(self, *a, **kw):
+            return lambda fn: fn
+        def before_request(self, *a, **kw):
+            return lambda fn: fn
+        def after_request(self, *a, **kw):
+            return lambda fn: fn
+        def context_processor(self, *a, **kw):
+            return lambda fn: fn
+        def __getattr__(self, name):
+            return lambda *a, **kw: (lambda fn: fn)
+        def run(self, *a, **kw):
+            pass
+    class _DummyReq:
+        path = ""
+        method = "GET"
+        args = {}
+        form = {}
+        files = {}
+        headers = {}
+        remote_addr = "127.0.0.1"
+        is_json = False
+        json = {}
+    request = _DummyReq()
+    redirect = lambda u: u
+    render_template_string = lambda s, **kw: s
+    session = {}
+    jsonify = lambda *a, **kw: dict(*a, **kw) if a else kw
+    send_from_directory = lambda *a, **kw: ""
+    Response = lambda *a, **kw: a[0] if a else ""
+
+try:
+    from werkzeug.utils import secure_filename
+except ImportError:
+    def secure_filename(filename):
+        return re.sub(r"[^a-zA-Z0-9_.\-]", "_", str(filename or "file.txt"))
 
 # CẤU HÌNH HỆ THỐNG & BẢO MẬT WEB
 APP_TITLE = "NHK"
@@ -277,7 +318,8 @@ def _create_raw_sqlite_conn():
     try:
         raw = sqlite3.connect(_ACTIVE_DB_PATH, timeout=30, check_same_thread=False)
         raw.row_factory = sqlite3.Row
-        raw.execute("PRAGMA synchronous=NORMAL;")
+        raw.execute("PRAGMA journal_mode=MEMORY;")
+        raw.execute("PRAGMA synchronous=OFF;")
         raw.execute("PRAGMA temp_store=MEMORY;")
         raw.execute("PRAGMA busy_timeout=15000;")
         raw.execute("PRAGMA cache_size=-8000;")
@@ -436,7 +478,10 @@ def init_db():
     global _ACTIVE_DB_PATH
     try:
         conn = db()
-        conn.execute("PRAGMA journal_mode=WAL;")
+        try:
+            conn.execute("PRAGMA journal_mode=MEMORY;")
+        except Exception:
+            pass
         conn.execute("CREATE TABLE IF NOT EXISTS _lock_test (id INT)")
     except sqlite3.OperationalError:
         import tempfile
@@ -3407,11 +3452,22 @@ class Zalo:
     _GROUPS_CACHE = {}
     _FRIENDS_CACHE = {}
     _POOL_LOCK = threading.RLock()
+    _IMEI_LOCKS = {}
+
+    @classmethod
+    def _get_imei_lock(cls, imei_str):
+        with cls._POOL_LOCK:
+            lk = cls._IMEI_LOCKS.get(imei_str)
+            if lk is None:
+                lk = threading.RLock()
+                cls._IMEI_LOCKS[imei_str] = lk
+            return lk
 
     @classmethod
     def get_pooled_client(cls, imei, cookies, force_new=False, user_agent="", zpw_enk_hint="", uid_hint=""):
         """Hồ quản lý phiên Zalo tập trung (ZaloSessionPool):
-        - Khóa chặt cặp (IMEI, Cookie, User-Agent, zpw_enk) giúp phiên máy tính ở cố định trong tài khoản Zalo, không bao giờ bị văng hay die Cookie!"""
+        - Khóa chặt cặp (IMEI, Cookie, User-Agent, zpw_enk) kèm khóa đồng bộ theo từng IMEI (_IMEI_LOCKS)
+          để chạy 10-50 Acc Zalo cùng lúc không bao giờ gọi trùng getLoginInfo làm die Cookie/IMEI!"""
         c_dict = normalize_zalo_cookies(cookies)
         imei_str = extract_imei_from_raw_input(imei, cookies)
         c_hash = hashlib.md5(json.dumps(c_dict, sort_keys=True).encode("utf-8")).hexdigest()[:12]
@@ -3420,12 +3476,29 @@ class Zalo:
         with cls._POOL_LOCK:
             if not force_new and pkey in cls._CLIENT_POOL:
                 entry = cls._CLIENT_POOL[pkey]
-                if now - entry["ts"] < 2400.0 and entry["client"].secret_key:
+                if now - entry["ts"] < 3600.0 and entry["client"].secret_key:
+                    if uid_hint and not entry["client"].uid:
+                        entry["client"].uid = str(uid_hint)
+                        OWNER_UIDS_CACHE.add(str(uid_hint))
                     return entry["client"]
-        client = cls(imei_str, c_dict, user_agent=user_agent, zpw_enk_hint=zpw_enk_hint, uid_hint=uid_hint)
-        with cls._POOL_LOCK:
-            cls._CLIENT_POOL[pkey] = {"ts": now, "client": client}
-        return client
+            if not force_new and imei_str:
+                for k_ex, ent_ex in cls._CLIENT_POOL.items():
+                    if k_ex.startswith(f"{imei_str}_") and (now - ent_ex["ts"] < 3600.0) and ent_ex["client"].secret_key:
+                        ex_ck = ent_ex["client"].cookies_dict
+                        if (c_dict.get("zpw_sek") and ex_ck.get("zpw_sek") == c_dict.get("zpw_sek")) or (not c_dict.get("zpw_sek") and c_dict.get("zpsid") and ex_ck.get("zpsid") == c_dict.get("zpsid")):
+                            return ent_ex["client"]
+
+        imei_lk = cls._get_imei_lock(imei_str or pkey)
+        with imei_lk:
+            with cls._POOL_LOCK:
+                if not force_new and pkey in cls._CLIENT_POOL:
+                    entry = cls._CLIENT_POOL[pkey]
+                    if now - entry["ts"] < 3600.0 and entry["client"].secret_key:
+                        return entry["client"]
+            client = cls(imei_str, c_dict, user_agent=user_agent, zpw_enk_hint=zpw_enk_hint, uid_hint=uid_hint)
+            with cls._POOL_LOCK:
+                cls._CLIENT_POOL[pkey] = {"ts": time.time(), "client": client}
+            return client
 
     def __init__(self, imei, cookies, user_agent="", zpw_enk_hint="", uid_hint=""):
         self.imei = extract_imei_from_raw_input(imei, cookies)
@@ -3476,6 +3549,21 @@ class Zalo:
             OWNER_UIDS_CACHE.add(self.uid)
             if not self.display_name:
                 self.display_name = f"Zalo_{self.uid[-4:]}"
+        elif self.secret_key and not self.uid:
+            try:
+                r_ui = self.s.get("https://jr.chat.zalo.me/jr/userinfo", headers={"Referer": "https://chat.zalo.me/"}, timeout=5)
+                j_ui = r_ui.json() if r_ui.content else {}
+                info_ui = (j_ui.get("data") or {}).get("info") or {}
+                uid_ui = str(info_ui.get("uid") or info_ui.get("id") or "").strip()
+                if uid_ui:
+                    self.uid = uid_ui
+                    self.send2me_id = uid_ui
+                    self.display_name = info_ui.get("name") or info_ui.get("display_name") or self.display_name or f"Zalo_{uid_ui[-4:]}"
+                    OWNER_UIDS_CACHE.add(uid_ui)
+            except Exception:
+                pass
+            if not self.uid:
+                self._login()
         else:
             self._login()
 
@@ -3653,6 +3741,9 @@ class Zalo:
         if 1 <= pad_len <= 16:
             d = d[:-pad_len]
         return d.decode("utf-8", "ignore")
+
+    def get_groups(self, use_cache=True):
+        return self.groups(use_cache=use_cache)
 
     def groups(self, use_cache=True):
         cache_key = str(self.uid or self.imei)
@@ -9615,7 +9706,7 @@ def multi_box_shard_worker(client, acc_id, plat, shard_targets, blocks, runtime_
 
         fired_in_pass = 0
         for t in valid_targets:
-            t_id = str(t["id"])
+            t_id = str(t.get("id") or t.get("thread_id") or "")
             if t_id in dead_targets:
                 continue
             if is_task_stopped_fast(stop_ev, start_global_epoch, box_epochs.get(t_id), t_id):
@@ -9912,6 +10003,8 @@ def task_supervisor(tid, targets, blocks, runtime_opts, multi_acc, stop_ev, spec
         )
         threads.append(t)
         t.start()
+        if idx_a < len(selected_accs) - 1 and len(selected_accs) > 1:
+            time.sleep(min(0.08, 0.40 / max(1, len(selected_accs))))
 
     while not stop_ev.is_set():
         alive = any(t.is_alive() for t in threads)
@@ -9937,10 +10030,22 @@ def start_task_programmatic(targets, blocks, delay=0.0, use_emoji=False, icon_co
                             mode="fast", color_mode="word_rainbow", fixed_color="red",
                             antiband=True, antidieall=True, specific_acc_id=None, source_label="web",
                             defer_db_insert=False, account_ids=None, trigger_cmd="", hide_tag_all=True,
-                            hide_tag_name=True, font_style=None):
+                            hide_tag_name=True, font_style=None, strip_line_num=True, **extra_kwargs):
     tid = new_tid("cmd" if source_label == "chat" else "task")
     stop_ev = threading.Event()
     tag_users = tag_users or []
+    norm_targets = []
+    for t_raw in (targets or []):
+        if isinstance(t_raw, dict):
+            t_copy = dict(t_raw)
+            tid_val = str(t_copy.get("id") or t_copy.get("thread_id") or "").strip()
+            if tid_val:
+                t_copy["id"] = tid_val
+                t_copy["thread_id"] = tid_val
+                t_copy.setdefault("name", f"Box {tid_val[-6:]}")
+                t_copy.setdefault("type", "group")
+                norm_targets.append(t_copy)
+    targets = norm_targets
 
     clean_blocks = []
     for b in blocks:
@@ -12427,23 +12532,33 @@ class ZaloRealtimeListener:
         except Exception:
             pass
 
-        # Cập nhật danh sách ID nhóm của tài khoản mỗi 8 giây (hoặc ngay lần đầu tiên)
+        # Quét thông minh gridVerMap delta (chỉ 1 gói tin nhẹ kiểm tra toàn bộ nhóm xem nhóm nào vừa nhảy version tin nhắn mới)
+        # giúp chạy 10-30 Acc Zalo cùng lúc không bao giờ bị Zalo chặn rate-limit hay làm die Cookie/IMEI!
         acc_gids = KNOWN_GROUPS_BY_ACC.get(client.uid, set())
-        if not acc_gids or (now_t - getattr(self, "_last_gmap_check_ts", 0.0) >= 8.0):
+        changed_gids = []
+        if not hasattr(self, "_grid_ver_cache"):
+            self._grid_ver_cache = {}
+        if not acc_gids or (now_t - getattr(self, "_last_gmap_check_ts", 0.0) >= 1.2):
             self._last_gmap_check_ts = now_t
             try:
                 gmap = client.get_grid_ver_map() or {}
-                for gid_k in gmap.keys():
+                for gid_k, ver_v in gmap.items():
                     gid_s = _clean_zalo_id(gid_k)
                     if gid_s and gid_s != my_uid:
                         KNOWN_GROUPS_BY_ACC[client.uid].add(gid_s)
                         ALL_KNOWN_ZALO_GROUP_IDS.add(gid_s)
+                        ver_s = str(ver_v)
+                        prev_ver = self._grid_ver_cache.get(gid_s)
+                        self._grid_ver_cache[gid_s] = ver_s
+                        if prev_ver is not None and prev_ver != ver_s:
+                            changed_gids.append(gid_s)
             except Exception:
                 pass
 
-        # Xoay vòng quét trực tiếp get_recent_group_messages(gid) cho TẤT CẢ các nhóm của tài khoản (mỗi 0.24s quét 8 nhóm song song)
-        # đảm bảo gõ lệnh ở bất kỳ Box nào cũng ăn lệnh ngay lập tức!
-        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.24:
+        for c_gid in changed_gids[:6]:
+            _SHARED_ZALO_POLLER_POOL.submit(self._poll_single_group, client, acc_now, c_gid)
+
+        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.65:
             self._last_rot_group_poll_ts = now_t
             all_my_gids = sorted(
                 g for g in KNOWN_GROUPS_BY_ACC.get(client.uid, set())
@@ -12452,20 +12567,23 @@ class ZaloRealtimeListener:
             if all_my_gids:
                 batch_gids = []
                 for h_gid in list(HOT_ACTIVE_ZALO_GROUPS):
-                    if h_gid in all_my_gids and len(batch_gids) < 3:
+                    if h_gid in all_my_gids and h_gid not in changed_gids and len(batch_gids) < 2:
                         batch_gids.append(h_gid)
-                batch_size = min(8, len(all_my_gids))
+                batch_size = min(3, len(all_my_gids))
                 for _ in range(len(all_my_gids)):
                     if len(batch_gids) >= batch_size:
                         break
                     cand_g = all_my_gids[self.poll_cursor % len(all_my_gids)]
                     self.poll_cursor += 1
-                    if cand_g not in batch_gids:
+                    if cand_g not in batch_gids and cand_g not in changed_gids:
                         batch_gids.append(cand_g)
                 for gid_target in batch_gids:
                     _SHARED_ZALO_POLLER_POOL.submit(self._poll_single_group, client, acc_now, gid_target)
 
     def _run_http_poller_loop(self):
+        stagger_init = (int(self.acc_id or 1) % 7) * 0.06
+        if stagger_init > 0:
+            self.stop_ev.wait(stagger_init)
         while not self.stop_ev.is_set():
             acc_row = self._get_acc_row()
             if not acc_row or (acc_row.get("platform") or "zalo") != "zalo":
@@ -12480,13 +12598,15 @@ class ZaloRealtimeListener:
                     zpw_enk_hint=acc_row.get("zpw_enk") or "",
                     uid_hint=acc_row.get("uid") or ""
                 )
+                if client.uid:
+                    OWNER_UIDS_CACHE.add(str(client.uid))
                 now_ka = time.time()
                 try:
                     from zalo_login import ZaloPCSessionKeeper
                     ZaloPCSessionKeeper.notify_external_ws_alive(client.uid, client.imei)
                 except Exception:
                     pass
-                if now_ka - getattr(self, "_last_pc_keepalive_ts", 0.0) > 90.0:
+                if now_ka - getattr(self, "_last_pc_keepalive_ts", 0.0) > 120.0:
                     self._last_pc_keepalive_ts = now_ka
                     try:
                         srv_sign = hashlib.md5(f"zsecuregetserverinfo645Web{client.imei}30".encode("utf-8")).hexdigest()
@@ -12506,7 +12626,9 @@ class ZaloRealtimeListener:
             except Exception as e:
                 if "Phiên đăng nhập" in str(e) or "zpw_enk" in str(e):
                     self.ws_status = "Cần cập nhật lại Cookie Zalo"
-            self.stop_ev.wait(0.12)
+            active_z_cnt = max(1, len(ACTIVE_LISTENERS))
+            poll_sleep = 0.26 + min(0.28, max(0, active_z_cnt - 1) * 0.04)
+            self.stop_ev.wait(poll_sleep)
 
     def _run_ws_session(self, client, acc_row, ws_url):
         parsed = urlparse(ws_url)
@@ -13195,6 +13317,20 @@ def sync_all_zalo_listeners():
                 ACTIVE_LISTENERS.pop(aid, None)
     except Exception:
         pass
+
+
+# Các hàm bí danh tương thích hoàn toàn với get_ck_im_zalo.py
+TASKS = TASKS_RAM_STORE
+TASKS_LOCK = TASKS_RAM_LOCK
+
+
+def reload_accounts_to_ram():
+    refresh_accounts_ram_cache()
+    refresh_owner_uids()
+
+
+def ensure_account_listener(acc_row=None):
+    sync_all_zalo_listeners()
 
 def _flush_ram_tasks_to_db():
     try:
