@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: bot-treo-4app-vn
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --config gunicorn.conf.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: TELEGRAM_BOT_TOKEN
+        value: 8917587021:AAGnf2uUmNLI1r747luw8BVGi_hr3jBzWpw
+      - key: TELEGRAM_ADMIN_ID
+        value: "8827605973"
+      - key: ZALO_PREFER_COUNTRY
+        value: SG
