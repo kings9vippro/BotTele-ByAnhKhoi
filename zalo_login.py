@@ -805,10 +805,14 @@ def parse_cookies_input_flexible(raw_cookies):
         except Exception:
             pass
     out = {}
-    for part in s.split(";"):
+    for part in re.split(r"[;|\r\n]+", s):
         if "=" in part:
             k, v = part.strip().split("=", 1)
             k_s, v_s = k.strip(), v.strip()
+            if " " in k_s:
+                k_s = k_s.split()[-1].strip()
+            if ":" in k_s:
+                k_s = k_s.split(":")[-1].strip()
             if k_s and _is_valid_cookie_val(v_s, k_s) and k_s.lower() not in _COOKIE_RESERVED_ATTRS and "\n" not in k_s:
                 out[k_s] = v_s
     return out
@@ -816,13 +820,30 @@ def parse_cookies_input_flexible(raw_cookies):
 
 def extract_imei_and_metadata_flexible(imei_input, raw_cookies=""):
     """Tự động trích xuất chính xác IMEI (`z_uuid`), `zpw_enk`, và `user_agent` từ dữ liệu người dùng nhập vào:
-    - Tuyệt đối ưu tiên `z_uuid` có sẵn trong Cookie nếu ô IMEI để trống (không tự ý sinh IMEI ngẫu nhiên làm chết Cookie đang sống!)."""
+    - Hỗ trợ mọi định dạng: JSON, Header Cookie, `IMEI|Cookie`, `Cookie|IMEI`, UUID chuẩn hoặc mã 16-hex từ zalo_login.py.
+    - Tuyệt đối ưu tiên `z_uuid` / `imei` có sẵn trong Cookie nếu ô IMEI để trống (không tự ý sinh IMEI ngẫu nhiên làm chết Cookie đang sống!)."""
+    if isinstance(imei_input, dict) and not isinstance(raw_cookies, dict):
+        # Người gọi truyền (cookies_dict, imei_str) ngược thứ tự -> tự động đảo lại
+        imei_input, raw_cookies = raw_cookies, imei_input
+    elif isinstance(imei_input, str) and isinstance(raw_cookies, str) and ("zpw_sek=" in imei_input or "zpsid=" in imei_input or imei_input.strip().startswith("{")) and raw_cookies and ("=" not in raw_cookies and not raw_cookies.strip().startswith("{")):
+        imei_input, raw_cookies = raw_cookies, imei_input
+
     combined = f"{imei_input or ''}\n{raw_cookies or ''}" if isinstance(raw_cookies, str) else str(imei_input or "")
     cookies_dict = parse_cookies_input_flexible(raw_cookies if raw_cookies else imei_input)
+    if not cookies_dict and imei_input:
+        cookies_dict = parse_cookies_input_flexible(imei_input)
 
     imei_clean = ""
     raw_i_str = str(imei_input or "").strip()
-    if raw_i_str and not raw_i_str.startswith("{") and "\n" not in raw_i_str and ":" not in raw_i_str and ";" not in raw_i_str and len(raw_i_str) >= 16:
+    # Hỗ trợ cú pháp ngăn cách bằng dấu gạch đứng: IMEI | Cookie hoặc Cookie | IMEI
+    if "|" in raw_i_str and not raw_cookies:
+        pipe_parts = [p.strip() for p in raw_i_str.split("|") if p.strip()]
+        for pp in pipe_parts:
+            if "=" not in pp and not pp.startswith("{") and 14 <= len(pp) <= 80 and " " not in pp:
+                imei_clean = pp
+                break
+
+    if not imei_clean and raw_i_str and not raw_i_str.startswith("{") and "\n" not in raw_i_str and ":" not in raw_i_str and ";" not in raw_i_str and "=" not in raw_i_str and len(raw_i_str) >= 14:
         imei_clean = raw_i_str
 
     if not imei_clean:
@@ -851,6 +872,12 @@ def extract_imei_and_metadata_flexible(imei_input, raw_cookies=""):
 
     if not imei_clean and cookies_dict.get("z_uuid"):
         imei_clean = str(cookies_dict["z_uuid"]).strip()
+    if not imei_clean and cookies_dict.get("imei"):
+        imei_clean = str(cookies_dict["imei"]).strip()
+    if not imei_clean:
+        m_hex16 = re.search(r"(?:^|[\s|\n,;])([0-9a-fA-F]{16,36})(?:$|[\s|\n,;])", combined)
+        if m_hex16:
+            imei_clean = m_hex16.group(1).strip()
 
     zpw_enk = ""
     m_enk = re.search(r"(?:Zpw_Enk|zpw_enk)\s*[:=]\s*\n?\s*([A-Za-z0-9+/=]{16,64})", combined)
@@ -1395,7 +1422,16 @@ def exchange_cookies_for_zpw_enk(session_obj, imei, cookie_jar_dict, ua, sec_ch_
     return user_info_got
 
 
-def check_zalo_cookie_imei_live(imei, cookies_input, zpw_enk="", user_agent="", uid="", computer_name="Web", session_obj=None, db_path=""):
+def _enrich_check_result(res_dict):
+    if not isinstance(res_dict, dict):
+        return res_dict
+    res_dict.setdefault("name", res_dict.get("display_name") or "")
+    res_dict.setdefault("secret_key", res_dict.get("zpw_enk") or "")
+    res_dict.setdefault("refreshed_cookies", res_dict.get("cookies") or {})
+    return res_dict
+
+
+def _check_zalo_cookie_imei_live_impl(imei, cookies_input="", zpw_enk="", user_agent="", uid="", computer_name="Web", session_obj=None, db_path=""):
     """Kiểm tra chính xác Máy Tính + Cookie + IMEI Zalo đang SỐNG TRONG ACC (ON) hay DIE (OFF):
     - Tự động nạp khóa `zpw_enk` và Cookie mới nhất đang sống của `imei` từ `ZaloPCSessionKeeper` / SQLite (`zalo_cookie_vault` / `accounts`)
       để khi người dùng gõ `/check <cookie + imei>` trên Telegram tuyệt đối KHÔNG gọi đè `getLoginInfo` làm văng phiên!
@@ -1468,6 +1504,21 @@ def check_zalo_cookie_imei_live(imei, cookies_input, zpw_enk="", user_agent="", 
         or ""
     ).strip()
 
+    if not live_uid:
+        try:
+            r_jr = s.get(
+                "https://jr.chat.zalo.me/jr/userinfo",
+                headers={"User-Agent": eff_ua, "Referer": "https://chat.zalo.me/"},
+                timeout=6,
+            )
+            _harvest_cookies(r_jr, s, cookies_dict)
+            j_jr = r_jr.json() if r_jr.content else {}
+            jr_info = ((j_jr.get("data") or {}).get("info") or {}) if isinstance(j_jr, dict) else {}
+            if isinstance(jr_info, dict):
+                live_uid = str(jr_info.get("uid") or jr_info.get("id") or live_uid or "").strip()
+                live_name = str(jr_info.get("name") or jr_info.get("display_name") or live_name or "").strip()
+        except Exception:
+            pass
     if not live_uid:
         zpsid_v = str(cookies_dict.get("zpsid") or "")
         m_u = re.search(r"(\d{8,22})", zpsid_v)
@@ -1593,6 +1644,15 @@ def check_zalo_cookie_imei_live(imei, cookies_input, zpw_enk="", user_agent="", 
     }
 
 
+def check_zalo_cookie_imei_live(imei, cookies_input="", zpw_enk="", user_agent="", uid="", computer_name="Web", session_obj=None, db_path=""):
+    res = _check_zalo_cookie_imei_live_impl(
+        imei=imei, cookies_input=cookies_input, zpw_enk=zpw_enk,
+        user_agent=user_agent, uid=uid, computer_name=computer_name,
+        session_obj=session_obj, db_path=db_path
+    )
+    return _enrich_check_result(res)
+
+
 def verify_zalo_pc_device_logged_in_account(imei, cookies_dict, zpw_enk="", user_agent="", uid="", session_obj=None):
     res = check_zalo_cookie_imei_live(
         imei=imei, cookies_input=cookies_dict, zpw_enk=zpw_enk,
@@ -1646,6 +1706,13 @@ class ZaloPCSessionKeeper:
     def is_external_ws_active(cls, uid, imei):
         # Đã hợp nhất về 1 WebSocket duy nhất trong ZaloPCSessionKeeper nên luôn trả về False để Keeper giữ kết nối xuyên suốt 24/7
         return False
+
+    @classmethod
+    def register_session(cls, uid="", imei="", cookies_dict=None, user_agent="", secret_key="", zpw_enk="", **kwargs):
+        return cls.register_and_keep_alive(
+            uid=uid, imei=imei, cookies_dict=cookies_dict or {},
+            zpw_enk=zpw_enk or secret_key or "", user_agent=user_agent, **kwargs
+        )
 
     @classmethod
     def register_and_keep_alive(cls, uid, imei, cookies_dict, zpw_enk="", user_agent="", pc_name="Windows 11 Pro (Singapore)", computer_name="", mac_address="", ws_urls=None, display_name="", db_path="", wait_ws_sec=0.0):
@@ -2684,6 +2751,7 @@ def _execute_qr_login_sync(
         "sec_ch_ua": sec_ch_ua,
         "sec_platform": sec_platform,
         "zpw_enk": zpw_enk,
+        "secret_key": zpw_enk,
         "uid": uid,
         "display_name": final_name,
         "pc_name": pc_name,
