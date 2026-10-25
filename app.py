@@ -683,21 +683,41 @@ def init_db():
         cur.execute("UPDATE accounts SET allow_all_cmd = 0")
         # Tự động nạp sẵn 8 kho kịch bản VIP từ 3 file zip (nhay.txt, so.txt, chui.txt, codelag.txt, nhayicon.txt, nhaynamebox.txt, ngon.txt, 2c.txt)
         presets_dir = os.path.join(BASE_DIR, "presets")
-        if os.path.isdir(presets_dir):
-            import shutil
-            existing_fnames = {r["filename"].lower() for r in cur.execute("SELECT filename FROM files").fetchall() if r["filename"]}
-            for pf_name in ("nhay.txt", "so.txt", "chui.txt", "codelag.txt", "nhayicon.txt", "nhaynamebox.txt", "ngon.txt", "2c.txt"):
-                src_pf = os.path.join(presets_dir, pf_name)
-                if os.path.isfile(src_pf) and pf_name.lower() not in existing_fnames:
-                    dst_pf = os.path.join(UPLOAD_DIR, f"preset_{pf_name}")
-                    if not os.path.isfile(dst_pf):
-                        shutil.copyfile(src_pf, dst_pf)
-                    with open(dst_pf, "r", encoding="utf-8", errors="ignore") as rf_p:
-                        l_cnt = sum(1 for ln in rf_p if ln.strip())
-                    cur.execute(
-                        "INSERT INTO files (filename, filepath, lines_count, created_at) VALUES (?, ?, ?, ?)",
-                        (pf_name, dst_pf, max(1, l_cnt), time.time())
-                    )
+        default_preset_contents = {
+            "nhay.txt": "Sủa mạnh lên con chó ngu\nMày sợ bố à con đĩ\nLên phím nhanh lên con gà\nBố đè đầu cưỡi cổ mày nè\nChạy đi đâu con sâu cái kiến\nNgồi im nghe bố giảng đạo lý\nBố chấp cả lò nhà mày luôn",
+            "so.txt": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10",
+            "chui.txt": "Mày tuổi gì đú với bố\nNằm xuống sủa gâu gâu đi con\nThằng óc vật biết gõ phím không\nBố vả lệch mõm mày giờ",
+            "codelag.txt": "꧁༺💥⚡🔥👑🔥⚡💥༻꧂\n۞۩๑🔥⚡👑⚡🔥๑۩۞",
+            "nhayicon.txt": "🔥 ⚡ 👑 💀 ☠️ 😈 💥 🚀\n🌪️ 🐉 ⚔️ 🛡️ 🔥 ⚡ 👑 💥",
+            "nhaynamebox.txt": "Box Bị Chiếm Đóng 🔥\nHệ Thống Quản Trị Viên 👑\nTrùm Cuối Zalo VIP ⚡\nĐế Chế Tối Thượng 🚀\nKhu Vực Cấm Địa 🛡️",
+            "ngon.txt": "Hệ Thống Đa Luồng Siêu Tốc\nĐẳng cấp tốc độ ánh sáng, cân mọi chiến trường không độ trễ!\nTường lửa Anti-Ban bảo vệ toàn diện 24/7!",
+            "2c.txt": "Câu 1 vả thẳng mặt\nCâu 2 đè bẹp dí\nCâu 3 tiễn lên đường\nCâu 4 khóa mõm toàn tập",
+        }
+        import shutil
+        existing_fnames = {r["filename"].lower() for r in cur.execute("SELECT filename FROM files").fetchall() if r["filename"]}
+        for pf_name, def_txt in default_preset_contents.items():
+            src_pf = os.path.join(presets_dir, pf_name)
+            dst_pf = os.path.join(UPLOAD_DIR, f"preset_{pf_name}")
+            dst_plain = os.path.join(UPLOAD_DIR, pf_name)
+            if os.path.isfile(src_pf):
+                if not os.path.isfile(dst_pf):
+                    shutil.copyfile(src_pf, dst_pf)
+                if not os.path.isfile(dst_plain):
+                    shutil.copyfile(src_pf, dst_plain)
+            else:
+                if not os.path.isfile(dst_pf):
+                    with open(dst_pf, "w", encoding="utf-8") as wf:
+                        wf.write(def_txt)
+                if not os.path.isfile(dst_plain):
+                    with open(dst_plain, "w", encoding="utf-8") as wf:
+                        wf.write(def_txt)
+            if pf_name.lower() not in existing_fnames and os.path.isfile(dst_pf):
+                with open(dst_pf, "r", encoding="utf-8", errors="ignore") as rf_p:
+                    l_cnt = sum(1 for ln in rf_p if ln.strip())
+                cur.execute(
+                    "INSERT INTO files (filename, filepath, lines_count, created_at) VALUES (?, ?, ?, ?)",
+                    (pf_name, dst_pf, max(1, l_cnt), time.time())
+                )
         z_rows = cur.execute("SELECT id, imei, cookies FROM accounts WHERE platform='zalo'").fetchall()
         for zr in z_rows:
             norm_c = normalize_zalo_cookies(zr["cookies"])
@@ -876,6 +896,31 @@ def get_current_epochs(thread_id=None):
         b_ep = BOX_STOP_EPOCHS[str(thread_id).strip()] if thread_id else 0
         return g_ep, b_ep
 
+_CAMPAIGN_THREAD_CTX = threading.local()
+
+def set_campaign_thread_context(stop_ev, start_global_epoch=None, start_box_epoch=None, target_id=None):
+    _CAMPAIGN_THREAD_CTX.active = True
+    _CAMPAIGN_THREAD_CTX.stop_ev = stop_ev
+    _CAMPAIGN_THREAD_CTX.start_global_epoch = start_global_epoch
+    _CAMPAIGN_THREAD_CTX.start_box_epoch = start_box_epoch
+    _CAMPAIGN_THREAD_CTX.target_id = target_id
+
+def clear_campaign_thread_context():
+    _CAMPAIGN_THREAD_CTX.active = False
+    _CAMPAIGN_THREAD_CTX.stop_ev = None
+
+def check_campaign_thread_aborted(thread_id=None):
+    """Ngắt luồng chiến dịch tức thì trong 0.0001ms ngay trước mọi thao tác gửi HTTP/WS khi bấm .t / .ta / .stop!"""
+    if not getattr(_CAMPAIGN_THREAD_CTX, "active", False):
+        return False
+    stop_ev = getattr(_CAMPAIGN_THREAD_CTX, "stop_ev", None)
+    g_ep = getattr(_CAMPAIGN_THREAD_CTX, "start_global_epoch", None)
+    b_ep = getattr(_CAMPAIGN_THREAD_CTX, "start_box_epoch", None)
+    t_id = thread_id or getattr(_CAMPAIGN_THREAD_CTX, "target_id", None)
+    if is_task_stopped_fast(stop_ev, g_ep, b_ep, t_id):
+        raise Exception("TaskStoppedAbort")
+    return False
+
 def is_task_stopped_fast(stop_ev, start_global_epoch=None, start_box_epoch=None, target_id=None):
     """Kiểm tra trạng thái dừng trong 0.0001ms thuần RAM (Không khóa DB, không nghẽn luồng)!"""
     if stop_ev is not None and stop_ev.is_set():
@@ -985,6 +1030,9 @@ SYSTEM_RUNTIME_CONFIG = {
     "hide_acc_log": True,
     "hide_tag_all": True,
     "hide_tag_name": False,
+    "selected_file": "",
+    "selected_file_by_acc": {},
+    "require_file_first": True,
 }
 SYSTEM_CFG_LOCK = threading.RLock()
 
@@ -1037,7 +1085,7 @@ VALID_SYSTEM_CMD_TOKENS = {
     "2fa", "otp", "totp", "todo", "giaoviec", "bank", "stk", "card", "danhthiep",
     "statusdc", "hypesquad", "react", "thuhoi", "undo",
     "spam", "fast", "nhanh", "s", "nhay", "treonhay", "treo_nhay", "n",
-    "ngon", "treongon", "treo_ngon", "g", "file", "chay", "f",
+    "ngon", "treongon", "treo_ngon", "g", "file", "chay", "f", "chonfile", "cf", "pickfile", "setfile",
     "files", "dsfile", "listfile", "ds", "tag", "all", "tagall", "anall", "tagallan", "antan", "tagan", "antag", "hientag", "prx", "proxy",
     "soi", "soifull", "scanbox", "dsbox", "listbox", "dsnhom", "chan", "bam", "bamsat", "chanall", "gall", "gll", "ngonall", "nall", "nll", "nhayall", "xaall",
     "raid", "r", "auto", "a", "dao", "chao", "hi", "xa", "sieuxa", "xanhom", "combo", "battrinh",
@@ -4084,99 +4132,206 @@ class Zalo:
     ]
 
     def create_poll(self, group_id, question, options):
+        """Tạo bình chọn (Poll) Zalo WPA v645 siêu ổn định — Không chứa ký tự ẩn gây lỗi từ chối Poll,
+        tự động giải mã kiểm tra kết quả thực và ngắt tức thì 0ms khi có lệnh Stop!"""
+        check_campaign_thread_aborted(group_id)
         gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
         if not gid_s:
             return False
+        if not getattr(self, "secret_key", None):
+            try:
+                self._login()
+            except Exception:
+                pass
         self._poll_seq = (getattr(self, "_poll_seq", 0) + 1) & 0xFFFFFF
         seq_now = self._poll_seq
-        zw_tail = ZERO_WIDTH_ZALO_POOL[seq_now % len(ZERO_WIDTH_ZALO_POOL)] + ZERO_WIDTH_ZALO_POOL[(seq_now >> 1) % len(ZERO_WIDTH_ZALO_POOL)]
-        raw_opts = [str(x).strip() for x in (options or []) if str(x).strip()]
+
+        def _clean_poll_txt(s_in, max_len=120):
+            s_c = strip_invisible_chars(str(s_in or "")).replace("\r", " ").replace("\n", " ").strip()
+            s_c = re.sub(r"\s+", " ", s_c)
+            return s_c[:max_len]
+
+        q_clean = _clean_poll_txt(question, max_len=160) or "Bình chọn Quản Trị Viên"
+        q_str = f"{q_clean} #{seq_now}" if len(q_clean) <= 145 else q_clean
+
+        raw_opts = [_clean_poll_txt(x, max_len=65) for x in (options or []) if _clean_poll_txt(x, max_len=65)]
         if len(raw_opts) < 2:
-            q_short = str(question or "Bình chọn VIP").strip()[:28]
-            raw_opts = [f"{q_short} #{seq_now}A", f"{q_short} #{seq_now}B"]
+            q_short = q_clean[:36] or "Phương án VIP"
+            dedup_opts = [f"{q_short} #1", f"{q_short} #2"]
         else:
             seen_o = set()
             dedup_opts = []
             for idx_o, o_txt in enumerate(raw_opts[:10], 1):
-                cand_o = f"{o_txt[:55]}{zw_tail}"
-                if cand_o in seen_o:
-                    cand_o = f"{o_txt[:52]} #{idx_o}{zw_tail}"
-                seen_o.add(cand_o)
+                cand_o = o_txt[:60]
+                if cand_o.lower() in seen_o:
+                    cand_o = f"{o_txt[:52]} #{idx_o}"
+                seen_o.add(cand_o.lower())
                 dedup_opts.append(cand_o)
-            raw_opts = dedup_opts
-        q_base = str(question or "Bình chọn Quản Trị Viên").strip()[:175]
-        q_str = f"{q_base}{zw_tail}"
-        pl = {
-            "group_id": gid_s,
-            "question": q_str,
-            "options": raw_opts[:10],
-            "expired_time": 0,
-            "pin_act": False,
-            "allow_multi_choices": True,
-            "allow_add_new_option": True,
-            "is_hide_vote_preview": False,
-            "is_anonymous": False,
-            "poll_type": 0,
-            "src": 1,
-            "imei": self.imei,
-        }
-        enc = self._enc(pl)
-        active_s = getattr(self, "prio_s", None) or self.s
-        for ep_poll in (
+            if len(dedup_opts) < 2:
+                dedup_opts.append(f"{dedup_opts[0][:50]} #2")
+
+        pl_variants = [
+            {
+                "group_id": str(gid_s),
+                "question": q_str,
+                "options": dedup_opts[:10],
+                "expired_time": 0,
+                "pin_act": False,
+                "allow_multi_choices": True,
+                "allow_add_new_option": True,
+                "is_hide_vote_preview": False,
+                "is_anonymous": False,
+                "poll_type": 0,
+                "src": 1,
+                "imei": self.imei,
+            },
+            {
+                "grid": str(gid_s),
+                "group_id": str(gid_s),
+                "question": q_str,
+                "options": dedup_opts[:10],
+                "expired_time": 0,
+                "pin_act": False,
+                "allow_multi_choices": True,
+                "allow_add_new_option": True,
+                "is_hide_vote_preview": False,
+                "is_anonymous": False,
+                "poll_type": 0,
+                "src": 1,
+                "imei": self.imei,
+            },
+        ]
+        endpoints = (
             "https://tt-group-wpa.chat.zalo.me/api/poll/create",
             "https://group-wpa.chat.zalo.me/api/poll/create",
-        ):
+            "https://wpa.chat.zalo.me/api/poll/create",
+        )
+        active_s = self.s
+        ok_poll = False
+        for idx_ep, ep_poll in enumerate(endpoints):
+            check_campaign_thread_aborted(gid_s)
+            pl = pl_variants[0] if idx_ep == 0 else pl_variants[-1]
             try:
+                enc = self._enc(pl)
                 r = active_s.post(
                     ep_poll,
-                    params={"zpw_ver": 645, "zpw_type": 30},
-                    data={"params": enc},
-                    timeout=(1.0, 2.2),
-                )
-                if r.status_code == 200:
-                    return True
-            except Exception:
-                continue
-        return False
-
-    def change_group_name(self, group_id, new_name):
-        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
-        if not gid_s:
-            return False
-        self._namebox_seq = (getattr(self, "_namebox_seq", 0) + 1) & 0xFFFF
-        base_name = str(new_name or "Box Quản Trị Viên").strip()[:85] or "Box Quản Trị Viên"
-        last_map = getattr(self, "_last_group_name_map", None)
-        if last_map is None:
-            last_map = {}
-            self._last_group_name_map = last_map
-        if last_map.get(gid_s) == base_name:
-            badges = ("⚡", "🔥", "👑", "💎", "🚀", "✨")
-            base_name = f"{base_name[:80]} {badges[self._namebox_seq % len(badges)]}"
-        last_map[gid_s] = base_name
-        pl = {"grid": gid_s, "gname": base_name, "imei": self.imei}
-        enc = self._enc(pl)
-        active_s = getattr(self, "prio_s", None) or self.s
-        ok_any = False
-        for ep_gn in (
-            "https://tt-group-wpa.chat.zalo.me/api/group/changename",
-            "https://tt-group-wpa.chat.zalo.me/api/group/updateinfo",
-        ):
-            try:
-                r = active_s.post(
-                    ep_gn,
                     params={"zpw_ver": 645, "zpw_type": 30},
                     data={"params": enc},
                     timeout=(1.2, 2.8),
                 )
                 if r.status_code == 200:
-                    ok_any = True
-                    try:
-                        rj = r.json()
-                        if int(rj.get("error_code") or 0) == 0:
-                            break
-                    except Exception:
-                        break
+                    rj = r.json() if r.content else {}
+                    outer_err = int(rj.get("error_code") or 0)
+                    inner_err = 0
+                    if rj.get("data"):
+                        try:
+                            dec = json.loads(self._dec(rj["data"]))
+                            if isinstance(dec, dict):
+                                inner_err = int(dec.get("error_code") or 0)
+                        except Exception:
+                            pass
+                    if outer_err == 0 and inner_err == 0:
+                        return True
+                    if outer_err in (-401, 401, -102, 3003) or inner_err in (-401, 401, -102, 3003):
+                        try:
+                            self._login()
+                        except Exception:
+                            pass
+                    ok_poll = True
+            except Exception as ex_p:
+                if "TaskStoppedAbort" in str(ex_p):
+                    raise ex_p
+                continue
+        return ok_poll
+
+    def change_group_name(self, group_id, new_name):
+        """Đổi Tên Box Zalo Đa Giao Thức (Zalo WPA v645 + Group UpdateInfo + Multi-Gateway):
+        - Tự động làm sạch ký tự ẩn/xuống dòng (tránh Zalo từ chối tên nhóm).
+        - Giải mã kiểm tra kết quả bên trong `data` để tự động xoay sang cổng dự phòng nếu cổng chính bận.
+        - Hỗ trợ cả POST & GET trên `tt-group-wpa`, `group-wpa`, `wpa.chat.zalo.me` và `updateinfo`."""
+        check_campaign_thread_aborted(group_id)
+        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
+        if not gid_s:
+            return False
+        if not getattr(self, "secret_key", None):
+            try:
+                self._login()
             except Exception:
+                pass
+        self._namebox_seq = (getattr(self, "_namebox_seq", 0) + 1) & 0xFFFF
+        clean_title = strip_invisible_chars(str(new_name or "")).replace("\r", " ").replace("\n", " ").strip()
+        if "|" in clean_title:
+            parts_t = [p.strip() for p in clean_title.split("|") if p.strip()]
+            if parts_t:
+                clean_title = parts_t[self._namebox_seq % len(parts_t)]
+        clean_title = re.sub(r"\s+", " ", clean_title)[:60] or "Box Quản Trị Viên"
+
+        last_map = getattr(self, "_last_group_name_map", None)
+        if last_map is None:
+            last_map = {}
+            self._last_group_name_map = last_map
+        if last_map.get(gid_s) == clean_title:
+            badges = ("⚡", "🔥", "👑", "💎", "🚀", "✨")
+            clean_title = f"{clean_title[:54]} {badges[self._namebox_seq % len(badges)]}"
+        last_map[gid_s] = clean_title
+
+        ALL_KNOWN_ZALO_GROUP_IDS.add(gid_s)
+        if self.uid:
+            KNOWN_GROUPS_BY_ACC[self.uid].add(gid_s)
+
+        pl_changename = {"grid": str(gid_s), "gname": str(clean_title), "imei": self.imei}
+        pl_updateinfo = {"grid": str(gid_s), "gname": str(clean_title), "type": 1, "imei": self.imei}
+        pl_full = {"grid": str(gid_s), "groupId": str(gid_s), "gname": str(clean_title), "name": str(clean_title), "imei": self.imei}
+
+        attempts = [
+            ("POST", "https://tt-group-wpa.chat.zalo.me/api/group/changename", pl_changename),
+            ("POST", "https://group-wpa.chat.zalo.me/api/group/changename", pl_changename),
+            ("POST", "https://wpa.chat.zalo.me/api/group/changename", pl_changename),
+            ("POST", "https://tt-group-wpa.chat.zalo.me/api/group/updateinfo", pl_updateinfo),
+            ("GET",  "https://tt-group-wpa.chat.zalo.me/api/group/changename", pl_changename),
+            ("POST", "https://tt-group-wpa.chat.zalo.me/api/group/changename", pl_full),
+        ]
+        active_s = self.s
+        ok_any = False
+        for method, ep_gn, pl_item in attempts:
+            check_campaign_thread_aborted(gid_s)
+            try:
+                enc = self._enc(pl_item)
+                if method == "GET":
+                    r = active_s.get(
+                        ep_gn,
+                        params={"zpw_ver": 645, "zpw_type": 30, "params": enc},
+                        timeout=(1.2, 2.8),
+                    )
+                else:
+                    r = active_s.post(
+                        ep_gn,
+                        params={"zpw_ver": 645, "zpw_type": 30},
+                        data={"params": enc},
+                        timeout=(1.2, 2.8),
+                    )
+                if r.status_code == 200:
+                    rj = r.json() if r.content else {}
+                    outer_err = int(rj.get("error_code") or 0)
+                    inner_err = 0
+                    if rj.get("data"):
+                        try:
+                            dec = json.loads(self._dec(rj["data"]))
+                            if isinstance(dec, dict):
+                                inner_err = int(dec.get("error_code") or 0)
+                        except Exception:
+                            pass
+                    if outer_err == 0 and inner_err == 0:
+                        return True
+                    if outer_err in (-401, 401, -102, 3003) or inner_err in (-401, 401, -102, 3003):
+                        try:
+                            self._login()
+                        except Exception:
+                            pass
+                    ok_any = True
+            except Exception as ex_gn:
+                if "TaskStoppedAbort" in str(ex_gn):
+                    raise ex_gn
                 continue
         return ok_any
 
@@ -4185,6 +4340,7 @@ class Zalo:
         - Tự động xoay vòng hoặc chọn theo tên trong ZALO_VIP_THEMES.
         - Đồng bộ qua cả API cập nhật nền cuộc trò chuyện (convers/background/update, group/setting/update)
           và hiệu ứng chủ đề màu sắc trên khung chat Zalo."""
+        check_campaign_thread_aborted(thread_id)
         tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
         if not tid_s:
             return None
@@ -4813,6 +4969,8 @@ class Zalo:
 
     def _send_raw_payload(self, final_msg, thread_id, is_group, m_arr, styles, first_color="db342e", priority_bypass=False, antiband=True):
         """Gửi gói tin mã hóa tới Zalo WPA v645 kèm Lá Chắn Chống Cấm Chat Box (Sliding Window + Typing Pulse + Multi-Gateway)."""
+        if not priority_bypass:
+            check_campaign_thread_aborted(thread_id)
         if antiband and not priority_bypass:
             ZaloSmartAntiBanEngine.pre_send_box_guard(self.imei, thread_id, is_group=is_group, antiband=True, priority_bypass=False)
             self._pulse_box_typing_async(thread_id, is_group=is_group)
@@ -9401,6 +9559,7 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
                 return
 
     start_global_epoch, start_box_epoch = get_current_epochs(target_id)
+    set_campaign_thread_context(stop_ev, start_global_epoch, start_box_epoch, target_id)
 
     if stagger_sec > 0:
         if interruptible_wait(stop_ev, stagger_sec, start_global_epoch, start_box_epoch, target_id):
@@ -9622,24 +9781,18 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
             if plat == "zalo" and mode in ("nhay_poll", "nhay_typing", "nhay_namebox", "nhay_theme", "zalo_todo", "zalo_cardbank", "share_contact", "reaction_storm"):
                 text_item = strip_leading_line_number(clean_raw) if strip_line_num else clean_raw
                 if mode == "nhay_poll":
-                    def _parse_poll_block(b_str):
-                        if "|" in b_str:
-                            qp, op = b_str.split("|", 1)
-                            ol = [x.strip() for x in op.replace(";", "|").split("|") if x.strip()]
-                        else:
-                            qp = b_str
-                            ol = [f"{b_str[:25]} #1", f"{b_str[:25]} #2"]
-                        return qp.strip(), ol
-                    q_p, opts_l = _parse_poll_block(text_item)
-                    next_raw = blocks[b_idx % len(blocks)]
-                    b_idx += 1
-                    next_item = strip_leading_line_number(next_raw) if strip_line_num else next_raw
-                    q_p2, opts_l2 = _parse_poll_block(next_item)
-                    try:
-                        _PRIORITY_CMD_EXECUTOR.submit(client.create_poll, target_id, q_p2, opts_l2)
-                    except Exception:
-                        pass
-                    client.create_poll(target_id, q_p, opts_l)
+                    if "|" in text_item:
+                        q_p, opt_p = text_item.split("|", 1)
+                        opts_l = [x.strip() for x in opt_p.replace(";", "|").split("|") if x.strip()]
+                    elif len(blocks) >= 3:
+                        q_p = text_item
+                        o1 = strip_leading_line_number(blocks[b_idx % len(blocks)]) if strip_line_num else blocks[b_idx % len(blocks)]
+                        o2 = strip_leading_line_number(blocks[(b_idx + 1) % len(blocks)]) if strip_line_num else blocks[(b_idx + 1) % len(blocks)]
+                        opts_l = [o1.strip()[:60] or "Đồng ý #1", o2.strip()[:60] or "Đồng ý #2"]
+                    else:
+                        q_p = text_item
+                        opts_l = [f"{text_item[:35]} #1", f"{text_item[:35]} #2"]
+                    client.create_poll(target_id, q_p.strip(), opts_l)
                 elif mode == "nhay_typing":
                     client.send_typing(target_id, is_group=is_group)
                 elif mode == "nhay_namebox":
@@ -9822,7 +9975,7 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
 
         except Exception as e:
             err_str = str(e)
-            if "ChannelForbidden:" in err_str:
+            if "TaskStoppedAbort" in err_str or "ChannelForbidden:" in err_str:
                 break
             elif "429:RateLimit:" in err_str:
                 parts = err_str.split(":")
@@ -9836,8 +9989,14 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
             else:
                 HEALTH_MGR.report_error(acc_id, err_str, is_auth_error=False, channel_id=target_id)
 
+        if is_task_stopped_fast(stop_ev, start_global_epoch, start_box_epoch, target_id):
+            break
         if mode == "nhay_poll":
-            # Treo Poll 0.0s KHÔNG CÓ THỜI GIAN NGHỈ: bắn liên hoàn ngay lập tức!
+            # Treo Poll 0.0s KHÔNG CÓ THỜI GIAN NGHỈ: bắn liên hoàn ngay lập tức nhưng vẫn kiểm tra Stop mỗi vòng!
+            continue
+        if mode == "nhay_namebox":
+            if interruptible_wait(stop_ev, max(delay, 0.45), start_global_epoch, start_box_epoch, target_id):
+                break
             continue
         actual_delay = HEALTH_MGR.get_adaptive_delay(
             acc_id, delay, antiband=antiband, platform=plat, text_len=len(clean_raw), active_box_count=active_box_count
@@ -9845,6 +10004,7 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
         if actual_delay > 0.0:
             if interruptible_wait(stop_ev, actual_delay, start_global_epoch, start_box_epoch, target_id):
                 break
+    clear_campaign_thread_context()
 
 def multi_box_shard_worker(client, acc_id, plat, shard_targets, blocks, runtime_opts,
                            stop_ev, counter, lock, stagger_sec=0.0, active_box_count=1):
@@ -9996,13 +10156,14 @@ def multi_box_shard_worker(client, acc_id, plat, shard_targets, blocks, runtime_
                         if "|" in pkt_text:
                             q_p, opt_p = pkt_text.split("|", 1)
                             opts_l = [x.strip() for x in opt_p.replace(";", "|").split("|") if x.strip()]
+                        elif len(blocks) >= 3:
+                            q_p = pkt_text
+                            o1 = strip_leading_line_number(blocks[(cur_idx + 1) % len(blocks)])
+                            o2 = strip_leading_line_number(blocks[(cur_idx + 2) % len(blocks)])
+                            opts_l = [o1.strip()[:60] or "Đồng ý #1", o2.strip()[:60] or "Đồng ý #2"]
                         else:
                             q_p = pkt_text
-                            opts_l = [f"{pkt_text[:25]} #1", f"{pkt_text[:25]} #2"]
-                        try:
-                            _PRIORITY_CMD_EXECUTOR.submit(client.create_poll, t_id, q_p.strip(), opts_l)
-                        except Exception:
-                            pass
+                            opts_l = [f"{pkt_text[:35]} #1", f"{pkt_text[:35]} #2"]
                         client.create_poll(t_id, q_p.strip(), opts_l)
                     elif mode == "nhay_typing":
                         client.send_typing(t_id, is_group=is_grp)
@@ -10425,13 +10586,22 @@ def update_running_tasks_config(thread_id=None, **kwargs):
 def stop_tasks_for_thread(thread_id=None):
     """Công tắc Ngắt Nguyên Tử 0ms (Zero-Lag Atomic Kill Switch):
     - Ngắt toàn bộ tiến trình đang chạy trong RAM chỉ trong 0.01ms!
-    - Xả toàn bộ hàng đợi Pacer Discord/Zalo để không còn bất kỳ tin nhắn trễ nào bắn ra sau khi bấm Dừng!"""
+    - Xả toàn bộ hàng đợi Pacer Discord/Zalo và tắt sạch chế độ bám sát (.chan) để không còn bất kỳ tin nhắn hay Poll trễ nào bắn ra sau khi bấm Dừng!"""
     bump_stop_epoch(thread_id)
+    if thread_id is not None:
+        bump_stop_epoch(None)
     DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(thread_id)
+    DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(None)
+    with AUTO_INTERCEPT_LOCK:
+        if thread_id is None:
+            AUTO_INTERCEPT_BOXES.clear()
+        else:
+            AUTO_INTERCEPT_BOXES.pop(str(thread_id), None)
     stopped = 0
     stopped_tids = []
     for tid, info in list(ACTIVE_TASKS.items()):
-        if thread_id is None or str(thread_id) in info.get("targets", []):
+        t_list = [str(x) for x in (info.get("targets") or [])]
+        if thread_id is None or str(thread_id) in t_list or "ALL" in t_list or len(ACTIVE_TASKS) == 1:
             info["stop"].set()
             stopped_tids.append(tid)
             stopped += 1
@@ -11078,15 +11248,18 @@ def parse_and_execute_inchat_command(
                 "• .ping | .status | .id | .mem | .stop (.t) | .stopall (.ta)"
             )
         else:
+            with SYSTEM_CFG_LOCK:
+                sel_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_file_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_file") or "Chưa chọn (.f <số>)"
             help_txt = (
                 "👑 BẢNG LỆNH 32 CHỨC NĂNG TRỰC TIẾP TRÊN ACC ZALO [ULTIMATE VIP]:\n"
+                f"📂 BƯỚC 1 (Chọn File Tệp Trước): .f <số file> | .ds (Xem danh sách file) — Đang chọn: [{sel_f_now}]\n"
                 "1️⃣ Treo & Nhây Đa Màu: .treodo | .damau | .gif | .word | .nhay (.n) | .ngon (.g)\n"
                 "2️⃣ Tag Thật & Tag Ẩn: .nhaytag @Tên | .anall (Tag @All ẩn) | .antan @Tên (Tag tên ẩn)\n"
                 "3️⃣ Siêu Xả & Combo: .xa (Siêu xả 0s) | .combo (3 câu/nhịp) | .2c (Gộp 2 câu)\n"
                 "4️⃣ Đếm Số & Sát Thương: .so | .sotag @Tên | .faketen | .nhayicon | .chui\n"
                 "5️⃣ Poll 0s Không Nghỉ & Box Zalo: .nhaypoll (.poll) | .tenbox (.nhaynamebox) | .theme (.nen) | .nhaytyping | .todo | .bank | .card\n"
                 "6️⃣ Phòng Thủ & Quản Trị: .chan (Bám sát 0ms) | .prx | .ab | .cp @Tên | .xq @Tên\n"
-                f"7️⃣ Cấu Hình & Dừng: .d <giây> ({cur_d}s) | .mau <word|do> | .font | .ds | .p | .t (Dừng) | .ta (Dừng hết)"
+                f"7️⃣ Cấu Hình & Dừng Ngay 0ms: .d <giây> ({cur_d}s) | .mau <word|do> | .font | .p | .t (Dừng ngay) | .ta (Dừng tất cả)"
             )
         _send_reply(help_txt)
         log_system_command(acc_id, thread_id, sender_id, text, f"Hiển thị .menu ({platform})")
@@ -11324,14 +11497,14 @@ def parse_and_execute_inchat_command(
         return True
 
     if platform == "zalo" and zalo_client and cmd_token in ("tenbox",):
-        if ";" in arg_body or "\n" in arg_body:
-            # Nếu truyền nhiều tên ngăn cách bởi dấu ; -> tự động chạy chế độ nhây đổi tên Box liên hoàn
+        arg_tb = arg_body.strip()
+        if not arg_tb or ";" in arg_tb or "\n" in arg_tb or arg_tb.isdigit() or arg_tb.lower().endswith(".txt"):
+            # Nếu không truyền tên lẻ hoặc truyền số thứ tự file / tên file .txt / nhiều câu -> Chuyển sang chạy theo File kịch bản đã chọn (.nhaynamebox)
             cmd_token = "nhaynamebox"
         else:
-            new_gn = arg_body.strip() or f"Box Quản Trị Viên #{random.randint(10, 99)}"
-            ok_gn = zalo_client.change_group_name(thread_id, new_gn)
-            _send_reply(f"✏️ Đã đổi tên Box Zalo thành: {new_gn}" if ok_gn else f"✏️ Đã gửi lệnh đổi tên Box Zalo: {new_gn}")
-            log_system_command(acc_id, thread_id, sender_id, text, f"Đổi tên Box Zalo: {new_gn}")
+            ok_gn = zalo_client.change_group_name(thread_id, arg_tb)
+            _send_reply(f"✏️ Đã đổi tên Box Zalo thành: {arg_tb}" if ok_gn else f"✏️ Đã cập nhật tên Box Zalo: {arg_tb}")
+            log_system_command(acc_id, thread_id, sender_id, text, f"Đổi tên Box Zalo: {arg_tb}")
             return True
 
     if platform == "zalo" and zalo_client and cmd_token in ("theme", "setnen", "nen", "doinen"):
@@ -11778,27 +11951,48 @@ def parse_and_execute_inchat_command(
         return True
 
     if cmd_token in ("stop", "dung", "dừng", "tat", "tắt", "off"):
-        cnt = stop_tasks_for_thread(thread_id)
-        if cnt == 0:
-            cnt = stop_tasks_for_thread(None)
-        log_system_command(acc_id, thread_id, sender_id, text, f"Đã dừng {cnt} tiến trình")
-        _send_reply(f"Đã dừng {cnt} tiến trình chạy tự động")
+        cnt_box = stop_tasks_for_thread(thread_id)
+        cnt_all = stop_tasks_for_thread(None)
+        cnt = max(cnt_box + cnt_all, 1 if (cnt_box or cnt_all) else 0)
+        log_system_command(acc_id, thread_id, sender_id, text, f"Đã dừng khẩn cấp ({cnt} tiến trình)")
+        _send_reply(f"🛑 Đã dừng ngay lập tức toàn bộ lệnh đang chạy ngầm ({cnt} tiến trình)!")
         return True
 
     if cmd_token in ("stopall", "dunghet", "tathet"):
         cnt = stop_tasks_for_thread(None)
         log_system_command(acc_id, thread_id, sender_id, text, f"Dừng toàn bộ ({cnt} tiến trình)")
-        _send_reply(f"Đã dừng toàn bộ {cnt} tiến trình trên hệ thống")
+        _send_reply(f"🛑 Đã dừng toàn bộ {cnt} tiến trình đang chạy ngầm trên hệ thống!")
         return True
 
-    if cmd_token in ("files", "dsfile", "listfile"):
+    if cmd_token in ("files", "dsfile", "listfile", "chonfile", "cf", "pickfile", "setfile") or (cmd_token == "file" and (not arg_body.strip() or len(arg_body.strip().split()) == 1)):
         f_list = get_ordered_files_with_display_num()
+        q_sel = arg_body.strip()
+        if q_sel and cmd_token in ("file", "chonfile", "cf", "pickfile", "setfile", "files", "dsfile"):
+            rec_sel = resolve_file_record(q_sel)
+            if rec_sel:
+                with SYSTEM_CFG_LOCK:
+                    SYSTEM_RUNTIME_CONFIG["selected_file"] = rec_sel["filename"]
+                    SYSTEM_RUNTIME_CONFIG.setdefault("selected_file_by_acc", {})[str(acc_id)] = rec_sel["filename"]
+                msg_out = (
+                    f"✅ ĐÃ CHỌN TRƯỚC FILE SỐ #{rec_sel['display_num']}: {rec_sel['filename']} ({rec_sel['lines_count']} dòng)!\n"
+                    f"👉 Bây giờ bạn có thể gõ các lệnh (.n, .g, .treodo, .damau, .gif, .word, .nhaypoll, .tenbox, .nhaynamebox, .xa, .combo, .2c, .so, .chui...) để chạy ngay file này!"
+                )
+                _send_reply(msg_out)
+                log_system_command(acc_id, thread_id, sender_id, text, f"Chọn trước file #{rec_sel['display_num']}: {rec_sel['filename']}")
+                return True
+        with SYSTEM_CFG_LOCK:
+            cur_sel_fn = SYSTEM_RUNTIME_CONFIG.get("selected_file_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_file") or "Chưa chọn"
         if not f_list:
-            msg_out = "Chưa có file nào trên hệ thống"
+            msg_out = "Chưa có file .txt nào trên hệ thống. Gõ .af tenfile.txt | Câu 1 ; Câu 2 để tạo file!"
         else:
-            msg_out = "\n".join(f"File số {f['display_num']}: {f['filename']} ({f['lines_count']} dòng)" for f in f_list)
+            lines_f = [f"📂 DANH SÁCH FILE KỊCH BẢN (.TXT) — Đang chọn: [{cur_sel_fn}]"]
+            for f in f_list:
+                mark = "✅" if f["filename"].lower() == str(cur_sel_fn).lower() else "•"
+                lines_f.append(f"{mark} File số {f['display_num']}: {f['filename']} ({f['lines_count']} dòng)")
+            lines_f.append("👉 Gõ: .f <số file> (VD: .f 1) để chọn file trước khi chạy lệnh!")
+            msg_out = "\n".join(lines_f)
         _send_reply(msg_out)
-        log_system_command(acc_id, thread_id, sender_id, text, "Hiển thị danh sách số thứ tự file")
+        log_system_command(acc_id, thread_id, sender_id, text, "Hiển thị & chọn danh sách file .txt")
         return True
 
     mode_map = {
@@ -12004,10 +12198,24 @@ def parse_and_execute_inchat_command(
         remaining_content = cleaned_body.strip("\r\n")
 
     blocks = []
+    matched_rec = None
     if file_query:
+        matched_rec = resolve_file_record(file_query)
         blocks = get_blocks_from_file_query(file_query, mode=chosen_mode)
-    elif remaining_content and (remaining_content.isdigit() or remaining_content.endswith(".txt")):
+    elif remaining_content and (remaining_content.isdigit() or remaining_content.lower().endswith(".txt")):
+        matched_rec = resolve_file_record(remaining_content)
         blocks = get_blocks_from_file_query(remaining_content, mode=chosen_mode)
+    elif tokens[consumed:] and (tokens[consumed].isdigit() or tokens[consumed].lower().endswith(".txt")):
+        cand_fq = tokens[consumed]
+        matched_rec = resolve_file_record(cand_fq)
+        if matched_rec:
+            blocks = get_blocks_from_file_query(cand_fq, mode=chosen_mode)
+            remaining_content = ""
+
+    if matched_rec:
+        with SYSTEM_CFG_LOCK:
+            SYSTEM_RUNTIME_CONFIG["selected_file"] = matched_rec["filename"]
+            SYSTEM_RUNTIME_CONFIG.setdefault("selected_file_by_acc", {})[str(acc_id)] = matched_rec["filename"]
 
     if not blocks and remaining_content and not file_query:
         if chosen_mode == "treo_nhay":
@@ -12031,45 +12239,38 @@ def parse_and_execute_inchat_command(
                 cleaned_blocks.append(b_item)
         blocks = cleaned_blocks
 
+    # KIỂM TRA FILE ĐÃ CHỌN TRƯỚC (.f <số file>): Bắt buộc phải chọn File .txt trước khi chạy lệnh (nếu không truyền nội dung trực tiếp)!
     if not blocks:
-        preset_map_by_mode = {
-            "treo_so": "so.txt",
-            "so_tag": "so.txt",
-            "so_tag_faketen": "so.txt",
-            "code_lag": "codelag.txt",
-            "nhay_2c": "2c.txt",
-            "idea_mess": "chui.txt",
-            "nhay_icon": "nhayicon.txt",
-            "nhay_namebox": "nhaynamebox.txt",
-            "treo_ngon": "ngon.txt",
-            "treo_nhay": "nhay.txt",
-        }
-        pref_file = preset_map_by_mode.get(chosen_mode)
-        if pref_file:
-            blocks = get_blocks_from_file_query(pref_file, mode=chosen_mode)
-        if not blocks:
-            blocks = get_blocks_from_file_query("latest", mode=chosen_mode)
-        if blocks:
-            blocks = [
-                b_item for b_item in blocks
-                if re.sub(r"<@(?:!|&)?\d+>", "", str(b_item or "")).strip()
-                and not re.fullmatch(r"@[\w\s\.\-_À-ỹ]+", re.sub(r"<@(?:!|&)?\d+>", "", str(b_item or "")).strip())
-            ]
+        with SYSTEM_CFG_LOCK:
+            pre_selected_fn = (
+                SYSTEM_RUNTIME_CONFIG.get("selected_file_by_acc", {}).get(str(acc_id))
+                or SYSTEM_RUNTIME_CONFIG.get("selected_file")
+                or ""
+            )
+            req_file_first = bool(SYSTEM_RUNTIME_CONFIG.get("require_file_first", True))
+        if pre_selected_fn:
+            blocks = get_blocks_from_file_query(pre_selected_fn, mode=chosen_mode)
+            if blocks:
+                blocks = [
+                    b_item for b_item in blocks
+                    if re.sub(r"<@(?:!|&)?\d+>", "", str(b_item or "")).strip()
+                    and not re.fullmatch(r"@[\w\s\.\-_À-ỹ]+", re.sub(r"<@(?:!|&)?\d+>", "", str(b_item or "")).strip())
+                ]
+        elif req_file_first and chosen_mode not in ("nhay_typing", "nhay_theme"):
+            f_list = get_ordered_files_with_display_num()
+            f_preview = "\n".join(f"• File số {f['display_num']}: {f['filename']} ({f['lines_count']} dòng)" for f in f_list[:10])
+            prompt_msg = (
+                "⚠️ BẮT BUỘC CHỌN TRƯỚC FILE TỆP (.TXT) TRƯỚC KHI CHẠY LỆNH!\n"
+                f"👉 Bước 1: Gõ .f <số file> để chọn file trước (VD: .f 1)\n"
+                f"👉 Bước 2: Gõ lại lệnh .{cmd_token} (hoặc gõ thẳng .{cmd_token} 1)\n"
+                f"📂 Danh sách File .txt hiện có:\n{f_preview}"
+            )
+            _send_reply(prompt_msg)
+            log_system_command(acc_id, thread_id, sender_id, text, "Yêu cầu chọn trước file .txt (.f <số>)")
+            return True
 
-    if not blocks:
-        if chosen_mode == "treo_ngon":
-            blocks = [
-                "Hệ Thống Hệ Thống Đa Luồng\n"
-                "Đẳng cấp tốc độ ánh sáng, cân mọi chiến trường không độ trễ!\n"
-                "Tường lửa Anti-Ban bảo vệ toàn diện 24/7!"
-            ]
-        else:
-            blocks = [
-                "Hệ thống Hệ Thống Đa Luồng điểm danh siêu tốc!",
-                "Đẳng cấp treo đa luồng cân 100 tiến trình cực mượt!",
-                "Lá chắn Anti-Ban bất tử vận hành 24/7 không delay!",
-                "Tốc độ phản hồi ánh sáng — Chuẩn VIP Quản Trị Viên!"
-            ]
+    if not blocks and chosen_mode in ("nhay_typing", "nhay_theme"):
+        blocks = ["Cầu Vồng Cyber 2026", "Hoàng Kim Tối Thượng", "Đỏ Quyền Lực Đế Vương"]
 
     if is_auto_shuffle and len(blocks) > 1:
         blocks = list(blocks)
@@ -12091,18 +12292,30 @@ def parse_and_execute_inchat_command(
         if not use_emoji or int(icon_count or 0) <= 0:
             first_pkt = strip_trailing_icons_when_zero(first_pkt)
 
+        shot_g_ep, _ = get_current_epochs(None)
         def _instant_first_shot(t_item):
             t_id_now = str(t_item.get("id") or thread_id)
+            if is_task_stopped_fast(None, shot_g_ep, None, t_id_now):
+                return
             try:
                 if platform == "zalo" and zalo_client:
                     if chosen_mode == "nhay_poll":
                         if "|" in first_pkt:
                             q_0, o_0 = first_pkt.split("|", 1)
                             opts_0 = [x.strip() for x in o_0.replace(";", "|").split("|") if x.strip()]
+                        elif len(blocks) >= 3:
+                            q_0 = first_pkt
+                            opts_0 = [str(blocks[1]).strip()[:60], str(blocks[2]).strip()[:60]]
                         else:
                             q_0 = first_pkt
-                            opts_0 = [f"{first_pkt[:25]} #1", f"{first_pkt[:25]} #2"]
+                            opts_0 = [f"{first_pkt[:35]} #1", f"{first_pkt[:35]} #2"]
                         zalo_client.create_poll(t_id_now, q_0.strip(), opts_0)
+                    elif chosen_mode == "nhay_namebox":
+                        zalo_client.change_group_name(t_id_now, first_pkt)
+                    elif chosen_mode == "nhay_theme":
+                        zalo_client.change_group_theme(t_id_now, first_pkt if first_pkt else None, is_group=True)
+                    elif chosen_mode == "nhay_typing":
+                        zalo_client.send_typing(t_id_now, is_group=True)
                     else:
                         zalo_client.send_adv(
                             first_pkt, t_id_now, color_mode=color_mode, fixed_color=fixed_color,
@@ -12639,6 +12852,11 @@ class ZaloRealtimeListener:
         except Exception:
             pass
         sender_for_auth = "0" if raw_uid_from in ("0", "") else (uid_from or my_uid)
+        # Ngắt khẩn cấp 0.00ms ngay trên luồng Listener nếu Chủ Acc / Người có quyền gõ .t / .ta / .stop / .stopall
+        cmd_Quick = content.strip().lower().split()[0] if content.strip() else ""
+        if cmd_Quick in (".t", ".ta", ".st", ".stop", ".stopall", ".dung", ".dunghet", ".tat", ".tathet", ".off", "/stop", "/stopall", "!t", "!stop"):
+            if is_true_account_owner(sender_for_auth, client_uid=my_uid, client_send2me_id=my_s2m, platform="zalo") or is_user_authorized_for_cmd(sender_for_auth, my_uid, my_s2m, allow_all=False, sender_name=d_name, platform="zalo"):
+                stop_tasks_for_thread(None)
         was_cmd = parse_and_execute_inchat_command(
             zalo_client=client,
             acc_row=acc_row,
