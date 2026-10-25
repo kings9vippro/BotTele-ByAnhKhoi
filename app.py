@@ -900,37 +900,42 @@ def _clean_zalo_id(val):
     return s
 
 
-def claim_command_execution_slot(platform, thread_id, sender_id, raw_msg, msg_id=None, cli_msg_id=None):
-    """Khóa điều phối lệnh Đa Tài Khoản 0.0001ms Thuần RAM (Zero-Lag Pure RAM Command Lock):
-    - Chuẩn hóa sender_id của Chủ Acc ('0', '', OWNER_UIDS_CACHE) về '__owner__' để tin nhắn từ WebSocket (uidFrom='0')
-      và HTTP Poller (uidFrom=my_uid) dùng chung 1 khóa duy nhất — chặn tuyệt đối lỗi gõ 1 lần .menu nhảy ra 2 lần!
-    - Khóa đồng thời theo cả msg_id, cli_msg_id (45s) VÀ khóa theo (platform, thread_id, norm_txt) trong 2.4s."""
+def claim_command_execution_slot(platform, thread_id, sender_id, raw_msg, msg_id=None, cli_msg_id=None, msg_ts=None):
+    """Khóa điều phối lệnh Đa Tài Khoản 0.0001ms Thuần RAM (Zero-Lag Pure RAM Command Lock 4 Lớp):
+    - Lớp 1: Khóa theo msg_id (mid:), cli_msg_id (cmid:) và msg_ts (mts:) trong 600 giây (10 phút) — chặn tuyệt đối Poller/WebSocket quét lại tin nhắn cũ!
+    - Lớp 2: Khóa theo cả box_cmd_key (platform + thread_id + norm_txt) VÀ cmd_key trong 4.5 giây — chặn tuyệt đối 2 luồng hoặc 2 Acc trong cùng 1 nhóm chạy trùng lệnh!"""
     now = time.time()
     norm_txt = re.sub(r"\s+", " ", str(raw_msg or "").strip()).lower()[:120]
     plat_s = str(platform or "zalo").lower()
     tid_s = _clean_zalo_id(thread_id) or "default"
     mid_s = _clean_zalo_id(msg_id)
     cmid_s = _clean_zalo_id(cli_msg_id)
+    mts_s = _clean_zalo_id(msg_ts)
     raw_sender = str(sender_id or "").strip()
     sender_norm = "__owner__" if (raw_sender in ("0", "") or raw_sender in OWNER_UIDS_CACHE) else raw_sender
     cmd_key = f"cmd:{plat_s}:{tid_s}:{sender_norm}:{norm_txt}"
     box_cmd_key = f"boxcmd:{plat_s}:{tid_s}:{norm_txt}"
+    mts_key = f"mts:{plat_s}:{tid_s}:{mts_s}:{norm_txt}" if mts_s else ""
 
     with GLOBAL_CMD_DEDUPE_LOCK:
-        if len(GLOBAL_CMD_DEDUPE_CACHE) > 3500:
+        if len(GLOBAL_CMD_DEDUPE_CACHE) > 5000:
             for k, ts_old in list(GLOBAL_CMD_DEDUPE_CACHE.items()):
-                ttl = 45.0 if k.startswith(("mid:", "cmid:")) else 2.5
+                ttl = 600.0 if k.startswith(("mid:", "cmid:", "mts:")) else 5.0
                 if now - ts_old > ttl:
                     GLOBAL_CMD_DEDUPE_CACHE.pop(k, None)
         if mid_s:
             for mk in (f"mid:{plat_s}:{tid_s}:{mid_s}", f"mid:{plat_s}:any:{mid_s}"):
-                if now - GLOBAL_CMD_DEDUPE_CACHE.get(mk, 0.0) < 45.0:
+                if now - GLOBAL_CMD_DEDUPE_CACHE.get(mk, 0.0) < 600.0:
                     return False
         if cmid_s:
             for ck in (f"cmid:{plat_s}:{tid_s}:{cmid_s}", f"cmid:{plat_s}:any:{cmid_s}"):
-                if now - GLOBAL_CMD_DEDUPE_CACHE.get(ck, 0.0) < 45.0:
+                if now - GLOBAL_CMD_DEDUPE_CACHE.get(ck, 0.0) < 600.0:
                     return False
-        if now - GLOBAL_CMD_DEDUPE_CACHE.get(cmd_key, 0.0) < 2.4:
+        if mts_key and (now - GLOBAL_CMD_DEDUPE_CACHE.get(mts_key, 0.0) < 600.0):
+            return False
+        if now - GLOBAL_CMD_DEDUPE_CACHE.get(box_cmd_key, 0.0) < 4.5:
+            return False
+        if now - GLOBAL_CMD_DEDUPE_CACHE.get(cmd_key, 0.0) < 4.5:
             return False
 
         if mid_s:
@@ -939,6 +944,8 @@ def claim_command_execution_slot(platform, thread_id, sender_id, raw_msg, msg_id
         if cmid_s:
             GLOBAL_CMD_DEDUPE_CACHE[f"cmid:{plat_s}:{tid_s}:{cmid_s}"] = now
             GLOBAL_CMD_DEDUPE_CACHE[f"cmid:{plat_s}:any:{cmid_s}"] = now
+        if mts_key:
+            GLOBAL_CMD_DEDUPE_CACHE[mts_key] = now
         GLOBAL_CMD_DEDUPE_CACHE[cmd_key] = now
         GLOBAL_CMD_DEDUPE_CACHE[box_cmd_key] = now
     return True
@@ -2057,22 +2064,27 @@ class ProxyPoolEngine:
 
     @classmethod
     def request_with_fast_failover(cls, session_obj, method, url, seed_key=None, priority_bypass=False, **kwargs):
-        # Ưu tiên số 1: Luồng Direct Multi-Edge Keep-Alive (0ms độ trễ trên cáp quang Singapore)
-        # Chỉ dùng Proxy siêu tốc (< 280ms) để phân tải tức thì khi cổng Direct báo 429 hoặc nghẽn!
+        # Ưu tiên số 1: Luồng Direct Multi-Edge Keep-Alive (0ms độ trễ)
+        # QUAN TRỌNG: Tuyệt đối KHÔNG gửi lặp (double-POST) khi gói POST đã truyền đi nhưng đọc phản hồi chậm (ReadTimeout),
+        # vì gửi lặp POST sẽ khiến Zalo đăng 2 tin nhắn trùng nhau!
+        is_post = str(method or "GET").upper() == "POST"
         if "timeout" not in kwargs:
-            kwargs["timeout"] = (0.65, 1.45) if priority_bypass else (0.75, 1.55)
+            kwargs["timeout"] = (2.2, 6.0) if is_post else ((0.85, 2.0) if priority_bypass else (1.2, 3.0))
         try:
             resp_dir = session_obj.request(method, url, **kwargs)
             if resp_dir.status_code != 429 or not cls._PROXIES or not cls._ENABLED:
                 return resp_dir
+        except requests.exceptions.ReadTimeout:
+            # Gói tin POST đã được đẩy lên máy chủ Zalo -> Không bao giờ gửi lại lần 2!
+            raise
         except Exception:
-            if not cls._PROXIES or not cls._ENABLED:
+            if is_post or not cls._PROXIES or not cls._ENABLED:
                 raise
 
         cands = (
             cls.pick_fastest_proxy_candidates(seed_key=seed_key, max_candidates=1)
             if priority_bypass else
-            cls.pick_proxy_candidates(seed_key=seed_key, max_candidates=3)
+            cls.pick_proxy_candidates(seed_key=seed_key, max_candidates=2)
         )
         if cands:
             base_headers = kwargs.get("headers") or (dict(session_obj.headers) if getattr(session_obj, "headers", None) else None)
@@ -2081,7 +2093,7 @@ class ProxyPoolEngine:
                 px_sess = cls._get_or_create_proxy_session(raw_px)
                 px_kwargs = dict(kwargs)
                 px_kwargs.pop("proxies", None)
-                px_kwargs["timeout"] = (0.30, 0.65) if priority_bypass else (0.40, 0.90)
+                px_kwargs["timeout"] = (0.50, 1.50) if priority_bypass else (0.70, 2.00)
                 if base_headers and "headers" not in px_kwargs:
                     px_kwargs["headers"] = base_headers
                 if base_cookies and "cookies" not in px_kwargs:
@@ -2101,9 +2113,7 @@ class ProxyPoolEngine:
                 except Exception:
                     cls.report_proxy_bad(raw_px, cooldown_sec=12.0)
 
-        if "timeout" not in kwargs:
-            kwargs["timeout"] = (0.65, 1.35) if priority_bypass else (0.85, 1.85)
-        return session_obj.request(method, url, **kwargs)
+        raise Exception("DirectAndProxyUnavailable")
 
     @classmethod
     def test_all_proxies(cls, timeout_sec=2.0):
@@ -4717,21 +4727,24 @@ class Zalo:
             priority_bypass=priority_bypass,
             params={"zpw_ver": 645, "zpw_type": 30},
             data={"params": enc},
-            timeout=(0.95, 2.0) if priority_bypass else (1.4, 3.2)
+            timeout=(2.2, 6.0) if priority_bypass else (2.5, 6.5)
         )
         r._inner_err_code = 0
+        r._outer_err_code = 0
         try:
             rj = r.json()
-            r._outer_err_code = rj.get("error_code", 0)
+            r._outer_err_code = int(rj.get("error_code") or 0)
             if rj.get("data"):
                 dec = json.loads(self._dec(rj["data"]))
                 if isinstance(dec, dict):
-                    r._inner_err_code = dec.get("error_code", 0)
-                    sent_mid = (dec.get("data") or {}).get("msgId") or dec.get("msgId")
+                    r._inner_err_code = int(dec.get("error_code") or 0)
+                    inner_d = dec.get("data") if isinstance(dec.get("data"), dict) else {}
+                    sent_mid = inner_d.get("msgId") or dec.get("msgId")
                     if sent_mid:
                         register_system_sent_message(msg_id=sent_mid, client_id=client_id, text=final_msg)
         except Exception:
             r._outer_err_code = 0
+            r._inner_err_code = 0
 
         ZaloSmartAntiBanEngine.report_box_result(self.imei, thread_id, r._outer_err_code or r._inner_err_code)
         return r
@@ -9275,6 +9288,26 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
         t0_s = time.perf_counter()
         try:
             if plat == "zalo":
+                # Tự động đồng bộ phiên Zalo mới nhất từ Pool mỗi 60s để treo 24/7 xuyên đêm không bao giờ rớt khi Cookie/zpw_enk tự gia hạn
+                now_f = time.time()
+                if now_f - getattr(client, "_last_pool_sync_ts", 0.0) > 60.0:
+                    client._last_pool_sync_ts = now_f
+                    try:
+                        latest_acc = get_account_from_ram_by_id(acc_id)
+                        if latest_acc and latest_acc.get("cookies"):
+                            fresh_c = Zalo.get_pooled_client(
+                                latest_acc.get("imei") or client.imei,
+                                latest_acc.get("cookies"),
+                                user_agent=latest_acc.get("user_agent") or client.user_agent,
+                                zpw_enk_hint=latest_acc.get("zpw_enk") or client.secret_key or "",
+                                uid_hint=latest_acc.get("uid") or client.uid or ""
+                            )
+                            if fresh_c and fresh_c.secret_key:
+                                client.secret_key = fresh_c.secret_key
+                                client.cookies_dict = fresh_c.cookies_dict
+                                client._sync_cookie_headers()
+                    except Exception:
+                        pass
                 client.send_adv(
                     pkt_text, target_id, color_mode=c_mode, fixed_color=f_color,
                     is_group=is_group, mentions=(eff_m if is_group else None),
@@ -10552,7 +10585,8 @@ def extract_multigroup_spec_and_clean_body(raw_body_str, cmd_token=""):
 def parse_and_execute_inchat_command(
     zalo_client, acc_row, thread_id, is_group, sender_id, raw_msg,
     raw_mentions=None, discord_client=None, platform="zalo", messenger_client=None,
-    pre_claimed_slot=False, sender_name="", msg_id=None, reply_target=None
+    pre_claimed_slot=False, sender_name="", msg_id=None, reply_target=None,
+    cli_msg_id=None, msg_ts=None
 ):
     if not raw_msg:
         return False
@@ -10655,7 +10689,7 @@ def parse_and_execute_inchat_command(
         return False
 
     if not pre_claimed_slot:
-        if not claim_command_execution_slot(platform, thread_id, s_uid, text, msg_id=msg_id):
+        if not claim_command_execution_slot(platform, thread_id, s_uid, text, msg_id=msg_id, cli_msg_id=cli_msg_id, msg_ts=msg_ts):
             return False
 
     acc_id = acc_row["id"]
@@ -10690,8 +10724,14 @@ def parse_and_execute_inchat_command(
 
     def _send_reply(msg_txt, broadcast_all_accs=False):
         """Phản hồi lệnh siêu tốc 0.00ms qua làn ưu tiên _PRIORITY_CMD_EXECUTOR (priority_bypass=True):
-        - Tài khoản nhận lệnh tại phòng chat phản hồi ngay lập tức trong 0ms (không sleep, không chờ hàng đợi treo).
-        - Nếu bật broadcast_all_accs=True, chỉ những tài khoản thực sự có mặt trong nhóm mới phản hồi song song 0ms."""
+        - Tích hợp Khóa Chống Nhảy Đúp Phản Hồi (Outbound Reply Dedupe Lock 4.5s) đảm bảo 100% không bao giờ gửi 2 câu trả lời trùng nhau vào cùng 1 Box!"""
+        now_rep = time.time()
+        rep_norm = _normalize_for_echo_hash(msg_txt)
+        rep_key = f"outrep:{platform}:{_clean_zalo_id(thread_id) or thread_id}:{rep_norm}"
+        with GLOBAL_CMD_DEDUPE_LOCK:
+            if now_rep - GLOBAL_CMD_DEDUPE_CACHE.get(rep_key, 0.0) < 4.5:
+                return
+            GLOBAL_CMD_DEDUPE_CACHE[rep_key] = now_rep
         register_system_sent_message(text=msg_txt)
         if not broadcast_all_accs:
             target_accs = [acc_row]
@@ -12129,26 +12169,33 @@ class ZaloRealtimeListener:
         return f"win:{int(time.time())}:{content[:30]}"
 
     def _check_and_mark_seen(self, msg_obj, content="", mark=True):
-        """Kiểm tra & đánh dấu chống trùng lặp nguyên tử theo cả msgId VÀ cliMsgId:
-        - Ngăn chặn 100% trường hợp WebSocket có cả (msgId, cliMsgId) còn preloadconvers/get-last-msgs chỉ có (msgId)
-          làm lệnh .menu bị nhảy ra 2 lần!"""
+        """Kiểm tra & đánh dấu chống trùng lặp nguyên tử 3 Tầng (msgId + cliMsgId + ts:content):
+        - Luôn ghi nhận ĐỒNG THỜI cả mid, cmid và ts:content vào seen_msg_ids để dù WebSocket có cliMsgId
+          còn get_recent_group_messages có msgId thì vẫn khớp 100% qua ts:content — không bao giờ chạy lệnh 2 lần!"""
         lock = getattr(self, "_dedupe_lock", None)
         if lock is None:
             lock = threading.RLock()
             self._dedupe_lock = lock
         mid = _clean_zalo_id(msg_obj.get("msgId") or msg_obj.get("globalMsgId") or msg_obj.get("id"))
         cmid = _clean_zalo_id(msg_obj.get("cliMsgId"))
-        ts_v = _clean_zalo_id(msg_obj.get("ts") or msg_obj.get("time"))
+        ts_raw = _clean_zalo_id(msg_obj.get("ts") or msg_obj.get("time"))
+        try:
+            ts_int = int(ts_raw or 0)
+            if 0 < ts_int < 10000000000:
+                ts_int *= 1000
+            ts_v = str(ts_int) if ts_int > 0 else ts_raw
+        except Exception:
+            ts_v = ts_raw
+        norm_c = re.sub(r"\s+", " ", str(content or "").strip()).lower()[:40]
         keys = []
         if mid:
             keys.append(f"mid:{mid}")
         if cmid:
             keys.append(f"cmid:{cmid}")
+        if ts_v and norm_c:
+            keys.append(f"ts:{ts_v}:{norm_c}")
         if not keys:
-            if ts_v:
-                keys.append(f"ts:{ts_v}:{content[:30]}")
-            else:
-                keys.append(f"win:{int(time.time())}:{content[:30]}")
+            keys.append(f"win:{int(time.time() // 3)}:{norm_c}")
         with lock:
             for k in keys:
                 if k in self.seen_msg_ids:
@@ -12287,6 +12334,15 @@ class ZaloRealtimeListener:
             if q_uid:
                 reply_target = {"uid": q_uid, "name": q_name or GLOBAL_USER_NAME_CACHE.get(q_uid, f"User_{q_uid[-4:]}")}
 
+        msg_ts_val = None
+        try:
+            _ts_n = int(msg_obj.get("ts") or msg_obj.get("time") or 0)
+            if 0 < _ts_n < 10000000000:
+                _ts_n *= 1000
+            if _ts_n > 0:
+                msg_ts_val = str(_ts_n)
+        except Exception:
+            pass
         sender_for_auth = "0" if raw_uid_from in ("0", "") else (uid_from or my_uid)
         was_cmd = parse_and_execute_inchat_command(
             zalo_client=client,
@@ -12298,7 +12354,9 @@ class ZaloRealtimeListener:
             raw_mentions=raw_mentions,
             platform="zalo",
             sender_name=d_name,
-            msg_id=(msg_id or cli_msg_id),
+            msg_id=msg_id,
+            cli_msg_id=cli_msg_id,
+            msg_ts=msg_ts_val,
             reply_target=reply_target
         )
         if not was_cmd and str(thread_id) in AUTO_INTERCEPT_BOXES:
@@ -13405,11 +13463,8 @@ def _init_ram_stores_from_db():
         pass
 
 def _listener_watchdog_loop():
+    global _TELEGRAM_BOT_RUNNER
     _init_ram_stores_from_db()
-    try:
-        ProxyPoolEngine.start_auto_proxy_harvester_background()
-    except Exception:
-        pass
     try:
         from zalo_login import ZaloPCSessionKeeper
         ZaloPCSessionKeeper.ensure_vault_daemon_started(DB_PATH)
@@ -13423,6 +13478,21 @@ def _listener_watchdog_loop():
             _sync_epochs_from_db_background()
             if step_c % 2 == 0:
                 sync_all_zalo_listeners()
+            # Giám sát & tự động hồi sinh Bot Telegram nếu mạng đứt hoặc socket getUpdates bị treo > 45s
+            if step_c % 3 == 0 and os.environ.get("DISABLE_TELEGRAM_BOT", "0") != "1":
+                try:
+                    import get_ck_im_zalo as _tg_mod
+                    bot_inst = getattr(_tg_mod, "_BOT_INSTANCE", None) or _TELEGRAM_BOT_RUNNER
+                    now_w = time.time()
+                    if bot_inst is None or not getattr(bot_inst, "running", False):
+                        _TELEGRAM_BOT_RUNNER = _tg_mod.start_background_telegram_bot(TELEGRAM_BOT_TOKEN, force_restart=True)
+                    else:
+                        last_ok = float(getattr(bot_inst, "last_poll_ok_ts", now_w) or now_w)
+                        poll_thr = getattr(bot_inst, "poll_thread", None)
+                        if (now_w - last_ok > 48.0) or (poll_thr is not None and not poll_thr.is_alive()):
+                            _TELEGRAM_BOT_RUNNER = _tg_mod.start_background_telegram_bot(TELEGRAM_BOT_TOKEN, force_restart=True)
+                except Exception:
+                    pass
             if step_c % 12 == 0:
                 try:
                     from zalo_login import ZaloPCSessionKeeper
@@ -13430,11 +13500,24 @@ def _listener_watchdog_loop():
                 except Exception:
                     pass
                 # Giải phóng bộ nhớ định kỳ giúp Render Free (512MB RAM) chạy 50+ Acc mượt mà không tốn GB
-                if len( DiscordClient._DISCORD_MSG_FORMAT_CACHE ) > 1200:
+                if len(DiscordClient._DISCORD_MSG_FORMAT_CACHE) > 1200:
                     DiscordClient._DISCORD_MSG_FORMAT_CACHE.clear()
-                if len( Zalo._ZALO_ADV_FORMAT_CACHE ) > 1200:
+                if len(Zalo._ZALO_ADV_FORMAT_CACHE) > 1200:
                     Zalo._ZALO_ADV_FORMAT_CACHE.clear()
                 gc.collect()
+            # Self-Ping giữ thức máy chủ Render 24/7 (mỗi 90s) để treo xuyên đêm không bao giờ ngủ đông
+            if step_c % 30 == 0 and step_c > 0:
+                def _self_keepalive_ping():
+                    try:
+                        ext_url = (os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+                        if ext_url:
+                            requests.get(f"{ext_url}/api/network/gateways", timeout=5)
+                        else:
+                            port_loc = int(os.environ.get("PORT", 5000))
+                            requests.get(f"http://127.0.0.1:{port_loc}/api/network/gateways", timeout=3)
+                    except Exception:
+                        pass
+                threading.Thread(target=_self_keepalive_ping, daemon=True).start()
             step_c += 1
         except Exception:
             pass
