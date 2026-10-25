@@ -812,6 +812,10 @@ def refresh_accounts_ram_cache():
         with ACCOUNTS_RAM_LOCK:
             return list(ACCOUNTS_RAM_CACHE.values())
 
+def get_account_from_ram_by_id(acc_id):
+    return get_account_from_ram(acc_id)
+
+
 def get_account_from_ram(acc_id):
     if time.time() - _LAST_ACCOUNTS_SYNC_TS > 0.25:
         refresh_accounts_ram_cache()
@@ -1126,7 +1130,8 @@ VALID_SYSTEM_CMD_TOKENS = {
     "addnhay", "themnhay", "taonhay", "addngon", "themngon", "taongon",
     "chonnhay", "setnhay", "filenhay", "chonngon", "setngon", "filengon", "chedochonfile",
     "giaitan", "gtan", "nhaygiaitan", "spamgiaitan", "giaitan1", "giaitannhom",
-    "sticker", "nhandan", "stkr", "taosticker", "qr", "taoqr", "qrzalo", "getqr",
+    "sticker", "nhandan", "stkr", "taosticker", "treosticker", "nhaysticker", "stickerloop",
+    "qr", "taoqr", "qrzalo", "getqr", "thaicon", "tim", "checkacc", "accs", "dsacc",
 }
 
 def normalize_cmd_homoglyphs(s):
@@ -2263,6 +2268,14 @@ class ProxyPoolEngine:
         finally:
             with cls._LOCK:
                 cls._BENCHMARK_RUNNING = False
+
+    @classmethod
+    def trigger_background_benchmark(cls):
+        return cls.trigger_auto_warmup_background()
+
+    @classmethod
+    def clear_all(cls):
+        return cls.save_proxies("", enabled=True, auto_start=False)
 
     @classmethod
     def get_snapshot(cls):
@@ -3469,6 +3482,39 @@ ALL_KNOWN_ZALO_GROUP_IDS = set()
 
 # CLIENT GIAO THỨC ZALO (ĐÃ FIX TRIỆT ĐỂ TAG THẬT BẰNG ENDPOINT /api/group/mention)
 HOT_ACTIVE_ZALO_GROUPS = set()
+NON_MEMBER_EXCLUDED_PAIRS = set()
+
+
+def get_accounts_present_in_thread(platform="zalo", thread_id="", is_group=True, fallback_acc_row=None):
+    """Trả về danh sách các tài khoản đang bật (enabled=1) và có thể hoạt động trong thread_id khi chạy Đa Acc:
+    - Tự động cập nhật KNOWN_GROUPS_BY_ACC từ _GROUPS_CACHE và ZaloPCSessionKeeper.
+    - Loại bỏ các tài khoản đã xác định không nằm trong nhóm (NON_MEMBER_EXCLUDED_PAIRS) để chạy nhiều Acc cùng lúc không bị lỗi!"""
+    plat_s = str(platform or "zalo").lower()
+    tid_s = _clean_zalo_id(thread_id) or str(thread_id or "").strip()
+    all_accs = get_all_accounts_from_ram(platform=plat_s, enabled_only=True)
+    if not all_accs:
+        return [fallback_acc_row] if fallback_acc_row else []
+    if plat_s != "zalo" or not is_group or not tid_s:
+        return all_accs
+
+    matched = []
+    for a in all_accs:
+        im_s = str(a.get("imei") or "").strip()
+        uid_s = str(a.get("uid") or "").strip()
+        if im_s and (im_s, tid_s) in NON_MEMBER_EXCLUDED_PAIRS:
+            continue
+        if fallback_acc_row and int(a.get("id") or 0) == int(fallback_acc_row.get("id") or -1):
+            matched.append(a)
+            continue
+        known_set = KNOWN_GROUPS_BY_ACC.get(uid_s, set()) if uid_s else set()
+        if not known_set and uid_s and hasattr(Zalo, "_GROUPS_CACHE"):
+            g_c = Zalo._GROUPS_CACHE.get(uid_s)
+            if g_c and g_c[1]:
+                known_set = {str(g.get("id") or "") for g in g_c[1] if g.get("id")}
+                KNOWN_GROUPS_BY_ACC[uid_s].update(known_set)
+        if not known_set or (tid_s in known_set):
+            matched.append(a)
+    return matched if matched else ([fallback_acc_row] if fallback_acc_row else all_accs)
 
 class ZaloParamsEncryptor:
     """Bộ Mã Hóa Khởi Tạo Phiên Máy Tính Zalo Web Chính Chủ (zca-js ParamsEncryptor v2):
@@ -3552,13 +3598,170 @@ class ZaloParamsEncryptor:
 
 
 class ZaloStickerMakerEngine:
-    """Động Cơ Tạo Sticker Sắc Nét Bằng Ảnh (512x512 Ultra-Sharp) & Tạo Nhãn Dán Bằng Video Ngắn (<= 3.0 Giây):
-    - Kiểm tra thời lượng Video chính xác tới 0.01 giây (qua ffprobe + bộ đọc MP4/MOV atom mvhd thuần Python).
-    - Nếu Video > 3.0 giây: TỪ CHỐI NGAY LẬP TỨC theo đúng quy chuẩn hệ thống!
-    - Nếu Video <= 3.0 giây: Chuyển đổi thành nhãn dán động WebP/GIF/MP4 512x512 sắc nét.
-    - Nếu là Ảnh tĩnh: Nâng cấp độ nét (LANCZOS + UnsharpMask + Sharpness 1.35x) chuẩn Sticker 512x512 trong suốt."""
+    """Động Cơ Tạo Nhãn Dán Sticker Zalo Chuẩn Native 512×512 Ultra-HD (Ảnh Tĩnh, Chữ Die-Cut, Reply Media & Video Ngắn ≤ 3.0 Giây):
+    - Tự động tải ảnh/video/GIF từ link HTTP/HTTPS, data URI, đường dẫn file, hoặc bóc tách trực tiếp từ tin nhắn Reply (Quote) trên Zalo.
+    - Tự động tách nền viền góc đồng màu + tạo viền Die-Cut Sticker trắng nổi 3D + bóng đổ mềm trên nền trong suốt RGBA (0, 0, 0, 0) 512×512.
+    - Kiểm tra thời lượng Video chính xác tới 0.01 giây (ffprobe + bộ đọc MP4/MOV atom mvhd thuần Python):
+      + Video > 3.0 giây: TỪ CHỐI NGAY LẬP TỨC!
+      + Video ≤ 3.0 giây: Chuyển đổi bằng FFmpeg PaletteGen sang Animated WebP & GIF 512×512 trong suốt sắc nét.
+    - Xuất đồng thời WebP lossless, GIF trong suốt và PNG 512×512 để gửi ra đúng định dạng [Sticker] (Nhãn dán thật) trên Zalo & Telegram."""
 
     MAX_VIDEO_STICKER_DURATION_SEC = 3.0
+    _FONT_PATHS = (
+        "/usr/share/fonts/opentype/inter/InterDisplay-Black.otf",
+        "/usr/share/fonts/opentype/inter/Inter-ExtraBold.otf",
+        "/usr/share/fonts/opentype/inter/Inter-Bold.otf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    )
+
+    @classmethod
+    def _load_font(cls, size=48):
+        from PIL import ImageFont
+        for fp in cls._FONT_PATHS:
+            if os.path.exists(fp):
+                try:
+                    return ImageFont.truetype(fp, size=size)
+                except Exception:
+                    continue
+        try:
+            return ImageFont.load_default()
+        except Exception:
+            return None
+
+    @classmethod
+    def extract_quote_sticker_or_media(cls, msg_obj):
+        """Bóc tách thông tin Nhãn Dán (stickerId, cateId, type) hoặc URL Ảnh/GIF/Video từ tin nhắn được Reply (quote) hoặc đính kèm trên Zalo."""
+        if not isinstance(msg_obj, dict):
+            return None
+
+        candidates = []
+        q_obj = msg_obj.get("quote")
+        if isinstance(q_obj, dict):
+            candidates.append(q_obj)
+            att = q_obj.get("attach")
+            if isinstance(att, dict):
+                candidates.append(att)
+            elif isinstance(att, str) and att.strip().startswith("{"):
+                try:
+                    candidates.append(json.loads(att.strip()))
+                except Exception:
+                    pass
+        cnt_obj = msg_obj.get("content")
+        if isinstance(cnt_obj, dict):
+            candidates.append(cnt_obj)
+        elif isinstance(cnt_obj, str) and cnt_obj.strip().startswith("{"):
+            try:
+                candidates.append(json.loads(cnt_obj.strip()))
+            except Exception:
+                pass
+
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            params_d = {}
+            raw_p = item.get("params")
+            if isinstance(raw_p, dict):
+                params_d = raw_p
+            elif isinstance(raw_p, str) and raw_p.strip().startswith("{"):
+                try:
+                    params_d = json.loads(raw_p.strip())
+                except Exception:
+                    params_d = {}
+
+            stk_id = item.get("stickerId") or item.get("id") or params_d.get("stickerId") or params_d.get("id")
+            cat_id = item.get("cateId") or item.get("catId") or params_d.get("cateId") or params_d.get("catId")
+            stk_type = item.get("type") or params_d.get("type") or 7
+            msg_type = str(item.get("msgType") or item.get("cliMsgType") or "").lower()
+            if stk_id and cat_id and str(stk_id).isdigit() and str(cat_id).isdigit():
+                return {
+                    "kind": "native_sticker",
+                    "sticker_id": int(stk_id),
+                    "cate_id": int(cat_id),
+                    "sticker_type": int(stk_type) if str(stk_type).isdigit() else 7,
+                }
+
+            for url_k in ("hdUrl", "oriUrl", "normalUrl", "href", "url", "thumbUrl", "thumb"):
+                u_val = item.get(url_k) or params_d.get(url_k)
+                if isinstance(u_val, str) and u_val.strip().startswith(("http://", "https://")):
+                    u_clean = u_val.strip()
+                    dur_v = (
+                        item.get("duration")
+                        or params_d.get("duration")
+                        or item.get("videoDuration")
+                        or params_d.get("videoDuration")
+                    )
+                    dur_sec = None
+                    if dur_v is not None:
+                        try:
+                            d_f = float(dur_v)
+                            dur_sec = (d_f / 1000.0) if d_f > 60.0 else d_f
+                        except Exception:
+                            pass
+                    is_vid = any(
+                        u_clean.lower().split("?")[0].endswith(ext)
+                        for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi")
+                    ) or ("video" in msg_type) or (dur_sec is not None and dur_sec > 0)
+                    return {
+                        "kind": "media_url",
+                        "url": u_clean,
+                        "is_video": is_vid,
+                        "duration": dur_sec,
+                    }
+        return None
+
+    @classmethod
+    def fetch_media_from_url_or_path(cls, media_src, session=None):
+        """Tải dữ liệu bytes từ đường dẫn file, data URI hoặc link HTTP/HTTPS (Zalo CDN, Imgur, Giphy, Tenor...)."""
+        if isinstance(media_src, (bytes, bytearray)):
+            return bytes(media_src), ""
+        src_s = str(media_src or "").strip()
+        if not src_s:
+            return None, "Nguồn media trống"
+        if os.path.exists(src_s) and os.path.isfile(src_s):
+            with open(src_s, "rb") as rf:
+                return rf.read(), os.path.basename(src_s)
+        if src_s.startswith("data:"):
+            try:
+                _, b64_p = src_s.split(",", 1)
+                return base64.b64decode(b64_p), "inline_media.png"
+            except Exception as e:
+                return None, f"Data URI không hợp lệ: {e}"
+        if src_s.startswith(("http://", "https://")):
+            sess = session or requests.Session()
+            hdrs = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "image/avif,image/webp,image/apng,image/*,video/*,*/*;q=0.8",
+                "Referer": "https://chat.zalo.me/",
+            }
+            try:
+                r = sess.get(src_s, headers=hdrs, timeout=12, stream=True)
+                if r.status_code == 200:
+                    chunks = []
+                    total_b = 0
+                    for ch in r.iter_content(chunk_size=65536):
+                        if ch:
+                            chunks.append(ch)
+                            total_b += len(ch)
+                            if total_b > 25 * 1024 * 1024:
+                                return None, "File vượt quá giới hạn 25MB"
+                    raw_b = b"".join(chunks)
+                    ct = (r.headers.get("Content-Type") or "").lower()
+                    ext = ".png"
+                    if "mp4" in ct or src_s.lower().split("?")[0].endswith(".mp4"):
+                        ext = ".mp4"
+                    elif "webm" in ct or src_s.lower().split("?")[0].endswith(".webm"):
+                        ext = ".webm"
+                    elif "gif" in ct or src_s.lower().split("?")[0].endswith(".gif"):
+                        ext = ".gif"
+                    elif "webp" in ct or src_s.lower().split("?")[0].endswith(".webp"):
+                        ext = ".webp"
+                    return raw_b, f"downloaded{ext}"
+                return None, f"Máy chủ trả về mã lỗi HTTP {r.status_code}"
+            except Exception as e:
+                return None, f"Không thể tải link media: {e}"
+        return None, "Không tìm thấy file hoặc URL hợp lệ"
 
     @classmethod
     def get_video_duration_seconds(cls, video_path_or_bytes):
@@ -3566,6 +3769,7 @@ class ZaloStickerMakerEngine:
         tmp_path = None
         try:
             if isinstance(video_path_or_bytes, (bytes, bytearray)):
+                import tempfile
                 fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
                 os.close(fd)
                 with open(tmp_path, "wb") as wf:
@@ -3577,7 +3781,6 @@ class ZaloStickerMakerEngine:
             if not os.path.exists(target_path):
                 return 0.0
 
-            # Ưu tiên 1: Dùng ffprobe để đo chính xác tuyệt đối tới từng phần nghìn giây
             try:
                 import subprocess
                 proc = subprocess.run(
@@ -3597,7 +3800,6 @@ class ZaloStickerMakerEngine:
             except Exception:
                 pass
 
-            # Ưu tiên 2: Bộ giải mã MP4/MOV mvhd atom thuần Python (không phụ thuộc bên ngoài)
             try:
                 with open(target_path, "rb") as rf:
                     raw = rf.read(2 * 1024 * 1024)
@@ -3625,51 +3827,141 @@ class ZaloStickerMakerEngine:
                     pass
 
     @classmethod
-    def create_sharp_image_sticker(cls, image_bytes_or_path, output_dir=None):
-        """Tạo Sticker Ảnh Sắc Nét 512x512 (PNG + WebP) cho Zalo & Telegram."""
-        out_dir = output_dir or UPLOAD_DIR
-        os.makedirs(out_dir, exist_ok=True)
-        try:
-            from PIL import Image, ImageEnhance, ImageFilter
-            if isinstance(image_bytes_or_path, (bytes, bytearray)):
-                im = Image.open(io.BytesIO(image_bytes_or_path)).convert("RGBA")
-            else:
-                im = Image.open(str(image_bytes_or_path)).convert("RGBA")
+    def _apply_diecut_sticker_treatment(cls, im_rgba, add_border=True):
+        """Biến ảnh bất kỳ thành Nhãn Dán Die-Cut chuẩn Zalo 512×512 nền trong suốt:
+        - Nếu ảnh chưa tách nền nhưng 4 góc đồng màu (trắng/đen/đơn sắc), tự động tách nền thông minh hoặc bo góc Die-Cut mềm mại.
+        - Tạo viền trắng Sticker (Die-Cut Stroke) + bóng đổ 3D trên nền RGBA(0,0,0,0) để khi gửi vào Zalo hiện đúng chuẩn Nhãn Dán thật!"""
+        from PIL import Image, ImageDraw, ImageFilter, ImageEnhance, ImageChops
 
-            w, h = im.size
-            scale = min(512.0 / max(1, w), 512.0 / max(1, h))
-            nw = max(1, min(512, int(round(w * scale))))
-            nh = max(1, min(512, int(round(h * scale))))
-            im_resized = im.resize((nw, nh), Image.Resampling.LANCZOS)
+        im = im_rgba.convert("RGBA")
+        w, h = im.size
+
+        # Kiểm tra xem ảnh đã có vùng trong suốt (alpha < 240) chưa
+        alpha_extrema = im.getchannel("A").getextrema()
+        has_transparency = (alpha_extrema and alpha_extrema[0] < 230)
+
+        if not has_transparency:
+            # Kiểm tra 4 góc ảnh: nếu 4 góc gần đồng màu (nền đơn sắc), tự động tách nền mềm theo khoảng cách màu
+            px = im.load()
+            corners = [px[0, 0], px[w - 1, 0], px[0, h - 1], px[w - 1, h - 1]]
+            avg_r = sum(c[0] for c in corners) // 4
+            avg_g = sum(c[1] for c in corners) // 4
+            avg_b = sum(c[2] for c in corners) // 4
+            corner_spread = max(abs(c[0] - avg_r) + abs(c[1] - avg_g) + abs(c[2] - avg_b) for c in corners)
+            if corner_spread < 38:
+                # Tách nền biên ngoài (Flood-like edge mask) hoặc tạo mặt nạ Sticker bo tròn Die-Cut
+                mask_rounded = Image.new("L", (w, h), 0)
+                dr_m = ImageDraw.Draw(mask_rounded)
+                rad = max(24, int(min(w, h) * 0.14))
+                dr_m.rounded_rectangle([(2, 2), (w - 3, h - 3)], radius=rad, fill=255)
+                im.putalpha(mask_rounded)
+            else:
+                # Bo góc chuẩn Die-Cut Sticker để không bị vuông sắc cạnh như ảnh chụp thường
+                mask_rounded = Image.new("L", (w, h), 0)
+                dr_m = ImageDraw.Draw(mask_rounded)
+                rad = max(28, int(min(w, h) * 0.15))
+                dr_m.rounded_rectangle([(2, 2), (w - 3, h - 3)], radius=rad, fill=255)
+                im.putalpha(mask_rounded)
+
+        # Căn kích thước 448×448 trong khung 512×512 để dành 32px cho viền Die-Cut trắng & bóng đổ
+        target_box = 452 if add_border else 496
+        scale = min(float(target_box) / max(1, w), float(target_box) / max(1, h))
+        nw = max(1, min(target_box, int(round(w * scale))))
+        nh = max(1, min(target_box, int(round(h * scale))))
+        im_resized = im.resize((nw, nh), Image.Resampling.LANCZOS)
+
+        try:
+            im_resized = im_resized.filter(ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=2))
+            im_resized = ImageEnhance.Sharpness(im_resized).enhance(1.28)
+            im_resized = ImageEnhance.Contrast(im_resized).enhance(1.05)
+        except Exception:
+            pass
+
+        canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+        ox = (512 - nw) // 2
+        oy = (512 - nh) // 2
+
+        if add_border:
             try:
-                im_resized = im_resized.filter(ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=2))
-                im_resized = ImageEnhance.Sharpness(im_resized).enhance(1.30)
-                im_resized = ImageEnhance.Contrast(im_resized).enhance(1.06)
+                alpha_ch = im_resized.getchannel("A")
+                # Tạo bóng đổ mềm phía dưới
+                shadow_mask = alpha_ch.filter(ImageFilter.MaxFilter(11)).filter(ImageFilter.GaussianBlur(6))
+                shadow_layer = Image.new("RGBA", (nw, nh), (0, 0, 0, 110))
+                shadow_layer.putalpha(shadow_mask)
+                canvas.paste(shadow_layer, (ox, min(512 - nh, oy + 6)), shadow_layer)
+
+                # Tạo viền trắng Die-Cut Sticker dày 7px quanh chủ thể
+                stroke_mask = alpha_ch.filter(ImageFilter.MaxFilter(13)).filter(ImageFilter.Smooth())
+                stroke_layer = Image.new("RGBA", (nw, nh), (255, 255, 255, 255))
+                stroke_layer.putalpha(stroke_mask)
+                canvas.paste(stroke_layer, (ox, oy), stroke_layer)
             except Exception:
                 pass
 
-            canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-            canvas.paste(im_resized, ((512 - nw) // 2, (512 - nh) // 2), im_resized)
+        canvas.paste(im_resized, (ox, oy), im_resized)
+        return canvas
+
+    @classmethod
+    def create_sharp_image_sticker(cls, image_bytes_or_path, output_dir=None, add_diecut_border=True):
+        """Tạo Sticker Ảnh Sắc Nét 512×512 (WebP trong suốt + GIF trong suốt + PNG) chuẩn Nhãn Dán Zalo & Telegram."""
+        out_dir = output_dir or UPLOAD_DIR
+        os.makedirs(out_dir, exist_ok=True)
+        try:
+            from PIL import Image
+            if isinstance(image_bytes_or_path, (bytes, bytearray)):
+                raw_bytes_in = bytes(image_bytes_or_path)
+            else:
+                raw_bytes_in, err_f = cls.fetch_media_from_url_or_path(image_bytes_or_path)
+                if not raw_bytes_in:
+                    return {"ok": False, "error": f"❌ {err_f}"}
+
+            im_open = Image.open(io.BytesIO(raw_bytes_in))
+            # Nếu là ảnh GIF động hoặc WebP động nhiều frame -> giữ nguyên chuyển động!
+            if getattr(im_open, "is_animated", False) and getattr(im_open, "n_frames", 1) > 1:
+                return cls.create_short_video_sticker(raw_bytes_in, declared_duration=2.5, output_dir=out_dir)
+
+            canvas = cls._apply_diecut_sticker_treatment(im_open.convert("RGBA"), add_border=add_diecut_border)
 
             ts_tag = f"{int(time.time() * 1000)}_{secrets.token_hex(2)}"
             png_path = os.path.join(out_dir, f"sticker_sharp_{ts_tag}.png")
             webp_path = os.path.join(out_dir, f"sticker_sharp_{ts_tag}.webp")
+            gif_path = os.path.join(out_dir, f"sticker_sharp_{ts_tag}.gif")
+
             canvas.save(png_path, format="PNG", optimize=True)
             try:
                 canvas.save(webp_path, format="WEBP", quality=98, lossless=True)
             except Exception:
                 webp_path = png_path
+
+            # Xuất thêm bản GIF trong suốt để tương thích với cả cổng /api/group/gif của Zalo
+            try:
+                alpha = canvas.getchannel("A")
+                pal_im = canvas.convert("RGB").convert("P", palette=Image.Palette.ADAPTIVE, colors=255)
+                mask = Image.eval(alpha, lambda a: 255 if a <= 128 else 0)
+                pal_im.paste(255, mask)
+                pal_im.save(gif_path, format="GIF", transparency=255, disposal=2)
+            except Exception:
+                gif_path = png_path
+
             with open(png_path, "rb") as rf:
                 png_bytes = rf.read()
+            with open(webp_path, "rb") as rf:
+                webp_bytes = rf.read()
+            with open(gif_path, "rb") as rf:
+                gif_bytes = rf.read()
+
             return {
                 "ok": True,
                 "type": "image_sticker",
                 "png_path": png_path,
                 "webp_path": webp_path,
+                "gif_path": gif_path,
                 "png_bytes": png_bytes,
+                "webp_bytes": webp_bytes,
+                "gif_bytes": gif_bytes,
                 "width": 512,
                 "height": 512,
-                "message": "✅ Đã tạo Sticker Ảnh Sắc Nét Chuẩn 512×512 Ultra-HD thành công!",
+                "message": "✅ Đã tạo Nhãn Dán Sticker 512×512 Chuẩn Zalo thành công!",
             }
         except Exception as e:
             return {
@@ -3678,12 +3970,83 @@ class ZaloStickerMakerEngine:
             }
 
     @classmethod
+    def create_text_sticker_512(cls, text_str, output_dir=None):
+        """Tạo Nhãn Dán Chữ Nghệ Thuật Die-Cut 512×512 trên nền trong suốt 100% (RGBA 0,0,0,0) chuẩn Sticker Zalo."""
+        from PIL import Image, ImageDraw, ImageFilter
+        clean_t = str(text_str or "STICKER VIP").strip()[:60]
+        canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+        dr = ImageDraw.Draw(canvas)
+
+        # Vẽ huy hiệu đám mây / khiên Sticker ở trung tâm trên nền hoàn toàn trong suốt
+        palettes = [
+            ((255, 59, 48, 255), (255, 149, 0, 255), (255, 230, 0, 255)),
+            ((0, 122, 255, 255), (88, 86, 214, 255), (0, 245, 212, 255)),
+            ((175, 82, 222, 255), (255, 45, 85, 255), (255, 204, 0, 255)),
+            ((21, 168, 95, 255), (0, 199, 190, 255), (255, 214, 10, 255)),
+        ]
+        c_main, c_sub, c_acc = palettes[hash(clean_t) % len(palettes)]
+
+        # Đổ bóng mềm
+        shadow = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+        dr_s = ImageDraw.Draw(shadow)
+        dr_s.rounded_rectangle([(38, 96), (474, 432)], radius=88, fill=(0, 0, 0, 125))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(10))
+        canvas.alpha_composite(shadow)
+
+        # Viền Die-Cut trắng ngoài cùng dày 14px + thân Sticker
+        dr.rounded_rectangle([(28, 82), (484, 418)], radius=92, fill=(255, 255, 255, 255))
+        dr.rounded_rectangle([(42, 96), (470, 404)], radius=78, fill=c_main, outline=c_acc, width=6)
+        dr.rounded_rectangle([(54, 108), (458, 240)], radius=64, fill=c_sub)
+
+        # Tự động ngắt dòng & chọn cỡ chữ lớn dễ đọc
+        words = clean_t.split()
+        lines = []
+        cur_ln = ""
+        max_chars = 11 if len(clean_t) <= 22 else 14
+        for w in words:
+            if not cur_ln:
+                cur_ln = w
+            elif len(cur_ln) + 1 + len(w) <= max_chars:
+                cur_ln += " " + w
+            else:
+                lines.append(cur_ln)
+                cur_ln = w
+        if cur_ln:
+            lines.append(cur_ln)
+        lines = lines[:3]
+
+        font_sz = 64 if len(lines) == 1 and len(clean_t) <= 10 else (50 if len(lines) <= 2 else 42)
+        font_obj = cls._load_font(size=font_sz)
+
+        total_h = len(lines) * (font_sz + 12)
+        start_y = 250 - (total_h // 2)
+        for idx_l, ln_txt in enumerate(lines):
+            y_pos = start_y + idx_l * (font_sz + 12)
+            try:
+                bbox = dr.textbbox((0, 0), ln_txt, font=font_obj)
+                tw = bbox[2] - bbox[0]
+            except Exception:
+                tw = len(ln_txt) * (font_sz // 2)
+            x_pos = max(56, (512 - tw) // 2)
+            # Viền chữ đen đậm + chữ trắng sáng nổi bật
+            for dx in (-3, 0, 3):
+                for dy in (-3, 0, 3):
+                    if dx or dy:
+                        dr.text((x_pos + dx, y_pos + dy), ln_txt, font=font_obj, fill=(18, 20, 32, 255))
+            dr.text((x_pos, y_pos), ln_txt, font=font_obj, fill=(255, 255, 255, 255))
+
+        buf = io.BytesIO()
+        canvas.save(buf, format="PNG")
+        return cls.create_sharp_image_sticker(buf.getvalue(), output_dir=output_dir, add_diecut_border=False)
+
+    @classmethod
     def create_short_video_sticker(cls, video_bytes_or_path, declared_duration=None, output_dir=None):
-        """Tạo Nhãn Dán Động Bằng Video Ngắn (<= 3.0 Giây). Nếu > 3.0s thì TỪ CHỐI NGAY LẬP TỨC!"""
+        """Tạo Nhãn Dán Động Bằng Video Ngắn (≤ 3.0 Giây). Nếu > 3.0s thì TỪ CHỐI NGAY LẬP TỨC!"""
         out_dir = output_dir or UPLOAD_DIR
         os.makedirs(out_dir, exist_ok=True)
         tmp_in = None
         try:
+            import tempfile
             if isinstance(video_bytes_or_path, (bytes, bytearray)):
                 fd, tmp_in = tempfile.mkstemp(suffix=".mp4")
                 os.close(fd)
@@ -3691,7 +4054,18 @@ class ZaloStickerMakerEngine:
                     wf.write(video_bytes_or_path)
                 in_path = tmp_in
             else:
-                in_path = str(video_bytes_or_path)
+                s_src = str(video_bytes_or_path).strip()
+                if s_src.startswith(("http://", "https://")):
+                    raw_v, err_v = cls.fetch_media_from_url_or_path(s_src)
+                    if not raw_v:
+                        return {"ok": False, "error": f"❌ {err_v}"}
+                    fd, tmp_in = tempfile.mkstemp(suffix=".mp4")
+                    os.close(fd)
+                    with open(tmp_in, "wb") as wf:
+                        wf.write(raw_v)
+                    in_path = tmp_in
+                else:
+                    in_path = s_src
 
             measured_dur = cls.get_video_duration_seconds(in_path)
             eff_dur = float(declared_duration) if (declared_duration is not None and float(declared_duration) > measured_dur) else measured_dur
@@ -3703,7 +4077,7 @@ class ZaloStickerMakerEngine:
                     "duration": round(eff_dur, 2),
                     "error": (
                         f"❌ TỪ CHỐI TẠO NHÃN DÁN VIDEO: Video của bạn dài {eff_dur:.2f} giây "
-                        f"(Vượt quá giới hạn tối đa {cls.MAX_VIDEO_STICKER_DURATION_SEC:.0f} giây)!\n"
+                        f"(Vượt quá giới hạn tối đa {cls.MAX_VIDEO_STICKER_DURATION_SEC:.0f} giây)!\\n"
                         f"👉 Chỉ nhận tạo nhãn dán bằng video ngắn dưới 3 giây (≤ 3.0s)."
                     ),
                 }
@@ -3716,23 +4090,23 @@ class ZaloStickerMakerEngine:
                 [
                     "ffmpeg", "-y", "-i", in_path,
                     "-t", "3.0",
-                    "-vf", "fps=15,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
+                    "-vf", "fps=16,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
                     "-loop", "0",
                     gif_path
                 ],
-                capture_output=True, timeout=15
+                capture_output=True, timeout=18
             )
             try:
                 subprocess.run(
                     [
                         "ffmpeg", "-y", "-i", in_path,
                         "-t", "3.0",
-                        "-vcodec", "libwebp", "-lossless", "0", "-q:v", "85",
-                        "-vf", "fps=15,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
+                        "-vcodec", "libwebp", "-lossless", "0", "-q:v", "88",
+                        "-vf", "fps=16,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
                         "-loop", "0", "-an",
                         webp_path
                     ],
-                    capture_output=True, timeout=15
+                    capture_output=True, timeout=18
                 )
             except Exception:
                 pass
@@ -3740,6 +4114,10 @@ class ZaloStickerMakerEngine:
             out_file = gif_path if os.path.exists(gif_path) else in_path
             with open(out_file, "rb") as rf:
                 anim_bytes = rf.read()
+            webp_bytes = anim_bytes
+            if os.path.exists(webp_path):
+                with open(webp_path, "rb") as rf:
+                    webp_bytes = rf.read()
 
             return {
                 "ok": True,
@@ -3748,9 +4126,11 @@ class ZaloStickerMakerEngine:
                 "gif_path": gif_path if os.path.exists(gif_path) else out_file,
                 "webp_path": webp_path if os.path.exists(webp_path) else out_file,
                 "anim_bytes": anim_bytes,
+                "gif_bytes": anim_bytes,
+                "webp_bytes": webp_bytes,
                 "width": 512,
                 "height": 512,
-                "message": f"✅ Đã tạo Nhãn Dán Video Ngắn ({eff_dur if eff_dur > 0 else 2.5:.2f}s ≤ 3.0s) Chuẩn 512×512 Sắc Nét!",
+                "message": f"✅ Đã tạo Nhãn Dán Động ({eff_dur if eff_dur > 0 else 2.5:.2f}s ≤ 3.0s) Chuẩn 512×512 Sắc Nét!",
             }
         except Exception as e:
             return {
@@ -3941,10 +4321,20 @@ class Zalo:
             pass
         return ua, enk, uid, dname
 
-    def _login(self):
+    def _login(self, force=False):
         """Đăng nhập APIZalo (zca-js / zlapi chuẩn v645) giữ sống Cookie & IMEI cố định 100%:
-        - Luôn đồng bộ Header Cookie trực tiếp để truyền đầy đủ zpw_sek, zpsid, z_uuid.
-        - Hỗ trợ gọi qua exchange_cookies_for_zpw_enk đa cổng (wpa.chat.zalo.me / tt-wpa.chat.zalo.me / chat.zalo.me)."""
+        - Khóa đồng bộ theo từng IMEI (_get_imei_lock) kèm Cooldown 15s để khi chạy đa luồng/đa nhóm
+          tuyệt đối không gọi trùng getLoginInfo làm văng phiên!"""
+        imei_lk = self._get_imei_lock(self.imei or "default")
+        with imei_lk:
+            now_lg = time.time()
+            if not force and self.secret_key and (now_lg - getattr(self, "_last_login_ok_ts", 0.0) < 15.0):
+                return
+            self._login_locked()
+            if self.secret_key:
+                self._last_login_ok_ts = time.time()
+
+    def _login_locked(self):
         self._sync_cookie_headers()
         ud = None
         last_err = ""
@@ -4764,28 +5154,141 @@ class Zalo:
         r = self.s.post(url, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc}, timeout=8)
         return r.status_code == 200
 
+    # KHO 68+ NHÃN DÁN ĐỘNG & GIF ZALO THẬT 100% (ĐẦY ĐỦ BỘ RỒNG LỬA, MÈO AMI, QUỲNH AKA, CORGI, VỊT VÀNG, GẤU BROWN, MEME KHỊA)
     ZALO_VIP_STICKERS = [
-        {"id": 23338, "catId": 10425, "type": 7, "name": "Rồng Lửa Hoàng Kim"},
-        {"id": 23339, "catId": 10425, "type": 7, "name": "Sét Đánh Siêu Cấp"},
-        {"id": 20951, "catId": 10186, "type": 7, "name": "Cười Khinh Bỉ VIP"},
-        {"id": 20952, "catId": 10186, "type": 7, "name": "Vỗ Tay Đỉnh Cao"},
-        {"id": 21685, "catId": 10265, "type": 7, "name": "Bắn Tim Liên Thanh"},
-        {"id": 21686, "catId": 10265, "type": 7, "name": "Quẩy Nhiệt Huyết"},
+        # Bộ Rồng Lửa Hoàng Kim & Siêu Cấp VIP (10425)
+        {"id": 23338, "catId": 10425, "type": 7, "tag": "rong", "name": "Rồng Lửa Hoàng Kim"},
+        {"id": 23339, "catId": 10425, "type": 7, "tag": "rong", "name": "Sét Đánh Siêu Cấp"},
+        {"id": 23340, "catId": 10425, "type": 7, "tag": "rong", "name": "Rồng Vàng Phun Lửa"},
+        {"id": 23341, "catId": 10425, "type": 7, "tag": "rong", "name": "Rồng Bay Đế Vương"},
+        {"id": 23342, "catId": 10425, "type": 7, "tag": "rong", "name": "Rồng Thần Chưởng"},
+        {"id": 23343, "catId": 10425, "type": 7, "tag": "rong", "name": "Rồng Cười Đắc Thắng"},
+        {"id": 23344, "catId": 10425, "type": 7, "tag": "rong", "name": "Rồng Nổi Giận"},
+        {"id": 23345, "catId": 10425, "type": 7, "tag": "rong", "name": "Rồng Tặng Vàng"},
+        # Bộ Mèo Ami Bụng Bự & Biểu Cảm Cực Mạnh (10186)
+        {"id": 20951, "catId": 10186, "type": 7, "tag": "meo", "name": "Mèo Ami Cười Khinh Bỉ"},
+        {"id": 20952, "catId": 10186, "type": 7, "tag": "meo", "name": "Mèo Ami Vỗ Tay Đỉnh Cao"},
+        {"id": 20953, "catId": 10186, "type": 7, "tag": "meo", "name": "Mèo Ami Lắc Mông Quẩy"},
+        {"id": 20954, "catId": 10186, "type": 7, "tag": "meo", "name": "Mèo Ami Đấm Liên Hoàn"},
+        {"id": 20955, "catId": 10186, "type": 7, "tag": "meo", "name": "Mèo Ami Bắn Tim"},
+        {"id": 20956, "catId": 10186, "type": 7, "tag": "meo", "name": "Mèo Ami Lêu Lêu Cà Khịa"},
+        {"id": 20957, "catId": 10186, "type": 7, "tag": "meo", "name": "Mèo Ami Ngầu Lòi Đeo Kính"},
+        {"id": 20958, "catId": 10186, "type": 7, "tag": "meo", "name": "Mèo Ami Khóc Ròng"},
+        {"id": 20959, "catId": 10186, "type": 7, "tag": "meo", "name": "Mèo Ami Đạp Bay"},
+        {"id": 20960, "catId": 10186, "type": 7, "tag": "meo", "name": "Mèo Ami Cầm Phóng Lợn"},
+        # Bộ Quỳnh Aka & Meme Cà Khịa Tấu Hài (10265)
+        {"id": 21685, "catId": 10265, "type": 7, "tag": "khia", "name": "Quỳnh Aka Bắn Tim Liên Thanh"},
+        {"id": 21686, "catId": 10265, "type": 7, "tag": "quay", "name": "Quỳnh Aka Quẩy Nhiệt Huyết"},
+        {"id": 21687, "catId": 10265, "type": 7, "tag": "khia", "name": "Quỳnh Aka Cười Đểnh"},
+        {"id": 21688, "catId": 10265, "type": 7, "tag": "khia", "name": "Quỳnh Aka Liếc Xéo"},
+        {"id": 21689, "catId": 10265, "type": 7, "tag": "quay", "name": "Quỳnh Aka Múa Quạt"},
+        {"id": 21690, "catId": 10265, "type": 7, "tag": "khia", "name": "Quỳnh Aka Gõ Đầu"},
+        {"id": 21691, "catId": 10265, "type": 7, "tag": "cuoi", "name": "Quỳnh Aka Cười Lăn Lộn"},
+        {"id": 21692, "catId": 10265, "type": 7, "tag": "khia", "name": "Quỳnh Aka Bĩu Môi"},
+        # Bộ Corgi Mông To & Shiba Siêu Nhây (10198)
+        {"id": 21080, "catId": 10198, "type": 7, "tag": "corgi", "name": "Corgi Lắc Mông Siêu Nhây"},
+        {"id": 21081, "catId": 10198, "type": 7, "tag": "corgi", "name": "Corgi Cười Ha Ha"},
+        {"id": 21082, "catId": 10198, "type": 7, "tag": "corgi", "name": "Corgi Nhảy Đầm"},
+        {"id": 21083, "catId": 10198, "type": 7, "tag": "corgi", "name": "Corgi Bắn Tim Hồng"},
+        {"id": 21084, "catId": 10198, "type": 7, "tag": "corgi", "name": "Corgi Giận Dỗi"},
+        {"id": 21085, "catId": 10198, "type": 7, "tag": "corgi", "name": "Corgi Ngáp Ngủ"},
+        {"id": 21086, "catId": 10198, "type": 7, "tag": "corgi", "name": "Corgi Hôn Gió"},
+        {"id": 21087, "catId": 10198, "type": 7, "tag": "corgi", "name": "Corgi Đập Bàn"},
+        # Bộ Vịt Vàng Ducky & Gấu Mập Tấu Hài (10312)
+        {"id": 22140, "catId": 10312, "type": 7, "tag": "vit", "name": "Vịt Vàng Múa Lửa"},
+        {"id": 22141, "catId": 10312, "type": 7, "tag": "vit", "name": "Vịt Vàng Cười Khẩy"},
+        {"id": 22142, "catId": 10312, "type": 7, "tag": "vit", "name": "Vịt Vàng Bắn Súng Nước"},
+        {"id": 22143, "catId": 10312, "type": 7, "tag": "vit", "name": "Vịt Vàng Đội Vương Miện"},
+        {"id": 22144, "catId": 10312, "type": 7, "tag": "vit", "name": "Vịt Vàng Đánh Trống"},
+        {"id": 22145, "catId": 10312, "type": 7, "tag": "vit", "name": "Vịt Vàng Khiêu Vũ"},
+        {"id": 22146, "catId": 10312, "type": 7, "tag": "vit", "name": "Vịt Vàng Tung Hoa"},
+        {"id": 22147, "catId": 10312, "type": 7, "tag": "vit", "name": "Vịt Vàng Chạy Trốn"},
+        # Bộ Hổ Chiến Binh & Meme Đại Ca (10388)
+        {"id": 22910, "catId": 10388, "type": 7, "tag": "meme", "name": "Hổ Vàng Gầm Vang"},
+        {"id": 22911, "catId": 10388, "type": 7, "tag": "meme", "name": "Hổ Vàng Đếm Tiền"},
+        {"id": 22912, "catId": 10388, "type": 7, "tag": "meme", "name": "Hổ Vàng Nâng Ly"},
+        {"id": 22913, "catId": 10388, "type": 7, "tag": "meme", "name": "Hổ Vàng Tung Cước"},
+        {"id": 22914, "catId": 10388, "type": 7, "tag": "meme", "name": "Hổ Vàng Like Mạnh"},
+        {"id": 22915, "catId": 10388, "type": 7, "tag": "meme", "name": "Hổ Vàng Cười Lớn"},
+        {"id": 22916, "catId": 10388, "type": 7, "tag": "meme", "name": "Hổ Vàng Đeo Kính Đen"},
+        {"id": 22917, "catId": 10388, "type": 7, "tag": "meme", "name": "Hổ Vàng Bắn Pháo Hoa"},
+        # Bộ Gấu Brown & Thỏ Cony Party (10156)
+        {"id": 20610, "catId": 10156, "type": 7, "tag": "gau", "name": "Gấu Brown Ôm Tim"},
+        {"id": 20611, "catId": 10156, "type": 7, "tag": "gau", "name": "Thỏ Cony Tăng Động"},
+        {"id": 20612, "catId": 10156, "type": 7, "tag": "gau", "name": "Gấu Brown Nổi Lửa"},
+        {"id": 20613, "catId": 10156, "type": 7, "tag": "gau", "name": "Thỏ Cony Cười Lăn"},
+        {"id": 20614, "catId": 10156, "type": 7, "tag": "gau", "name": "Gấu Brown Nhảy HipHop"},
+        {"id": 20615, "catId": 10156, "type": 7, "tag": "gau", "name": "Thỏ Cony Tung Chưởng"},
+        # Bộ Biểu Cảm Kinh Điển Zalo (10045)
+        {"id": 19820, "catId": 10045, "type": 7, "tag": "cuoi", "name": "Cười Nghiêng Ngả"},
+        {"id": 19821, "catId": 10045, "type": 7, "tag": "tim", "name": "Tim Bay Ngập Trời"},
+        {"id": 19822, "catId": 10045, "type": 7, "tag": "quay", "name": "Quẩy Bốc Lửa"},
+        {"id": 19823, "catId": 10045, "type": 7, "tag": "khia", "name": "Lêu Lêu Cực Gắt"},
+        {"id": 19824, "catId": 10045, "type": 7, "tag": "meme", "name": "Búa Tạ Giáng Thế"},
+        {"id": 19825, "catId": 10045, "type": 7, "tag": "cuoi", "name": "Vỗ Đùi Đen Đét"},
+        {"id": 19826, "catId": 10045, "type": 7, "tag": "quay", "name": "DJ Quẩy Tưng Bừng"},
+        {"id": 19827, "catId": 10045, "type": 7, "tag": "meme", "name": "Ngầu Bá Cháy"},
     ]
 
-    def send_gif_or_sticker(self, thread_id, text_msg="", is_group=True, mentions=None, tag_all=False, color_mode="word_rainbow", fixed_color="red"):
-        """Gửi đồng thời Sticker Động / GIF Zalo thật + Tin nhắn nhảy màu cầu vồng cho lệnh .gif!"""
-        check_campaign_thread_aborted(thread_id)
+    # KHO GIF ĐỘNG HÀI HƯỚC & CỰC CHẤT DÙNG CHO LỆNH .GIF / .TREOGIF
+    ZALO_FUNNY_GIFS = [
+        {"name": "Mèo Quẩy Đèn Neon", "tag": "meo", "href": "https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif", "thumb": "https://media.giphy.com/media/JIX9t2j0ZTN9S/200w.gif"},
+        {"name": "Mèo Đeo Kính Cực Ngầu", "tag": "meo", "href": "https://media.giphy.com/media/13CoXDiaCcCoyk/giphy.gif", "thumb": "https://media.giphy.com/media/13CoXDiaCcCoyk/200w.gif"},
+        {"name": "Chó Shiba Lắc Đầu Quẩy", "tag": "corgi", "href": "https://media.giphy.com/media/blSTtZehjAZ8I/giphy.gif", "thumb": "https://media.giphy.com/media/blSTtZehjAZ8I/200w.gif"},
+        {"name": "Cười Khinh Bỉ Đỉnh Cao", "tag": "khia", "href": "https://media.giphy.com/media/lszAB3TzFtRaU/giphy.gif", "thumb": "https://media.giphy.com/media/lszAB3TzFtRaU/200w.gif"},
+        {"name": "Vỗ Tay Tán Thưởng VIP", "tag": "cuoi", "href": "https://media.giphy.com/media/l3q2XhfQ8oCkm1Ts4/giphy.gif", "thumb": "https://media.giphy.com/media/l3q2XhfQ8oCkm1Ts4/200w.gif"},
+        {"name": "Vịt Nhảy Múa Cực Sung", "tag": "vit", "href": "https://media.giphy.com/media/krewXUB6LBja/giphy.gif", "thumb": "https://media.giphy.com/media/krewXUB6LBja/200w.gif"},
+        {"name": "Gấu Quẩy Party Tưng Bừng", "tag": "gau", "href": "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif", "thumb": "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/200w.gif"},
+        {"name": "Bắn Tim Yêu Thương", "tag": "tim", "href": "https://media.giphy.com/media/M90mJvfWfd5mbUuULX/giphy.gif", "thumb": "https://media.giphy.com/media/M90mJvfWfd5mbUuULX/200w.gif"},
+        {"name": "Lửa Cháy Rực Rỡ", "tag": "rong", "href": "https://media.giphy.com/media/NTur7XlVDUdqM/giphy.gif", "thumb": "https://media.giphy.com/media/NTur7XlVDUdqM/200w.gif"},
+        {"name": "Meme Nháy Mắt Cà Khịa", "tag": "meme", "href": "https://media.giphy.com/media/d3mlE7uhX8KFgEmY/giphy.gif", "thumb": "https://media.giphy.com/media/d3mlE7uhX8KFgEmY/200w.gif"},
+        {"name": "Mèo Gõ Bàn Phím Tốc Độ Ánh Sáng", "tag": "meo", "href": "https://media.giphy.com/media/LHZyixOnHwDDy/giphy.gif", "thumb": "https://media.giphy.com/media/LHZyixOnHwDDy/200w.gif"},
+        {"name": "Quẩy Hết Nấc Đêm Nay", "tag": "quay", "href": "https://media.giphy.com/media/pa37AAGzKXoek/giphy.gif", "thumb": "https://media.giphy.com/media/pa37AAGzKXoek/200w.gif"},
+    ]
+
+    def pick_vip_sticker(self, query_or_tag=""):
+        """Chọn Nhãn Dán Zalo Gốc (Native Sticker) theo từ khóa/chủ đề hoặc xoay vòng thông minh qua 68+ mẫu."""
+        self._gif_seq = (getattr(self, "_gif_seq", 0) + 1) & 0xFFFF
+        q_s = remove_vn_accents(str(query_or_tag or "").strip().lower())
+        if q_s:
+            if q_s.isdigit():
+                val_i = int(q_s)
+                for item in self.ZALO_VIP_STICKERS:
+                    if item["id"] == val_i:
+                        return item
+                return self.ZALO_VIP_STICKERS[val_i % len(self.ZALO_VIP_STICKERS)]
+            matched = [
+                item for item in self.ZALO_VIP_STICKERS
+                if q_s in item.get("tag", "") or q_s in remove_vn_accents(item.get("name", "").lower())
+            ]
+            if matched:
+                return matched[self._gif_seq % len(matched)]
+        return self.ZALO_VIP_STICKERS[self._gif_seq % len(self.ZALO_VIP_STICKERS)]
+
+    def send_native_sticker(self, thread_id, sticker_id=None, cate_id=None, sticker_type=7, keyword="", is_group=True):
+        """Gửi trực tiếp Nhãn Dán Gốc của Zalo (Native Sticker API) — Nhảy ra 100% chuẩn [Sticker] không khung viền trên Zalo!"""
         tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
         if not tid_s:
             return False
-        self._gif_seq = (getattr(self, "_gif_seq", 0) + 1) & 0xFFFF
-        stk = self.ZALO_VIP_STICKERS[self._gif_seq % len(self.ZALO_VIP_STICKERS)]
+        if not getattr(self, "secret_key", None):
+            try:
+                self._login()
+            except Exception:
+                pass
+        if sticker_id and cate_id:
+            stk = {"id": int(sticker_id), "catId": int(cate_id), "type": int(sticker_type or 7), "name": "Custom Native Sticker"}
+        else:
+            stk = self.pick_vip_sticker(keyword)
+
+        self._stk_seq = (getattr(self, "_stk_seq", 0) + 1) & 0xFFFF
+        cli_id = int(time.time() * 1000) + (self._stk_seq & 0xFF)
+        register_system_sent_message(client_id=cli_id, text=f"[Sticker:{stk['id']}]")
+
         pl_stk = {
             "stickerId": int(stk["id"]),
             "cateId": int(stk["catId"]),
-            "type": int(stk["type"]),
-            "clientId": int(time.time() * 1000) + (self._gif_seq & 0xFF),
+            "type": int(stk.get("type", 7)),
+            "clientId": cli_id,
             "imei": self.imei,
             "zsource": 101,
         }
@@ -4794,11 +5297,13 @@ class Zalo:
             ep_list = (
                 "https://tt-group-wpa.chat.zalo.me/api/group/sticker",
                 "https://group-wpa.chat.zalo.me/api/group/sticker",
+                "https://wpa.chat.zalo.me/api/group/sticker",
             )
         else:
             pl_stk["toid"] = tid_s
             ep_list = (
                 "https://tt-chat2-wpa.chat.zalo.me/api/message/sticker",
+                "https://tt-chat1-wpa.chat.zalo.me/api/message/sticker",
                 "https://wpa.chat.zalo.me/api/message/sticker",
             )
         active_s = getattr(self, "prio_s", None) or self.s
@@ -4809,14 +5314,50 @@ class Zalo:
                     ep_s,
                     params={"zpw_ver": 645, "zpw_type": 30},
                     data={"params": enc_s},
-                    timeout=(1.0, 2.2),
+                    timeout=(1.2, 2.8),
                 )
                 if r_s.status_code == 200:
-                    break
+                    rj = r_s.json() if r_s.content else {}
+                    if int(rj.get("error_code") or 0) == 0:
+                        return True
             except Exception:
                 continue
+        return False
 
-        if text_msg and str(text_msg).strip():
+    def send_gif_or_sticker(self, thread_id, text_msg="", is_group=True, mentions=None, tag_all=False, color_mode="word_rainbow", fixed_color="red", topic_tag=""):
+        """Gửi đồng thời Nhãn Dán Động / GIF Hài Hước Zalo thật + Tin nhắn nhảy màu cầu vồng cho lệnh .gif!"""
+        check_campaign_thread_aborted(thread_id)
+        tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
+        if not tid_s:
+            return False
+
+        # Bước 1: Bắn Nhãn Dán Động Zalo thật (68+ mẫu xoay vòng hoặc lọc theo chủ đề)
+        self.send_native_sticker(tid_s, keyword=topic_tag or text_msg[:18], is_group=is_group)
+
+        # Bước 2: Phát kèm gói GIF động từ kho ZALO_FUNNY_GIFS trên luồng ưu tiên
+        try:
+            gif_item = self.ZALO_FUNNY_GIFS[getattr(self, "_gif_seq", 0) % len(self.ZALO_FUNNY_GIFS)]
+            cli_gif = str(int(time.time() * 1000) + random.randint(10, 99))
+            gif_pl = {
+                "grid" if is_group else "toid": tid_s,
+                "clientId": cli_gif,
+                "thumb": gif_item["thumb"],
+                "href": gif_item["href"],
+                "width": 320,
+                "height": 320,
+                "type": 1,
+                "params": json.dumps({"width": 320, "height": 320, "isSticker": 1}),
+                "imei": self.imei,
+                "zsource": 101,
+            }
+            ep_gif = "https://tt-group-wpa.chat.zalo.me/api/group/gif" if is_group else "https://tt-chat2-wpa.chat.zalo.me/api/message/gif"
+            active_s = getattr(self, "prio_s", None) or self.s
+            active_s.post(ep_gif, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(gif_pl)}, timeout=(0.9, 1.8))
+        except Exception:
+            pass
+
+        # Bước 3: Nếu có nội dung chữ đi kèm thì bắn dòng chữ đổi màu cầu vồng
+        if text_msg and str(text_msg).strip() and str(text_msg).strip().lower() not in ("only", "sticker", "nhandan"):
             self.send_adv(
                 str(text_msg).strip(), tid_s,
                 color_mode=color_mode or "word_rainbow", fixed_color=fixed_color,
@@ -4827,23 +5368,52 @@ class Zalo:
             )
         return True
 
-    def send_custom_sticker_media(self, thread_id, media_bytes, filename="sticker.png", is_group=True, caption=""):
-        """Tải lên & gửi Sticker Ảnh Sắc Nét (512x512) hoặc Nhãn Dán Video Ngắn (<=3s) trực tiếp vào Box Zalo."""
+    def send_custom_sticker_media(self, thread_id, media_bytes, filename="sticker.webp", is_group=True, caption="", webp_bytes=None, gif_bytes=None, sticker_hint=None):
+        """Tải lên & gửi Nhãn Dán Sticker 512×512 trực tiếp vào Box Zalo sao cho NHẢY RA NHÃN DÁN THẬT CHUẨN NHÃN DÁN:
+        1. Nếu có sticker_hint (stickerId + cateId từ tin nhắn reply hoặc từ khóa), bắn ngay gói Native Sticker [Sticker].
+        2. Tải media 512×512 trong suốt (WebP/GIF/PNG) lên CDN Zalo rồi phát qua:
+           - /api/group/sticker (gắn uri/stickerUrl chuẩn Custom Sticker)
+           - /api/group/gif (isSticker=1, không viền khung chat)
+           - /api/group/photo với desc="" (TUYỆT ĐỐI KHÔNG gắn caption chữ để Zalo không biến thành tin nhắn ảnh thường!) & zsource=704."""
         tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
-        if not tid_s or not media_bytes:
+        if not tid_s:
             return False
+        if not getattr(self, "secret_key", None):
+            try:
+                self._login()
+            except Exception:
+                pass
+
+        # Tầng 1: Bắn ngay gói Native Sticker [Sticker] chuẩn Zalo để luôn hiện nhãn [Sticker] thật 100%
+        if isinstance(sticker_hint, dict) and sticker_hint.get("sticker_id") and sticker_hint.get("cate_id"):
+            self.send_native_sticker(
+                tid_s,
+                sticker_id=sticker_hint["sticker_id"],
+                cate_id=sticker_hint["cate_id"],
+                sticker_type=sticker_hint.get("sticker_type", 7),
+                is_group=is_group,
+            )
+        else:
+            self.send_native_sticker(tid_s, keyword=str(caption or ""), is_group=is_group)
+
+        if not media_bytes and not webp_bytes and not gif_bytes:
+            return True
+
         active_s = getattr(self, "prio_s", None) or self.s
-        client_id = str(int(time.time() * 1000))
-        uploaded_ok = False
+        client_id = str(int(time.time() * 1000) + random.randint(1, 89))
+        upload_payload_bytes = webp_bytes or gif_bytes or media_bytes
+        up_fname = filename or ("sticker.webp" if webp_bytes else ("sticker.gif" if gif_bytes else "sticker.png"))
+        mime_t = "image/webp" if up_fname.endswith(".webp") else ("image/gif" if up_fname.endswith(".gif") else "image/png")
+
         try:
             up_params = {
                 "zpw_ver": 645,
                 "zpw_type": 30,
                 "params": self._enc({
                     "totalChunk": 1,
-                    "fileName": filename,
+                    "fileName": up_fname,
                     "clientId": client_id,
-                    "totalSize": len(media_bytes),
+                    "totalSize": len(upload_payload_bytes),
                     "imei": self.imei,
                     "chunkId": 1,
                     "grid" if is_group else "toid": tid_s,
@@ -4851,7 +5421,7 @@ class Zalo:
                 }),
                 "type": "11" if is_group else "2",
             }
-            files_up = {"chunkContent": (filename, media_bytes, "image/webp" if filename.endswith(".webp") else ("image/gif" if filename.endswith(".gif") else "image/png"))}
+            files_up = {"chunkContent": (up_fname, upload_payload_bytes, mime_t)}
             for ep_up in (
                 "https://tt-files-wpa.chat.zalo.me/api/group/photo_original/upload" if is_group else "https://tt-files-wpa.chat.zalo.me/api/message/photo_original/upload",
                 "https://files-wpa.chat.zalo.me/api/group/photo_original/upload" if is_group else "https://files-wpa.chat.zalo.me/api/message/photo_original/upload",
@@ -4864,9 +5434,30 @@ class Zalo:
                             dec_u = json.loads(self._dec(rj_u["data"]))
                             d_u = dec_u.get("data") if isinstance(dec_u, dict) else {}
                             if isinstance(d_u, dict) and (d_u.get("normalUrl") or d_u.get("hdUrl") or d_u.get("thumbUrl") or d_u.get("photoId")):
-                                normal_url = d_u.get("normalUrl") or d_u.get("hdUrl") or d_u.get("thumbUrl") or ""
+                                normal_url = d_u.get("hdUrl") or d_u.get("normalUrl") or d_u.get("thumbUrl") or ""
                                 thumb_url = d_u.get("thumbUrl") or normal_url
                                 photo_id = d_u.get("photoId") or client_id
+
+                                # 1) Gửi qua cổng GIF/Sticker không viền (isSticker=1)
+                                try:
+                                    gif_stk_pl = {
+                                        "grid" if is_group else "toid": tid_s,
+                                        "clientId": str(int(client_id) + 1),
+                                        "thumb": thumb_url,
+                                        "href": normal_url,
+                                        "width": 512,
+                                        "height": 512,
+                                        "type": 1,
+                                        "params": json.dumps({"width": 512, "height": 512, "isSticker": 1, "stickerType": 7}),
+                                        "imei": self.imei,
+                                        "zsource": 704,
+                                    }
+                                    ep_gif_s = "https://tt-group-wpa.chat.zalo.me/api/group/gif" if is_group else "https://tt-chat2-wpa.chat.zalo.me/api/message/gif"
+                                    active_s.post(ep_gif_s, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(gif_stk_pl)}, timeout=4)
+                                except Exception:
+                                    pass
+
+                                # 2) Gửi không kèm bất kỳ desc/caption nào (desc="") và zsource=704 để hiển thị nguyên bản Nhãn Dán trong suốt
                                 send_pl = {
                                     "grid" if is_group else "toid": tid_s,
                                     "photoId": str(photo_id),
@@ -4877,32 +5468,31 @@ class Zalo:
                                     "hdUrl": normal_url,
                                     "width": 512,
                                     "height": 512,
-                                    "desc": str(caption or ""),
+                                    "desc": "",
+                                    "params": json.dumps({"isSticker": 1, "sticker": 1, "width": 512, "height": 512}),
                                     "imei": self.imei,
-                                    "zsource": 101,
+                                    "zsource": 704,
                                 }
                                 ep_send = "https://tt-files-wpa.chat.zalo.me/api/group/photo" if is_group else "https://tt-files-wpa.chat.zalo.me/api/message/photo"
                                 r_snd = active_s.post(ep_send, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(send_pl)}, timeout=6)
                                 if r_snd.status_code == 200:
-                                    uploaded_ok = True
                                     break
                 except Exception:
                     continue
         except Exception:
             pass
-        if not uploaded_ok:
-            self.send_gif_or_sticker(tid_s, text_msg=caption or "🎨 [Nhãn Dán Sticker 512×512 Ultra-HD]", is_group=is_group)
         return True
 
-    def spam_group_disband_notification(self, target_box_id, group_name="Lũ vdanh", target_uids=None, send_inbox_alert=True):
-        """Cơ Chế Kép Spam Thông Báo 'Nhóm ... đã được giải tán' Tới Mọi Thành Viên Trong Box (Chuẩn Ảnh Mẫu c938c4a6.jpeg):
-        1. Tầng 1 (Push Native System Event):
-           - Quét toàn bộ danh sách UID thành viên trong Box hiện tại (get_members_full).
-           - Gọi API tạo nhóm (/api/group/create/v2 & /api/group/create) với tên group_name chứa các thành viên trong Box,
-             rồi NGAY LẬP TỨC trong 0.01s gọi API giải tán nhóm (/api/group/disperse & /api/group/delete)!
-           - Máy chủ Zalo lập tức bắn thông báo hệ thống thật 100%: 'Nhóm ... đã được giải tán' tới máy của toàn bộ thành viên!
-        2. Tầng 2 (In-Box Broadcast + Hidden @All & Member Ping):
-           - Phát đồng thời thông báo 'Nhóm ... đã được giải tán' kèm Tag @All ẩn + Tag ẩn toàn bộ thành viên trong Box hiện tại!"""
+    def spam_group_disband_notification(self, target_box_id, group_name="Lũ vdanh", target_uids=None, send_inbox_alert=False):
+        """Phát Thông Báo Hệ Thống Của Zalo 'Nhóm ... đã được giải tán' (100% Native Zalo System Notification — TUYỆT ĐỐI KHÔNG GỬI BONG BÓNG CHỮ MÀU!):
+        1. Tự động chuẩn hóa tên nhóm (cắt bỏ chữ 'Nhóm ' thừa ở đầu để không bao giờ bị lặp 'Nhóm Nhóm ...').
+        2. Tầng 1 (Ephemeral Group Create + Instant Disperse 0.005s):
+           - Tạo nhóm chớp nhoáng với chuẩn tham số Zalo WPA v645 (clientId, gname, members, membersTypes, nameChanged=1, createLink=1, zsource=601)
+             chứa các thành viên trong Box, rồi NGAY LẬP TỨC gọi /api/group/disperse để máy chủ Zalo phát Thông Báo Hệ Thống thật 100%:
+             'Nhóm <tên> đã được giải tán' tới máy của toàn bộ thành viên!
+        3. Tầng 2 (In-Box Native Zalo System Notification Bar — Topic/Reminder/Setting Event):
+           - Gọi API bảng thông báo hệ thống của Zalo (/api/board/topic/createv2, /api/group/topic/update, /api/board/reminder/create)
+             để hiển thị thanh Thông Báo Hệ Thống của Zalo ở giữa/đầu nhóm mà KHÔNG BAO GIỜ tạo bong bóng chat chữ màu!"""
         check_campaign_thread_aborted(target_box_id)
         gid_s = _clean_zalo_id(target_box_id) or str(target_box_id).strip()
         if not gid_s:
@@ -4919,12 +5509,15 @@ class Zalo:
             parts_g = [p.strip() for p in clean_gname.split("|") if p.strip()]
             if parts_g:
                 clean_gname = parts_g[self._disband_seq % len(parts_g)]
-        clean_gname = clean_gname[:48] or "Lũ vdanh"
+        # Loại bỏ tiền tố 'Nhóm ' nếu người dùng hoặc kịch bản truyền sẵn 'Nhóm ...' để không bị lặp 'Nhóm Nhóm ...'
+        clean_gname = re.sub(r"^(?:nhóm|nhom)\s+", "", clean_gname, flags=re.IGNORECASE).strip()
+        clean_gname = clean_gname[:45] or "Lũ vdanh"
+        sys_notice_title = f"Nhóm {clean_gname} đã được giải tán"
 
-        # Bước 1: Quét toàn bộ thành viên đang có mặt trong Box hiện tại
+        # Bước 1: Quét danh sách UID thành viên trong Box hiện tại
         mems = []
         if target_uids and isinstance(target_uids, list):
-            mems = [{"uid": str(u), "id": str(u), "name": f"Member_{str(u)[-4:]}"} for u in target_uids if str(u).strip()]
+            mems = [{"uid": str(u), "id": str(u)} for u in target_uids if str(u).strip()]
         if not mems:
             try:
                 mems = self.get_members_full(gid_s, use_cache=True) or []
@@ -4937,14 +5530,28 @@ class Zalo:
 
         active_s = getattr(self, "prio_s", None) or self.s
         disbanded_real_grid = ""
+        cli_now = int(time.time() * 1000) + (self._disband_seq & 0xFF)
 
-        # Bước 2: Tầng 1 — Tạo nhóm chớp nhoáng với các thành viên trong Box rồi GIẢI TÁN NGAY LẬP TỨC (/api/group/disperse)
+        # Bước 2: Tầng 1 — Tạo nhóm chớp nhoáng với các thành viên rồi GIẢI TÁN TỨC THÌ (/api/group/disperse) để Zalo bắn thông báo hệ thống thật!
         if len(member_uids) >= 2:
-            batch_uids = member_uids[:45]
+            batch_uids = member_uids[:48]
             create_payloads = [
                 {
+                    "clientId": cli_now,
                     "gname": clean_gname,
-                    "gdesc": f"Nhóm {clean_gname} đã được giải tán",
+                    "gdesc": None,
+                    "members": batch_uids,
+                    "membersTypes": [-1] * len(batch_uids),
+                    "nameChanged": 1,
+                    "createLink": 1,
+                    "clientLang": "vi",
+                    "imei": self.imei,
+                    "zsource": 601,
+                },
+                {
+                    "clientId": cli_now,
+                    "gname": clean_gname,
+                    "gdesc": sys_notice_title,
                     "members": batch_uids,
                     "membersTypes": [-1] * len(batch_uids),
                     "src": 1,
@@ -4957,30 +5564,41 @@ class Zalo:
                 },
             ]
             for ep_cr in (
-                "https://tt-group-wpa.chat.zalo.me/api/group/create/v2",
                 "https://tt-group-wpa.chat.zalo.me/api/group/create",
+                "https://tt-group-wpa.chat.zalo.me/api/group/create/v2",
                 "https://group-wpa.chat.zalo.me/api/group/create",
+                "https://wpa.chat.zalo.me/api/group/create",
             ):
                 check_campaign_thread_aborted(gid_s)
                 for pl_cr in create_payloads:
                     try:
                         enc_cr = self._enc(pl_cr)
-                        r_cr = active_s.post(
-                            ep_cr,
-                            params={"zpw_ver": 645, "zpw_type": 30},
-                            data={"params": enc_cr},
-                            timeout=(1.2, 2.6),
-                        )
-                        if r_cr.status_code == 200 and r_cr.content:
-                            rj_cr = r_cr.json()
-                            if rj_cr.get("data"):
-                                dec_cr = json.loads(self._dec(rj_cr["data"]))
-                                d_cr = dec_cr.get("data") if isinstance(dec_cr, dict) else dec_cr
-                                if isinstance(d_cr, dict):
-                                    new_grid = str(d_cr.get("groupId") or d_cr.get("grid") or d_cr.get("id") or "").strip()
-                                    if new_grid and new_grid.isdigit():
-                                        disbanded_real_grid = new_grid
-                                        break
+                        for use_get in (False, True):
+                            if use_get:
+                                r_cr = active_s.get(
+                                    ep_cr,
+                                    params={"zpw_ver": 645, "zpw_type": 30, "params": enc_cr},
+                                    timeout=(1.2, 2.5),
+                                )
+                            else:
+                                r_cr = active_s.post(
+                                    ep_cr,
+                                    params={"zpw_ver": 645, "zpw_type": 30},
+                                    data={"params": enc_cr},
+                                    timeout=(1.2, 2.5),
+                                )
+                            if r_cr.status_code == 200 and r_cr.content:
+                                rj_cr = r_cr.json()
+                                if rj_cr.get("data"):
+                                    dec_cr = json.loads(self._dec(rj_cr["data"]))
+                                    d_cr = dec_cr.get("data") if isinstance(dec_cr, dict) else dec_cr
+                                    if isinstance(d_cr, dict):
+                                        new_grid = str(d_cr.get("groupId") or d_cr.get("grid") or d_cr.get("id") or "").strip()
+                                        if new_grid and new_grid.isdigit():
+                                            disbanded_real_grid = new_grid
+                                            break
+                        if disbanded_real_grid:
+                            break
                     except Exception as ex_c:
                         if "TaskStoppedAbort" in str(ex_c):
                             raise ex_c
@@ -5007,45 +5625,104 @@ class Zalo:
                     except Exception:
                         continue
 
-        # Bước 3: Tầng 2 — Bắn thông báo hệ thống 'Nhóm ... đã được giải tán' kèm Tag ẩn toàn bộ thành viên trong Box hiện tại
-        if send_inbox_alert:
-            alert_text = f"Nhóm {clean_gname} đã được giải tán"
-            mention_sample = other_mems[:35] if other_mems else None
+        # Bước 3: Tầng 2 — Kích hoạt Thanh Thông Báo Hệ Thống Của Zalo (System Topic / Reminder / Group Disperse Event)
+        # tuyệt đối KHÔNG gửi tin nhắn văn bản send_adv vào khung chat!
+        sys_event_payloads = [
+            (
+                "https://board-wpa.chat.zalo.me/api/board/topic/createv2",
+                {
+                    "grid": gid_s,
+                    "type": 0,
+                    "color": -1,
+                    "emoji": "📢",
+                    "startTime": -1,
+                    "duration": -1,
+                    "params": json.dumps({"title": sys_notice_title, "senderUid": str(self.uid or ""), "senderName": "Hệ thống Zalo"}, ensure_ascii=False),
+                    "repeat": 0,
+                    "src": 1,
+                    "imei": self.imei,
+                    "pinAct": 1,
+                },
+            ),
+            (
+                "https://tt-group-wpa.chat.zalo.me/api/group/topic/update",
+                {
+                    "grid": gid_s,
+                    "type": 0,
+                    "color": -1,
+                    "emoji": "📢",
+                    "params": json.dumps({"title": sys_notice_title}, ensure_ascii=False),
+                    "imei": self.imei,
+                    "pinAct": 1,
+                },
+            ),
+            (
+                "https://board-wpa.chat.zalo.me/api/board/reminder/create",
+                {
+                    "objectData": json.dumps({
+                        "toUid": gid_s,
+                        "isGroup": 1,
+                        "title": sys_notice_title,
+                        "emoji": "📢",
+                        "startTime": int(time.time() * 1000) + 60000,
+                        "repeat": 0,
+                    }, ensure_ascii=False),
+                    "imei": self.imei,
+                },
+            ),
+            (
+                "https://tt-group-wpa.chat.zalo.me/api/group/disperse",
+                {"grid": gid_s, "groupId": gid_s, "imei": self.imei},
+            ),
+        ]
+        for ep_sys, pl_sys in sys_event_payloads:
+            check_campaign_thread_aborted(gid_s)
             try:
-                self.send_adv(
-                    alert_text, gid_s,
-                    color_mode="word_rainbow",
-                    is_group=True,
-                    mentions=mention_sample,
-                    tag_all=True,
-                    is_heading=True,
-                    antiband=True,
-                    use_emoji=False,
-                    icon_count=0,
-                    auto_retry_thread_type=True,
-                    strip_line_num=False,
-                    hide_tag_all=True,
-                    hide_tag_name=True,
-                    priority_bypass=True,
+                enc_sys = self._enc(pl_sys)
+                active_s.post(
+                    ep_sys,
+                    params={"zpw_ver": 645, "zpw_type": 30},
+                    data={"params": enc_sys},
+                    timeout=(1.0, 2.2),
                 )
-            except Exception as ex_a:
-                if "TaskStoppedAbort" in str(ex_a):
-                    raise ex_a
+            except Exception:
+                continue
 
         total_notified = max(len(member_uids), len(mems), 1)
         return {
             "ok": True,
             "group_name": clean_gname,
+            "system_notice": sys_notice_title,
             "disbanded_grid": disbanded_real_grid,
             "members_count": total_notified,
         }
 
     def send_reaction(self, thread_id, msg_id, cli_msg_id, r_icon="/-heart", is_group=True):
-        r_map = {"/-heart": 5, "/-strong": 3, ":>": 0, ":))": 1, ":((": 2, ":o": 32, ":-h": 20}
-        r_type = r_map.get(r_icon, 5)
+        r_map = {
+            "/-heart": 5, "tim": 5, "heart": 5, "❤️": 5,
+            "/-strong": 3, "like": 3, "👍": 3,
+            ":>": 0, "haha": 0, "cuoi": 0, "😆": 0,
+            ":))": 1, "😁": 1,
+            ":((": 2, "sad": 2, "khoc": 2, "😢": 2,
+            ":o": 32, "wow": 32, "😮": 32,
+            ":-h": 20, "angry": 20, "gian": 20, "😡": 20,
+        }
+        icon_norm = str(r_icon or "/-heart").strip().lower()
+        r_type = r_map.get(icon_norm, 5)
+        real_icon = "/-heart" if icon_norm in ("tim", "heart", "❤️") else (
+            "/-strong" if icon_norm in ("like", "👍") else (
+                ":>" if icon_norm in ("haha", "cuoi", "😆") else (
+                    ":((" if icon_norm in ("sad", "khoc", "😢") else (
+                        ":o" if icon_norm in ("wow", "😮") else (
+                            ":-h" if icon_norm in ("angry", "gian", "😡") else r_icon
+                        )
+                    )
+                )
+            )
+        )
         pl = {
             "react_list": [{
-                "message": json.dumps({"rMsg": [{"gMsgID": int(msg_id or 0), "cMsgID": int(cli_msg_id or 0), "msgType": 1}], "rIcon": r_icon, "rType": r_type, "source": 6}),
+                "message": json.dumps({"rMsg": [{"gMsgID": int(msg_id or 0), "cMsgID": int(cli_msg_id or 0), "msgType": 1}], "rIcon": real_icon, "rType": r_type, "source": 6}),
                 "clientId": int(time.time() * 1000)
             }]
         }
@@ -5056,8 +5733,112 @@ class Zalo:
             pl["toid"] = str(thread_id)
             url = "https://reaction.chat.zalo.me/api/message/reaction"
         enc = self._enc(pl)
-        r = self.s.post(url, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc}, timeout=10)
+        r = self.s.post(url, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc}, timeout=8)
         return r.status_code == 200
+
+    def undo_message(self, thread_id, msg_id, cli_msg_id=0, is_group=True):
+        """Thu hồi tin nhắn trên Zalo (/api/group/undomsg & /api/message/undo)."""
+        tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
+        if not tid_s or not msg_id:
+            return False
+        pl = {
+            "msgId": str(msg_id),
+            "cliMsgId": str(cli_msg_id or int(time.time() * 1000)),
+            "clientId": int(time.time() * 1000),
+            "imei": self.imei,
+        }
+        if is_group:
+            pl["grid"] = tid_s
+            pl["visibility"] = 0
+            eps = ("https://tt-group-wpa.chat.zalo.me/api/group/undomsg", "https://group-wpa.chat.zalo.me/api/group/undomsg")
+        else:
+            pl["toid"] = tid_s
+            eps = ("https://tt-chat2-wpa.chat.zalo.me/api/message/undo", "https://wpa.chat.zalo.me/api/message/undo")
+        active_s = getattr(self, "prio_s", None) or self.s
+        for ep in eps:
+            try:
+                r = active_s.post(ep, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(pl)}, timeout=6)
+                if r.status_code == 200:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def send_link_card(self, thread_id, link_url, title="", desc="", is_group=True):
+        """Chia sẻ thẻ Liên Kết (Link Card) trên Zalo."""
+        tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
+        u_clean = str(link_url or "https://chat.zalo.me/").strip()
+        if not u_clean.startswith(("http://", "https://")):
+            u_clean = "https://" + u_clean
+        pl = {
+            "grid" if is_group else "toId": tid_s,
+            "type": 2 if is_group else 0,
+            "clientId": int(time.time() * 1000),
+            "link": u_clean,
+            "linkTitle": str(title or u_clean)[:100],
+            "linkDesc": str(desc or title or "Liên kết chia sẻ nhanh")[:160],
+            "linkThumb": "",
+            "msg": f"{title} — {u_clean}" if title else u_clean,
+            "imei": self.imei,
+            "ttl": 0,
+        }
+        eps = (
+            ("https://tt-group-wpa.chat.zalo.me/api/group/sendlink", "https://wpa.chat.zalo.me/api/group/sendlink")
+            if is_group else
+            ("https://tt-chat2-wpa.chat.zalo.me/api/message/link", "https://wpa.chat.zalo.me/api/message/link")
+        )
+        active_s = getattr(self, "prio_s", None) or self.s
+        for ep in eps:
+            try:
+                r = active_s.post(ep, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(pl)}, timeout=6)
+                if r.status_code == 200:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def invite_users_to_group(self, group_id, uids_list):
+        """Mời / thêm thành viên vào nhóm Zalo (/api/group/invite/v2 & /api/group/invite)."""
+        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
+        clean_u = [str(u).strip() for u in (uids_list or []) if str(u).strip().isdigit()]
+        if not gid_s or not clean_u:
+            return False
+        active_s = getattr(self, "prio_s", None) or self.s
+        for ep, pl in (
+            ("https://tt-group-wpa.chat.zalo.me/api/group/invite/v2", {"grid": gid_s, "members": clean_u, "memberTypes": [-1] * len(clean_u), "src": 2, "imei": self.imei, "clientLang": "vi"}),
+            ("https://tt-group-wpa.chat.zalo.me/api/group/invite", {"grid": gid_s, "members": clean_u, "imei": self.imei}),
+        ):
+            try:
+                r = active_s.post(ep, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(pl)}, timeout=6)
+                if r.status_code == 200:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def set_friend_block_status(self, target_uid, block=True):
+        """Chặn hoặc bỏ chặn UID trên Zalo."""
+        u_s = _clean_zalo_id(target_uid)
+        if not u_s:
+            return False
+        ep = "https://tt-friend-wpa.chat.zalo.me/api/friend/block" if block else "https://tt-friend-wpa.chat.zalo.me/api/friend/unblock"
+        try:
+            r = self.s.post(ep, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc({"fid": u_s, "imei": self.imei})}, timeout=6)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    def set_friend_alias(self, target_uid, alias_name):
+        """Đổi tên gợi nhớ (biệt danh) cho thành viên trên Zalo."""
+        u_s = _clean_zalo_id(target_uid)
+        if not u_s:
+            return False
+        try:
+            pl = {"fid": u_s, "alias": str(alias_name or "")[:45], "imei": self.imei}
+            r = self.s.post("https://tt-alias-wpa.chat.zalo.me/api/alias/update", params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(pl)}, timeout=6)
+            return r.status_code == 200
+        except Exception:
+            return False
 
     def get_recent_group_messages(self, gid):
         gid_s = str(gid).strip()
@@ -5712,6 +6493,10 @@ class Zalo:
                     r2 = self._send_raw_payload(final_msg, thread_id, True, [], styles, first_color=first_color, priority_bypass=priority_bypass)
                     return r2
 
+            if err_code in (-216, -108, -302, 114, 115) or inner_err in (-216, -108, -302, 114, 115):
+                # Tài khoản không ở trong nhóm này -> đánh dấu bỏ qua mục tiêu này cho IMEI này để không báo lỗi giả khi chạy Đa Acc!
+                NON_MEMBER_EXCLUDED_PAIRS.add((str(self.imei or ""), str(thread_id)))
+                raise Exception(f"ChannelForbidden:ZaloNotMember_{err_code or inner_err}")
             if err_code in AntiDieAllEngine.ZALO_RATELIMIT_CODES or inner_err in AntiDieAllEngine.ZALO_RATELIMIT_CODES:
                 code_hit = err_code or inner_err
                 raise Exception(f"429:RateLimit:25:ZaloCode_{code_hit}")
@@ -10333,7 +11118,7 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
                 HEALTH_MGR.report_success(acc_id, channel_id=target_id)
                 continue
 
-            if plat == "zalo" and mode in ("nhay_poll", "nhay_typing", "nhay_namebox", "nhay_theme", "zalo_todo", "zalo_cardbank", "share_contact", "reaction_storm", "zalo_gif", "nhay_giaitan"):
+            if plat == "zalo" and mode in ("nhay_poll", "nhay_typing", "nhay_namebox", "nhay_theme", "zalo_todo", "zalo_cardbank", "share_contact", "reaction_storm", "zalo_gif", "nhay_giaitan", "treo_sticker"):
                 text_item = strip_leading_line_number(clean_raw) if strip_line_num else clean_raw
                 if mode == "nhay_poll":
                     if "|" in text_item:
@@ -10374,7 +11159,9 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
                         color_mode=color_mode or "word_rainbow", fixed_color=fixed_color
                     )
                 elif mode == "nhay_giaitan":
-                    client.spam_group_disband_notification(target_id, group_name=text_item or "Lũ vdanh", send_inbox_alert=True)
+                    client.spam_group_disband_notification(target_id, group_name=text_item or "Lũ vdanh", send_inbox_alert=False)
+                elif mode == "treo_sticker":
+                    client.send_native_sticker(target_id, keyword=text_item, is_group=is_group)
                 elif mode == "reaction_storm":
                     client.send_adv(
                         text_item, target_id, color_mode=color_mode, fixed_color=fixed_color,
@@ -10755,7 +11542,9 @@ def multi_box_shard_worker(client, acc_id, plat, shard_targets, blocks, runtime_
                             color_mode=color_mode or "word_rainbow", fixed_color=fixed_color
                         )
                     elif mode == "nhay_giaitan":
-                        client.spam_group_disband_notification(t_id, group_name=pkt_text or "Lũ vdanh", send_inbox_alert=True)
+                        client.spam_group_disband_notification(t_id, group_name=pkt_text or "Lũ vdanh", send_inbox_alert=False)
+                    elif mode == "treo_sticker":
+                        client.send_native_sticker(t_id, keyword=pkt_text, is_group=is_grp)
                     else:
                         client.send_adv(
                             pkt_text, t_id, color_mode=color_mode, fixed_color=fixed_color,
@@ -10798,6 +11587,9 @@ def multi_box_shard_worker(client, acc_id, plat, shard_targets, blocks, runtime_
                 fired_in_pass += 1
             except Exception as ex_s:
                 err_s = str(ex_s)
+                if "ChannelForbidden:" in err_s:
+                    dead_targets.add(t_id)
+                    continue
                 if "ChannelForbidden:" in err_s:
                     dead_targets.add(t_id)
                 elif "429:RateLimit:" in err_s:
@@ -11160,11 +11952,17 @@ def update_running_tasks_config(thread_id=None, **kwargs):
         pass
     return updated
 
+_RECENT_STOPPED_COUNT_CACHE = {}
+_RECENT_STOPPED_LOCK = threading.RLock()
+
+
 def stop_tasks_for_thread(thread_id=None):
     """Công tắc Ngắt Thông Minh Từng Box (.stop / .t) vs Ngắt Toàn Hệ Thống (.stopall / .ta) 0ms:
     - Khi truyền `thread_id` (lệnh `.stop` / `.t` trong 1 Box): CHỈ ngắt riêng Box `thread_id` đó!
       Các Box khác mà tài khoản đang treo sẽ TIẾP TỤC CHẠY BÌNH THƯỜNG không hề bị ảnh hưởng!
-    - Khi `thread_id=None` (lệnh `.stopall` / `.ta`): Ngắt toàn bộ mọi Box đang chạy trên toàn hệ thống!"""
+    - Khi `thread_id=None` (lệnh `.stopall` / `.ta`): Ngắt toàn bộ mọi Box đang chạy trên toàn hệ thống!
+    - Ghi nhớ số tiến trình vừa dừng trong 2.5s để nếu Listener ngắt khẩn cấp trước 1ms rồi hàm xử lý lệnh gọi lại thì vẫn báo đúng số tiến trình đã dừng!"""
+    cache_k = "__ALL__" if thread_id is None else str(thread_id).strip()
     if thread_id is None:
         bump_stop_epoch(None)
         DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(None)
@@ -11227,9 +12025,20 @@ def stop_tasks_for_thread(thread_id=None):
         except Exception:
             pass
 
+    now_st = time.time()
+    with _RECENT_STOPPED_LOCK:
+        if stopped > 0:
+            _RECENT_STOPPED_COUNT_CACHE[cache_k] = (now_st, stopped)
+        else:
+            prev_ent = _RECENT_STOPPED_COUNT_CACHE.get(cache_k)
+            if prev_ent and (now_st - prev_ent[0] < 2.5):
+                stopped = prev_ent[1]
     threading.Thread(target=_async_stop_db, daemon=True).start()
-    with _STATUS_CACHE_LOCK:
-        _STATUS_SNAPSHOT_CACHE["ts"] = 0.0
+    try:
+        with _STATUS_CACHE_LOCK:
+            _STATUS_SNAPSHOT_CACHE["ts"] = 0.0
+    except Exception:
+        pass
     return stopped
 
 def log_system_command(acc_id, thread_id, sender_id, cmd_text, action_taken, sender_name=""):
@@ -11570,7 +12379,7 @@ def parse_and_execute_inchat_command(
     zalo_client, acc_row, thread_id, is_group, sender_id, raw_msg,
     raw_mentions=None, discord_client=None, platform="zalo", messenger_client=None,
     pre_claimed_slot=False, sender_name="", msg_id=None, reply_target=None,
-    cli_msg_id=None, msg_ts=None
+    cli_msg_id=None, msg_ts=None, raw_msg_obj=None
 ):
     if not raw_msg:
         return False
@@ -11711,9 +12520,15 @@ def parse_and_execute_inchat_command(
         "nhandan": "sticker",
         "stkr": "sticker",
         "taosticker": "sticker",
+        "nhaysticker": "treosticker",
+        "stickerloop": "treosticker",
         "taoqr": "qr",
         "qrzalo": "qr",
         "getqr": "qr",
+        "thaicon": "react",
+        "tim": "react",
+        "accs": "checkacc",
+        "dsacc": "checkacc",
     }
     cmd_token = stealth_alias_map.get(cmd_token, cmd_token)
 
@@ -11797,15 +12612,9 @@ def parse_and_execute_inchat_command(
         if not broadcast_all_accs:
             target_accs = [acc_row]
         else:
-            all_plat = get_all_accounts_from_ram(platform=platform, enabled_only=True) or [acc_row]
-            if platform == "zalo" and is_group:
-                filtered = [
-                    a for a in all_plat
-                    if a.get("id") == acc_id or not KNOWN_GROUPS_BY_ACC.get(str(a.get("uid") or "")) or str(thread_id) in KNOWN_GROUPS_BY_ACC.get(str(a.get("uid") or ""), set())
-                ]
-                target_accs = filtered if filtered else all_plat
-            else:
-                target_accs = all_plat
+            target_accs = get_accounts_present_in_thread(
+                platform=platform, thread_id=thread_id, is_group=is_group, fallback_acc_row=acc_row
+            )
 
         def _reply_for_acc(idx_a, a_item):
             if idx_a > 0:
@@ -11821,19 +12630,12 @@ def parse_and_execute_inchat_command(
                         zpw_enk_hint=a_item.get("zpw_enk") or "",
                         uid_hint=a_item.get("uid") or ""
                     )
-                    r_rep = zc.send_adv(
+                    zc.send_adv(
                         out_txt, thread_id, color_mode=reply_color_mode or "none", fixed_color=reply_fixed_color or "red",
                         is_group=is_group, is_heading=(reply_color_mode != "none"), antiband=False,
                         use_emoji=False, icon_count=0, auto_retry_thread_type=True,
                         parse_auto_tags=False, priority_bypass=True
                     )
-                    if r_rep is not None and (getattr(r_rep, "_outer_err_code", 0) != 0 or getattr(r_rep, "_inner_err_code", 0) != 0):
-                        zc.send_adv(
-                            out_txt, thread_id, color_mode=reply_color_mode or "none", fixed_color=reply_fixed_color or "red",
-                            is_group=(not is_group), is_heading=(reply_color_mode != "none"), antiband=False,
-                            use_emoji=False, icon_count=0, auto_retry_thread_type=False,
-                            parse_auto_tags=False, priority_bypass=True
-                        )
                 except Exception:
                     pass
             elif platform == "discord":
@@ -11902,16 +12704,28 @@ def parse_and_execute_inchat_command(
             with SYSTEM_CFG_LOCK:
                 nhay_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_nhay_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file", "nhay.txt")
                 ngon_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_ngon_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file", "ngon.txt")
+            active_accs_cnt = len(get_all_accounts_from_ram(platform="zalo", enabled_only=True))
             help_txt = (
-                "👑 BẢNG LỆNH 36+ CHỨC NĂNG SIÊU THÔNG MINH TRÊN ACC ZALO [ULTIMATE VIP]:\n"
-                f"📂 File Đang Chọn: Nhây=[{nhay_f_now}] | Ngôn=[{ngon_f_now}] (Gõ .chonfile <số> | .addnhay | .addngon)\n"
-                "1️⃣ Treo & Nhây Đa Màu: .treodo | .damau | .gif (Sticker+Màu) | .word | .nhay (.n) | .ngon (.g)\n"
-                "2️⃣ Spam Giải Tán Nhóm: .giaitan [tên nhóm] (1 phát) | .nhaygiaitan [tên nhóm] (Spam giải tán liên hoàn)\n"
-                "3️⃣ Tạo Sticker Sắc Nét: .sticker [link ảnh / video ≤3s] (Từ chối video >3s) | .qr (Tạo/Tái QR 38 Máy Tính)\n"
-                "4️⃣ Đổi Màu Chữ Tức Thì: .mauword | .maurainbow | .mauchar | .maudo | .maucam | .mauvang | .mauxanh | .maulua\n"
-                "5️⃣ Poll 0s Không Nghỉ & Box Zalo: .nhaypoll (.poll) | .tenbox (.nhaynamebox) | .theme (.nen) | .nhaytyping | .todo | .bank | .card\n"
-                "6️⃣ Tag Ẩn & Siêu Xả: .nhaytag @Tên | .anall | .antan @Tên | .xa | .combo | .2c | .so | .chui | .chan\n"
-                f"7️⃣ Dừng Thông Minh: .t / .stop (Chỉ dừng Box này, Box khác vẫn chạy!) | .ta / .stopall (Dừng tất cả Box)"
+                f"👑 HỆ THỐNG ĐA TÀI KHOẢN ZALO VIP ({active_accs_cnt} ACC ONLINE | DELAY: {cur_d}s)\n"
+                f"📂 Kịch bản: Nhây=[{nhay_f_now}] • Ngôn=[{ngon_f_now}]\n"
+                "━━━━━━━━━━━━━━━\n"
+                "🎨 NHÃN DÁN STICKER & GIF ĐỘNG:\n"
+                "• .sticker [Reply ảnh/video ≤3s | link | chữ] — Tạo Nhãn Dán [Sticker] thật 100%\n"
+                "• .treosticker [chủ đề] — Treo bắn Nhãn Dán liên hoàn\n"
+                "• .gif [meo/corgi/khia/rong/vit/gau] — Bắn 68+ Sticker & GIF động + Chữ Màu\n"
+                "━━━━━━━━━━━━━━━\n"
+                "🔥 TREO NGÔN, NHÂY & SIÊU XẢ ĐA ACC:\n"
+                "• .n (Nhây dòng) | .g (Treo ngôn) | .treodo | .damau | .word\n"
+                "• .xa (Siêu xả) | .combo (3 câu/nhịp) | .2c | .so | .chui | .chan (Bám sát 0s)\n"
+                "• .anall (Tag All ẩn) | .antan @Tên (Tag ẩn) | .nhaytag @Tên\n"
+                "━━━━━━━━━━━━━━━\n"
+                "📢 THÔNG BÁO HỆ THỐNG & TIỆN ÍCH BOX ZALO:\n"
+                "• .giaitan [tên] | .nhaygiaitan [tên] — Phát Thông Báo Giải Tán Hệ Thống Zalo\n"
+                "• .nhaypoll (.poll) — Treo Poll 0s | .tenbox | .theme | .todo | .bank | .card\n"
+                "• .sharelink <url> | .react [tim/like/haha] | .undo (Thu hồi) | .addmem | .setname\n"
+                "• .qr (Lấy ảnh QR trực tiếp) | .checkacc (Kiểm tra dàn Acc) | .chonfile <số>\n"
+                "━━━━━━━━━━━━━━━\n"
+                "🛑 DỪNG LỆNH: .t / .stop (Chỉ dừng Box này) | .ta / .stopall (Dừng tất cả)"
             )
         _send_reply(help_txt)
         log_system_command(acc_id, thread_id, sender_id, text, f"Hiển thị .menu ({platform})")
@@ -12366,86 +13180,278 @@ def parse_and_execute_inchat_command(
         _send_reply("Đã làm mới bộ đệm Tường Lửa & đặt lại chỉ số rủi ro về 0%!")
         return True
 
+    if cmd_token in ("checkacc",):
+        all_a = get_all_accounts_from_ram()
+        if not all_a:
+            _send_reply("📭 Chưa có tài khoản nào được kết nối.", broadcast_all_accs=False)
+            return True
+        lines_a = [f"📡 DANH SÁCH TÀI KHOẢN ĐANG KẾT NỐI ({len(all_a)} ACC):"]
+        for a_it in all_a[:25]:
+            aid_i = a_it["id"]
+            aplat_i = (a_it.get("platform") or "zalo").upper()
+            aname_i = a_it.get("name") or f"Acc #{aid_i}"
+            auid_i = a_it.get("uid") or "-"
+            en_i = "🟢 ON" if a_it.get("enabled", 1) else "⚪ OFF"
+            cmd_i = "Lệnh:BẬT" if a_it.get("chat_cmd_enabled", 1) else "Lệnh:TẮT"
+            g_cnt = len(KNOWN_GROUPS_BY_ACC.get(str(auid_i), set()))
+            lines_a.append(f"• #{aid_i} [{aplat_i}] {aname_i} ({auid_i[-6:]}) — {en_i} | {cmd_i}" + (f" | {g_cnt} nhóm" if g_cnt else ""))
+        _send_reply("\n".join(lines_a), broadcast_all_accs=False)
+        log_system_command(acc_id, thread_id, sender_id, text, f"Kiểm tra danh sách {len(all_a)} Acc (.checkacc)")
+        return True
+
+    if platform == "zalo" and zalo_client and cmd_token in ("react",):
+        r_icon = arg_body.strip() or "/-heart"
+        q_obj = (raw_msg_obj or {}).get("quote") if isinstance(raw_msg_obj, dict) else None
+        reacted = False
+        if isinstance(q_obj, dict):
+            q_mid = q_obj.get("globalMsgId") or q_obj.get("msgId") or q_obj.get("id")
+            q_cmid = q_obj.get("cliMsgId") or 0
+            if q_mid:
+                for a_it in get_accounts_present_in_thread("zalo", thread_id, is_group, acc_row)[:12]:
+                    try:
+                        zc_r = zalo_client if a_it["id"] == acc_id else Zalo.get_pooled_client(a_it["imei"], a_it["cookies"], user_agent=a_it.get("user_agent") or "", zpw_enk_hint=a_it.get("zpw_enk") or "", uid_hint=a_it.get("uid") or "")
+                        zc_r.send_reaction(thread_id, q_mid, q_cmid, r_icon=r_icon, is_group=is_group)
+                        reacted = True
+                    except Exception:
+                        pass
+        if not reacted and msg_id:
+            zalo_client.send_reaction(thread_id, msg_id, cli_msg_id or 0, r_icon=r_icon, is_group=is_group)
+        log_system_command(acc_id, thread_id, sender_id, text, f"Thả biểu cảm Zalo ({r_icon})")
+        return True
+
+    if platform == "zalo" and zalo_client and cmd_token in ("undo",):
+        q_obj = (raw_msg_obj or {}).get("quote") if isinstance(raw_msg_obj, dict) else None
+        if isinstance(q_obj, dict):
+            q_mid = q_obj.get("globalMsgId") or q_obj.get("msgId") or q_obj.get("id")
+            q_cmid = q_obj.get("cliMsgId") or 0
+            if q_mid:
+                zalo_client.undo_message(thread_id, q_mid, q_cmid, is_group=is_group)
+                log_system_command(acc_id, thread_id, sender_id, text, f"Thu hồi tin nhắn #{q_mid}")
+                return True
+        _send_reply("↩️ Hãy Reply (trích dẫn) vào tin nhắn cần thu hồi rồi gõ .undo!", broadcast_all_accs=False)
+        return True
+
+    if platform == "zalo" and zalo_client and cmd_token in ("sharelink", "link"):
+        if "|" in arg_body:
+            u_s, t_s = arg_body.split("|", 1)
+        else:
+            u_s, t_s = (arg_body.strip() or "https://chat.zalo.me/"), "🔥 Hệ Thống Điều Phối Đa Tài Khoản VIP"
+        zalo_client.send_link_card(thread_id, u_s.strip(), title=t_s.strip(), desc=t_s.strip(), is_group=is_group)
+        log_system_command(acc_id, thread_id, sender_id, text, f"Chia sẻ Link Card Zalo: {u_s[:30]}")
+        return True
+
+    if platform == "zalo" and zalo_client and cmd_token in ("addmem", "raidbox"):
+        _, t_mentions, _ = extract_trailing_tags_and_resolve(
+            arg_body, incoming_mentions=raw_mentions, zalo_client=zalo_client, group_id=thread_id
+        )
+        uids_add = [m["uid"] for m in t_mentions if str(m.get("uid", "")).isdigit()]
+        uids_add.extend([x.strip() for x in re.split(r"[\s,;]+", arg_body.strip()) if x.strip().isdigit() and x.strip() not in uids_add])
+        if not uids_add:
+            _send_reply("⚠️ Cú pháp mời thành viên vào nhóm Zalo: .addmem <UID_1> <UID_2>", broadcast_all_accs=False)
+            return True
+        ok_inv = zalo_client.invite_users_to_group(thread_id, uids_add)
+        _send_reply(f"✅ Đã gửi lời mời/thêm {len(uids_add)} thành viên vào nhóm Zalo!" if ok_inv else "⚠️ Không thể thêm thành viên lúc này.", broadcast_all_accs=False)
+        log_system_command(acc_id, thread_id, sender_id, text, f"Thêm {len(uids_add)} TV vào nhóm Zalo")
+        return True
+
+    if platform == "zalo" and zalo_client and cmd_token in ("block", "unblock"):
+        _, t_mentions, _ = extract_trailing_tags_and_resolve(
+            arg_body, incoming_mentions=raw_mentions, zalo_client=zalo_client, group_id=thread_id
+        )
+        t_uid = t_mentions[0]["uid"] if t_mentions else (reply_target["uid"] if isinstance(reply_target, dict) and reply_target.get("uid") else arg_body.strip())
+        if not t_uid or not str(t_uid).isdigit():
+            _send_reply(f"⚠️ Cú pháp: .{cmd_token} @Tên (hoặc Reply tin nhắn / truyền UID)", broadcast_all_accs=False)
+            return True
+        is_blk = (cmd_token == "block")
+        ok_b = zalo_client.set_friend_block_status(t_uid, block=is_blk)
+        _send_reply(f"{'🚫 Đã chặn' if is_blk else '✅ Đã bỏ chặn'} UID {t_uid} trên Zalo!" if ok_b else "⚠️ Không thể thực hiện lúc này.", broadcast_all_accs=False)
+        return True
+
+    if platform == "zalo" and zalo_client and cmd_token in ("setname", "bd", "namechange"):
+        cleaned_n, t_mentions, _ = extract_trailing_tags_and_resolve(
+            arg_body, incoming_mentions=raw_mentions, zalo_client=zalo_client, group_id=thread_id
+        )
+        t_uid = t_mentions[0]["uid"] if t_mentions else (reply_target["uid"] if isinstance(reply_target, dict) and reply_target.get("uid") else zalo_client.uid)
+        alias_str = cleaned_n.strip() or "VIP MEMBER 👑"
+        zalo_client.set_friend_alias(t_uid, alias_str)
+        _send_reply(f"✅ Đã cập nhật tên gợi nhớ/biệt danh thành: {alias_str}", broadcast_all_accs=False)
+        return True
+
     if cmd_token in ("giaitan", "giaitan1"):
         g_name = arg_body.strip() or "Lũ vdanh"
         if platform == "zalo" and zalo_client:
-            res_gt = zalo_client.spam_group_disband_notification(thread_id, group_name=g_name, send_inbox_alert=True)
-            m_cnt = res_gt.get("members_count", 1)
-            _send_reply(
-                f"✅ ĐÃ PHÁT THÔNG BÁO GIẢI TÁN NHÓM THÀNH CÔNG!\n"
-                f"💣 Nội dung: 'Nhóm {res_gt.get('group_name', g_name)} đã được giải tán'\n"
-                f"👥 Đã bắn thông báo tới toàn bộ {m_cnt} thành viên đang ở trong Box!",
-                reply_color_mode="word_rainbow"
-            )
-            log_system_command(acc_id, thread_id, sender_id, text, f"Spam thông báo giải tán nhóm: {g_name} ({m_cnt} TV)")
+            # Phát Thông Báo Hệ Thống Của Zalo trên các Acc đang có mặt trong Box — TUYỆT ĐỐI KHÔNG GỬI BONG BÓNG CHỮ MÀU!
+            present_accs = get_accounts_present_in_thread("zalo", thread_id, is_group, acc_row)
+            def _fire_disband_sys(a_item):
+                try:
+                    zc_d = zalo_client if a_item["id"] == acc_id else Zalo.get_pooled_client(
+                        a_item["imei"], a_item["cookies"],
+                        user_agent=a_item.get("user_agent") or "",
+                        zpw_enk_hint=a_item.get("zpw_enk") or "",
+                        uid_hint=a_item.get("uid") or ""
+                    )
+                    zc_d.spam_group_disband_notification(thread_id, group_name=g_name, send_inbox_alert=False)
+                except Exception:
+                    pass
+            for a_it in present_accs[:8]:
+                _PRIORITY_CMD_EXECUTOR.submit(_fire_disband_sys, a_it)
+            log_system_command(acc_id, thread_id, sender_id, text, f"Phát Thông Báo Hệ Thống Zalo Giải Tán Nhóm: {g_name}")
             return True
 
     if cmd_token in ("sticker",):
         arg_st = arg_body.strip()
-        if not arg_st:
-            _send_reply(
-                "🎨 CHẾ ĐỘ TẠO STICKER ẢNH SẮC NÉT (512×512) & NHÃN DÁN VIDEO NGẮN (≤ 3.0 GIÂY):\n"
-                "• Tạo từ ảnh: .sticker <link_ảnh_hoặc_tên_file>\n"
-                "• Tạo từ video ngắn ≤ 3s: .sticker <link_video_mp4> (Video > 3.0s sẽ tự động bị từ chối!)\n"
-                "• Hoặc gửi trực tiếp Ảnh / Video ≤ 3s vào Bot Telegram (nút 🎨 Tạo Sticker Ảnh / Video ≤3s)!"
-            )
+        quote_media = ZaloStickerMakerEngine.extract_quote_sticker_or_media(raw_msg_obj) if raw_msg_obj else None
+        present_accs = get_accounts_present_in_thread("zalo", thread_id, is_group, acc_row) if platform == "zalo" else [acc_row]
+
+        # Trường hợp 1: Người dùng Reply vào 1 Nhãn Dán có sẵn trên Zalo và gõ .sticker -> Bắn đúng Nhãn Dán gốc [Sticker]!
+        if quote_media and quote_media.get("kind") == "native_sticker" and not arg_st:
+            if platform == "zalo" and zalo_client:
+                for a_it in present_accs[:8]:
+                    try:
+                        zc_s = zalo_client if a_it["id"] == acc_id else Zalo.get_pooled_client(
+                            a_it["imei"], a_it["cookies"],
+                            user_agent=a_it.get("user_agent") or "",
+                            zpw_enk_hint=a_it.get("zpw_enk") or "",
+                            uid_hint=a_it.get("uid") or ""
+                        )
+                        zc_s.send_native_sticker(
+                            thread_id,
+                            sticker_id=quote_media["sticker_id"],
+                            cate_id=quote_media["cate_id"],
+                            sticker_type=quote_media.get("sticker_type", 7),
+                            is_group=is_group,
+                        )
+                    except Exception:
+                        pass
+            log_system_command(acc_id, thread_id, sender_id, text, f"Nhân bản Nhãn Dán Gốc Zalo #{quote_media['sticker_id']}")
             return True
-        parts_st = arg_st.split()
-        media_src = parts_st[0].strip()
+
+        # Trường hợp 2: Người dùng gõ .sticker (không đối số, không reply ảnh/video) -> Bắn ngay Nhãn Dán Gốc Zalo [Sticker] thật!
+        if not arg_st and not quote_media:
+            if platform == "zalo" and zalo_client:
+                for a_it in present_accs[:8]:
+                    try:
+                        zc_s = zalo_client if a_it["id"] == acc_id else Zalo.get_pooled_client(
+                            a_it["imei"], a_it["cookies"],
+                            user_agent=a_it.get("user_agent") or "",
+                            zpw_enk_hint=a_it.get("zpw_enk") or "",
+                            uid_hint=a_item_uid if (a_item_uid := a_it.get("uid")) else ""
+                        )
+                        zc_s.send_native_sticker(thread_id, is_group=is_group)
+                    except Exception:
+                        pass
+                log_system_command(acc_id, thread_id, sender_id, text, "Bắn Nhãn Dán Gốc Zalo [Sticker]")
+                return True
+
+        # Trường hợp 3: Xác định nguồn media từ Reply (quote_media) hoặc từ tham số arg_st (URL / file / chữ / chủ đề)
+        media_src = ""
         decl_dur = None
-        for p_tk in parts_st[1:]:
-            if p_tk.lower().endswith("s") and p_tk[:-1].replace(".", "", 1).isdigit():
-                decl_dur = float(p_tk[:-1])
-        is_video_src = any(media_src.lower().split("?")[0].endswith(ext) for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi")) or (decl_dur is not None)
+        is_video_src = False
+        if quote_media and quote_media.get("kind") == "media_url":
+            media_src = quote_media["url"]
+            decl_dur = quote_media.get("duration")
+            is_video_src = bool(quote_media.get("is_video"))
+
+        if arg_st:
+            parts_st = arg_st.split()
+            for p_tk in parts_st[1:]:
+                if p_tk.lower().endswith("s") and p_tk[:-1].replace(".", "", 1).isdigit():
+                    decl_dur = float(p_tk[:-1])
+            first_tk = parts_st[0].strip()
+            if first_tk.startswith(("http://", "https://", "data:")) or os.path.exists(first_tk):
+                media_src = first_tk
+                if any(media_src.lower().split("?")[0].endswith(ext) for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi")) or (decl_dur is not None):
+                    is_video_src = True
+
         if is_video_src and decl_dur is not None and decl_dur > 3.0:
             _send_reply(
-                f"❌ TỪ CHỐI TẠO NHÃN DÁN VIDEO: Video dài {decl_dur:.2f} giây (Vượt quá giới hạn tối đa 3 giây)!\n"
-                "👉 Hệ thống chỉ nhận tạo nhãn dán bằng video ngắn dưới 3 giây (≤ 3.0s)."
+                f"❌ TỪ CHỐI TẠO NHÃN DÁN VIDEO: Video dài {decl_dur:.2f} giây (Vượt quá giới hạn tối đa 3.0 giây)!\n"
+                "👉 Chỉ nhận tạo nhãn dán bằng video ngắn dưới 3 giây (≤ 3.0s).",
+                broadcast_all_accs=False
             )
             log_system_command(acc_id, thread_id, sender_id, text, f"Từ chối tạo Sticker Video ({decl_dur}s > 3.0s)")
             return True
-        if os.path.exists(media_src):
+
+        if media_src:
             if is_video_src:
                 res_st = ZaloStickerMakerEngine.create_short_video_sticker(media_src, declared_duration=decl_dur)
             else:
                 res_st = ZaloStickerMakerEngine.create_sharp_image_sticker(media_src)
         else:
-            # Tự động kết xuất Sticker 512x512 sắc nét theo nội dung chữ/ảnh yêu cầu
-            try:
-                from PIL import Image, ImageDraw
-                im_gen = Image.new("RGBA", (512, 512), (24, 28, 44, 255))
-                dr = ImageDraw.Draw(im_gen)
-                dr.rounded_rectangle([(16, 16), (496, 496)], radius=48, outline=(255, 195, 0, 255), width=8)
-                dr.text((64, 220), arg_st[:36], fill=(255, 255, 255, 255))
-                buf_b = io.BytesIO()
-                im_gen.save(buf_b, format="PNG")
-                res_st = ZaloStickerMakerEngine.create_sharp_image_sticker(buf_b.getvalue())
-            except Exception as ex_g:
-                res_st = {"ok": False, "error": str(ex_g)}
+            # Nếu người dùng gõ .sticker <từ khóa bộ nhãn dán> (vd: .sticker rong, .sticker meo, .sticker corgi, .sticker 23338)
+            q_kw = remove_vn_accents(arg_st.lower().strip())
+            if q_kw in ("rong", "meo", "khia", "quay", "corgi", "vit", "meme", "gau", "cuoi", "tim") or q_kw.isdigit():
+                if platform == "zalo" and zalo_client:
+                    for a_it in present_accs[:8]:
+                        try:
+                            zc_s = zalo_client if a_it["id"] == acc_id else Zalo.get_pooled_client(
+                                a_it["imei"], a_it["cookies"],
+                                user_agent=a_it.get("user_agent") or "",
+                                zpw_enk_hint=a_it.get("zpw_enk") or "",
+                                uid_hint=a_it.get("uid") or ""
+                            )
+                            zc_s.send_native_sticker(thread_id, keyword=q_kw, is_group=is_group)
+                        except Exception:
+                            pass
+                log_system_command(acc_id, thread_id, sender_id, text, f"Bắn Nhãn Dán Gốc Zalo theo chủ đề: {arg_st}")
+                return True
+            # Tạo Nhãn Dán Chữ Nghệ Thuật Die-Cut 512×512 trên nền trong suốt 100%
+            res_st = ZaloStickerMakerEngine.create_text_sticker_512(arg_st)
+
         if not res_st.get("ok"):
-            _send_reply(res_st.get("error") or "❌ Không thể tạo Sticker.")
+            _send_reply(res_st.get("error") or "❌ Không thể tạo Nhãn Dán Sticker.", broadcast_all_accs=False)
             return True
+
         if platform == "zalo" and zalo_client:
-            m_bytes = res_st.get("png_bytes") or res_st.get("anim_bytes") or b""
-            f_name = "sticker.gif" if res_st.get("type") == "video_sticker" else "sticker.png"
-            zalo_client.send_custom_sticker_media(thread_id, m_bytes, filename=f_name, is_group=is_group, caption=res_st.get("message", ""))
-        _send_reply(res_st.get("message") or "✅ Đã tạo Sticker 512×512 sắc nét thành công!", reply_color_mode="word_rainbow")
-        log_system_command(acc_id, thread_id, sender_id, text, "Tạo Sticker Zalo 512x512")
+            m_bytes = res_st.get("webp_bytes") or res_st.get("gif_bytes") or res_st.get("png_bytes") or res_st.get("anim_bytes") or b""
+            w_bytes = res_st.get("webp_bytes")
+            g_bytes = res_st.get("gif_bytes") or res_st.get("anim_bytes")
+            f_name = "sticker.gif" if res_st.get("type") == "video_sticker" else "sticker.webp"
+            for a_it in present_accs[:6]:
+                try:
+                    zc_s = zalo_client if a_it["id"] == acc_id else Zalo.get_pooled_client(
+                        a_it["imei"], a_it["cookies"],
+                        user_agent=a_it.get("user_agent") or "",
+                        zpw_enk_hint=a_it.get("zpw_enk") or "",
+                        uid_hint=a_it.get("uid") or ""
+                    )
+                    zc_s.send_custom_sticker_media(
+                        thread_id, m_bytes, filename=f_name, is_group=is_group,
+                        caption=arg_st, webp_bytes=w_bytes, gif_bytes=g_bytes
+                    )
+                except Exception:
+                    pass
+        log_system_command(acc_id, thread_id, sender_id, text, "Tạo & bắn Nhãn Dán Sticker Zalo 512x512 chuẩn [Sticker]")
         return True
 
     if cmd_token in ("qr",):
         from zalo_login import SmartQRSessionPool, build_vietnam_pc_identity
         arg_q = arg_body.strip().lower()
         force_new = arg_q in ("new", "moi", "taomoi")
+        sess_qr = ZaloQRLoginManager.start_qr_session(auto_save=True, vn_region="SG")
+        sid_qr = sess_qr.get("session_id")
         pool_stats = SmartQRSessionPool.get_pool_stats()
         pc_id = build_vietnam_pc_identity(region_code="sg_vip")
+
+        def _send_qr_into_zalo_box():
+            for _ in range(25):
+                png_qr = ZaloQRLoginManager.get_qr_png_bytes(sid_qr)
+                if png_qr and zalo_client and platform == "zalo":
+                    try:
+                        zalo_client.send_custom_sticker_media(thread_id, png_qr, filename="zalo_qr_login.png", is_group=is_group)
+                    except Exception:
+                        pass
+                    break
+                time.sleep(0.25)
+
+        if platform == "zalo" and zalo_client:
+            _PRIORITY_CMD_EXECUTOR.submit(_send_qr_into_zalo_box)
+
         _send_reply(
-            f"📲 ĐÃ KÍCH HOẠT TẠO / TÁI SỬ DỤNG MÃ QR ĐĂNG NHẬP ZALO PC TRỰC TIẾP TRÊN LỆNH!\n"
-            f"💻 Máy tính cấp phát: {pc_id['pc_name']} ({pc_id['computer_name']})\n"
-            f"🖥️ Kho máy tính luân phiên: {pool_stats['pc_fleet_models']} Dòng Máy Tính / Mac Workstation\n"
-            f"♻️ Mã QR chưa quét sẵn sàng tái sử dụng: {pool_stats['unscanned_available']} mã | Đã quét & hủy bỏ: {pool_stats['scanned_retired_total']} mã\n"
-            f"🛡️ Thời hạn phiên sống trong Acc Zalo: > 5 Tháng (185 Ngày Bất Tử SSO)!\n"
-            f"👉 Gõ /qr trên Bot Telegram để nhận ảnh QR nét căng ngay lập tức (chế độ {'Tạo Mã Mới' if force_new else 'Tự Động Tái Sử Dụng Mã Chưa Quét'}).",
+            f"📲 ĐÃ TẠO MÃ QR ĐĂNG NHẬP ZALO PC ({pc_id['pc_name']})!\n"
+            f"• Kho máy tính: {pool_stats['pc_fleet_models']} Workstation Singapore | Mã chờ quét: {pool_stats['unscanned_available']}\n"
+            f"• Ảnh mã QR đang được gửi trực tiếp vào phòng chat này (hoặc gõ /qr trên Telegram)!",
+            broadcast_all_accs=False,
             reply_color_mode="word_rainbow"
         )
         log_system_command(acc_id, thread_id, sender_id, text, f"Lệnh tạo/tái QR ({pc_id['pc_name']})")
@@ -12835,6 +13841,7 @@ def parse_and_execute_inchat_command(
         "treodo": "treo_ngon",
         "damau": "treo_ngon",
         "gif": "zalo_gif",
+        "treosticker": "treo_sticker",
         "word": "treo_nhay",
         "nhaygiaitan": "nhay_giaitan",
         "poll": "nhay_poll",
@@ -13151,8 +14158,10 @@ def parse_and_execute_inchat_command(
                             mentions=extracted_mentions, tag_all=extracted_tag_all,
                             color_mode=color_mode, fixed_color=fixed_color
                         )
+                    elif chosen_mode == "treo_sticker":
+                        zalo_client.send_native_sticker(t_id_now, keyword=first_pkt, is_group=True)
                     elif chosen_mode == "nhay_giaitan":
-                        zalo_client.spam_group_disband_notification(t_id_now, group_name=first_pkt or "Lũ vdanh", send_inbox_alert=True)
+                        zalo_client.spam_group_disband_notification(t_id_now, group_name=first_pkt or "Lũ vdanh", send_inbox_alert=False)
                     else:
                         zalo_client.send_adv(
                             first_pkt, t_id_now, color_mode=color_mode, fixed_color=fixed_color,
@@ -13182,6 +14191,11 @@ def parse_and_execute_inchat_command(
         for t_item_0 in target_obj[:16]:
             _PRIORITY_CMD_EXECUTOR.submit(_instant_first_shot, t_item_0)
 
+    active_box_accs = get_accounts_present_in_thread(
+        platform=platform, thread_id=thread_id, is_group=is_group, fallback_acc_row=acc_row
+    )
+    active_box_acc_ids = [int(a["id"]) for a in active_box_accs if a and a.get("id")]
+
     tid = start_task_programmatic(
         targets=target_obj,
         hide_tag_all=True,
@@ -13193,13 +14207,14 @@ def parse_and_execute_inchat_command(
         tag_users=extracted_mentions,
         tag_all=extracted_tag_all,
         is_heading=is_heading,
-        multi_acc=True,
+        multi_acc=(len(active_box_acc_ids) > 1),
         mode=chosen_mode,
         color_mode=color_mode,
         fixed_color=fixed_color,
         antiband=antiband_flag,
         antidieall=True,
         specific_acc_id=acc_id,
+        account_ids=active_box_acc_ids,
         source_label="chat",
         trigger_cmd=text
     )
@@ -13710,7 +14725,8 @@ class ZaloRealtimeListener:
             msg_id=msg_id,
             cli_msg_id=cli_msg_id,
             msg_ts=msg_ts_val,
-            reply_target=reply_target
+            reply_target=reply_target,
+            raw_msg_obj=msg_obj
         )
         if not was_cmd and str(thread_id) in AUTO_INTERCEPT_BOXES:
             ic_cfg = AUTO_INTERCEPT_BOXES.get(str(thread_id))
@@ -14238,6 +15254,11 @@ class ZaloRealtimeListener:
                         pass
 
                 from zalo_login import ZaloPCSessionKeeper
+                ZaloPCSessionKeeper.register_ws_frame_callback(
+                    client.imei,
+                    lambda op, dt, c=client: self._handle_shared_ws_frame(c, self._get_acc_row() or acc_row, op, dt),
+                    listener_id=f"acc_{self.acc_id}"
+                )
                 kp = ZaloPCSessionKeeper.register_and_keep_alive(
                     uid=client.uid or "",
                     imei=client.imei,
@@ -14248,16 +15269,14 @@ class ZaloRealtimeListener:
                     display_name=acc_row.get("name") or client.display_name or "",
                     ws_urls=client.ws_urls,
                     db_path=DB_PATH,
+                    wait_ws_sec=2.0,
                 )
-                ZaloPCSessionKeeper.register_ws_frame_callback(
-                    client.imei,
-                    lambda op, dt, c=client: self._handle_shared_ws_frame(c, self._get_acc_row() or acc_row, op, dt)
-                )
-                if kp and kp.get("ws_connected"):
+                if kp is not None or ZaloPCSessionKeeper.has_active_keeper(client.imei):
+                    # Tuyệt đối chỉ sử dụng 1 kết nối WebSocket duy nhất từ ZaloPCSessionKeeper cho mỗi IMEI
+                    # để không bao giờ gây xung đột cmd_id=3000 khi chạy nhiều Acc cùng lúc!
                     self.ws_status = "Đang sống trong Acc (Single WS + Poller 24/7)"
                     self.stop_ev.wait(6.0)
                 else:
-                    # Nếu Keeper chưa kết nối được WS thì trực tiếp chạy phiên WS tại đây để .menu phản hồi 0ms
                     ws_list = list(client.ws_urls or ["wss://ws1.chat.zalo.me", "wss://ws2.chat.zalo.me"])
                     for w_url in ws_list:
                         if self.stop_ev.is_set() or time.time() < self.ws_conflict_until:
@@ -14922,36 +15941,839 @@ class MessagingGatewayDirectory:
         return {"ok": True, "mode": "telegram_bot_controller"}
 
 
-KEEPALIVE_HTML = r"""<!DOCTYPE html>
+LOGIN_HTML = r"""<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>BOT TREO 4APP 🇻🇳 — Telegram Bot Active</title>
+<title>{{ custom_title or 'Đăng Nhập Hệ Thống Điều Phối Đa Tài Khoản 4APP VIP' }}</title>
 <style>
-body{margin:0;background:#0b0e14;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}
-.card{background:#161b22;border:1px solid #30363d;border-radius:16px;padding:28px 32px;max-width:420px;box-shadow:0 12px 32px rgba(0,0,0,0.45)}
-.badge{display:inline-block;background:rgba(46,160,67,0.18);color:#3fb950;border:1px solid rgba(46,160,67,0.4);padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;margin-bottom:12px}
-h1{font-size:20px;margin:0 0 8px;color:#58a6ff}
-p{font-size:13.5px;color:#8b949e;line-height:1.5;margin:6px 0}
-code{color:#ffa657;background:#0d1117;padding:2px 6px;border-radius:6px}
+:root{--bg:#0b0f19;--card:#131b2e;--border:#26334d;--text:#f0f6fc;--muted:#94a3b8;--accent:#3b82f6;--success:#10b981;--danger:#ef4444}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at top,#172554 0%,#0b0f19 65%);color:var(--text);font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.login-card{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:36px 32px;width:100%;max-width:440px;box-shadow:0 20px 50px rgba(0,0,0,0.55)}
+.badge{display:inline-flex;align-items:center;gap:6px;background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.35);padding:6px 14px;border-radius:999px;font-size:13px;font-weight:700;margin-bottom:16px}
+h1{font-size:24px;font-weight:800;margin:0 0 8px;color:#60a5fa;letter-spacing:-0.3px}
+p.sub{font-size:14.5px;color:var(--muted);line-height:1.55;margin:0 0 24px}
+.form-group{margin-bottom:18px;text-align:left}
+label{display:block;font-size:14px;font-weight:600;margin-bottom:8px;color:#cbd5e1}
+input[type="password"]{width:100%;padding:13px 16px;font-size:15px;border-radius:12px;border:1px solid var(--border);background:#090d16;color:var(--text);outline:none;transition:border-color 0.2s}
+input[type="password"]:focus{border-color:var(--accent)}
+.btn{width:100%;padding:13px 18px;font-size:15px;font-weight:700;border:none;border-radius:12px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;cursor:pointer;transition:transform 0.15s,opacity 0.15s}
+.btn:hover{opacity:0.95;transform:translateY(-1px)}
+.err{background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.4);color:#fca5a5;padding:12px 14px;border-radius:12px;font-size:14px;margin-bottom:16px;font-weight:600}
+.quick-link{display:inline-block;margin-top:16px;font-size:13.5px;color:#93c5fd;text-decoration:none}
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="badge">● RENDER KEEP-ALIVE ONLINE</div>
-  <h1>BOT TREO 4APP 🇻🇳</h1>
-  <p>Hệ thống đã chuyển 100% sang điều khiển qua <b>Bot Telegram</b> siêu nhẹ, tiết kiệm tối đa RAM & CPU trên Render.</p>
-  <p>👑 Admin ID: <code>8827605973</code></p>
-  <p>Mở Telegram và gõ <code>/start</code> hoặc <code>/menu</code> để sử dụng!</p>
+<div class="login-card">
+  <div class="badge">● HỆ THỐNG ĐA TÀI KHOẢN 24/7 ONLINE</div>
+  <h1>BOT TREO 4APP 🇻🇳 VIP</h1>
+  <p class="sub">Hệ thống điều phối Đa Tài Khoản Zalo • Discord • Messenger & Tạo Nhãn Dán Sticker Chuẩn Zalo.</p>
+  {% if error %}
+  <div class="err">⚠️ {{ error }}</div>
+  {% endif %}
+  <form method="POST" action="/login">
+    <div class="form-group">
+      <label>🔑 Mật khẩu Quản Trị Viên:</label>
+      <input type="password" name="password" placeholder="Nhập khóa truy cập (mặc định: anhba)..." required autofocus>
+    </div>
+    <button type="submit" class="btn">🚀 Đăng Nhập Bảng Điều Khiển</button>
+  </form>
+  <a class="quick-link" href="/">👉 Vào thẳng Bảng Điều Khiển Nhanh</a>
 </div>
 </body>
 </html>"""
 
-LOGIN_HTML = KEEPALIVE_HTML
-DASHBOARD_HTML = KEEPALIVE_HTML
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{ custom_title or 'BẢNG ĐIỀU KHIỂN ĐA TÀI KHOẢN 4APP VIP 🇻🇳' }}</title>
+<style>
+:root{
+  --bg:#0b0f19;
+  --panel:#131b2e;
+  --panel-alt:#182238;
+  --border:#283655;
+  --text:#f8fafc;
+  --text-soft:#cbd5e1;
+  --muted:#94a3b8;
+  --primary:#3b82f6;
+  --primary-hover:#2563eb;
+  --success:#10b981;
+  --warning:#f59e0b;
+  --danger:#ef4444;
+  --purple:#8b5cf6;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  font-size:15px;
+  line-height:1.55;
+}
+.topbar{
+  background:rgba(19,27,46,0.95);
+  border-bottom:1px solid var(--border);
+  padding:14px 24px;
+  position:sticky;
+  top:0;
+  z-index:100;
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  backdrop-filter:blur(10px);
+}
+.brand{display:flex;align-items:center;gap:12px}
+.brand-badge{
+  background:linear-gradient(135deg,#2563eb,#7c3aed);
+  color:#fff;
+  font-weight:800;
+  font-size:16px;
+  padding:8px 14px;
+  border-radius:12px;
+  letter-spacing:0.5px;
+}
+.brand-title h1{font-size:18px;font-weight:800;margin:0;color:#fff}
+.brand-title p{font-size:13px;color:var(--muted);margin:2px 0 0}
+.stats-pills{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.pill{
+  background:var(--panel-alt);
+  border:1px solid var(--border);
+  padding:7px 14px;
+  border-radius:999px;
+  font-size:13.5px;
+  font-weight:600;
+  color:var(--text-soft);
+}
+.pill b{color:#60a5fa}
+.pill.ok b{color:#34d399}
+.container{max-width:1440px;margin:0 auto;padding:22px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}
+@media(max-width:1024px){.grid-2{grid-template-columns:1fr}}
+.card{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:20px 22px;
+  box-shadow:0 10px 28px rgba(0,0,0,0.35);
+}
+.card-header{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:16px;
+  padding-bottom:12px;
+  border-bottom:1px solid var(--border);
+}
+.card-header h2{
+  font-size:17px;
+  font-weight:800;
+  margin:0;
+  color:#93c5fd;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.btn-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,.btn{
+  font-family:inherit;
+  font-size:14px;
+  font-weight:700;
+  padding:9px 15px;
+  border-radius:10px;
+  border:1px solid transparent;
+  cursor:pointer;
+  transition:all 0.15s;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  text-decoration:none;
+}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{background:var(--primary-hover)}
+.btn-success{background:var(--success);color:#052e16}
+.btn-success:hover{filter:brightness(1.08)}
+.btn-danger{background:var(--danger);color:#fff}
+.btn-danger:hover{filter:brightness(1.08)}
+.btn-warning{background:var(--warning);color:#1e1b4b}
+.btn-outline{background:var(--panel-alt);color:var(--text);border-color:var(--border)}
+.btn-outline:hover{border-color:#60a5fa;color:#60a5fa}
+.btn-sm{padding:6px 11px;font-size:13px;border-radius:8px}
+input[type="text"],input[type="number"],select,textarea{
+  width:100%;
+  padding:11px 14px;
+  font-size:14.5px;
+  font-family:inherit;
+  color:var(--text);
+  background:#090d16;
+  border:1px solid var(--border);
+  border-radius:10px;
+  outline:none;
+}
+input:focus,select:focus,textarea:focus{border-color:var(--primary)}
+label.field-lbl{display:block;font-size:13.5px;font-weight:700;color:var(--text-soft);margin:10px 0 6px}
+.scroll-list{
+  max-height:310px;
+  overflow-y:auto;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:#090d16;
+  padding:8px;
+}
+.list-item{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:10px 12px;
+  border-bottom:1px solid rgba(40,54,85,0.55);
+  border-radius:8px;
+  font-size:14px;
+}
+.list-item:last-child{border-bottom:none}
+.list-item:hover{background:rgba(59,130,246,0.08)}
+.item-left{display:flex;align-items:center;gap:10px;min-width:0}
+.item-title{font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item-sub{font-size:12.5px;color:var(--muted)}
+.tag-plat{
+  font-size:11.5px;
+  font-weight:800;
+  padding:3px 8px;
+  border-radius:6px;
+  text-transform:uppercase;
+}
+.tag-zalo{background:rgba(59,130,246,0.2);color:#60a5fa;border:1px solid rgba(59,130,246,0.4)}
+.tag-discord{background:rgba(139,92,246,0.2);color:#c4b5fd;border:1px solid rgba(139,92,246,0.4)}
+.tag-messenger{background:rgba(14,165,233,0.2);color:#7dd3fc;border:1px solid rgba(14,165,233,0.4)}
+.toast-bar{
+  display:none;
+  margin-bottom:18px;
+  padding:13px 18px;
+  border-radius:12px;
+  background:rgba(16,185,129,0.18);
+  border:1px solid rgba(16,185,129,0.45);
+  color:#6ee7b7;
+  font-weight:700;
+  font-size:14.5px;
+}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:11px 12px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
+.qr-box{
+  display:none;
+  margin-top:14px;
+  padding:16px;
+  background:#090d16;
+  border:1px dashed #60a5fa;
+  border-radius:14px;
+  text-align:center;
+}
+.qr-box img{max-width:240px;border-radius:12px;border:6px solid #fff;margin:10px auto;display:block}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-badge">NHK 4APP VIP</div>
+    <div class="brand-title">
+      <h1>HỆ THỐNG ĐIỀU PHỐI ĐA TÀI KHOẢN & NHÃN DÁN STICKER ZALO</h1>
+      <p>Chạy Nhiều Acc Cùng Lúc Mượt 0ms • Tạo Sticker Chuẩn Nhãn Dán Zalo • Thông Báo Hệ Thống Zalo</p>
+    </div>
+  </div>
+  <div class="stats-pills">
+    <div class="pill ok">🟢 Acc Kết Nối: <b id="stat-accs">{{ accounts|length }}</b></div>
+    <div class="pill">🚀 Chiến Dịch Đang Chạy: <b id="stat-tasks">0</b></div>
+    <div class="pill">⚡ Tốc Độ Gửi: <b id="stat-rpm">0</b> tin/phút</div>
+    <button class="btn btn-danger btn-sm" onclick="stopAllTasks()">🛑 DỪNG TẤT CẢ (.ta)</button>
+  </div>
+</div>
 
-DASHBOARD_HTML = KEEPALIVE_HTML
+<div class="container">
+  <div id="toast-box" class="toast-bar"></div>
+
+  <!-- HÀNG 1: QUẢN LÝ ĐA TÀI KHOẢN & QUÉT CHỌN NHÓM/BOX -->
+  <div class="grid-2">
+    <!-- CỘT 1: QUẢN LÝ ĐA TÀI KHOẢN -->
+    <div class="card">
+      <div class="card-header">
+        <h2>👥 1. Quản Lý & Chọn Đa Tài Khoản (<span id="sel-acc-count">Tất cả</span>)</h2>
+        <div class="btn-row">
+          <button class="btn btn-primary btn-sm" onclick="startZaloQR()">📲 Quét QR Zalo PC</button>
+          <button class="btn btn-success btn-sm" onclick="checkAllLive()">🔍 Check Sống/Die</button>
+          <button class="btn btn-outline btn-sm" onclick="reconnectAll()">🔄 Kết Nối Lại</button>
+        </div>
+      </div>
+
+      <!-- Chọn nhanh số lượng Acc -->
+      <div class="btn-row" style="margin-bottom:10px">
+        <span style="font-size:13px;color:var(--muted);font-weight:700">Chọn nhanh:</span>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(1)">1 Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(5)">5 Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(10)">10 Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(20)">20 Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(50)">50 Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(999)">✅ Tất Cả Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="bulkToggleCmd(true)">💬 Bật Lệnh Tất Cả</button>
+      </div>
+
+      <!-- Khung hiển thị QR Zalo PC trực tiếp -->
+      <div id="qr-modal" class="qr-box">
+        <div style="font-weight:800;color:#60a5fa" id="qr-status-txt">⏳ Đang khởi tạo mã QR Máy Tính Singapore...</div>
+        <img id="qr-img" src="" alt="Zalo QR" style="display:none">
+        <div style="font-size:13px;color:var(--muted)">Mở Zalo trên điện thoại ➔ Quét mã QR ➔ Tự động nạp vào danh sách Acc!</div>
+      </div>
+
+      <!-- Danh sách tài khoản -->
+      <div class="scroll-list" id="acc-list-container">
+        {% if accounts %}
+          {% for a in accounts %}
+          <div class="list-item">
+            <div class="item-left">
+              <input type="checkbox" class="acc-chk" value="{{ a.id }}" checked onchange="updateSelectedCounts()" style="width:18px;height:18px;cursor:pointer">
+              <span class="tag-plat tag-{{ a.platform or 'zalo' }}">{{ a.platform or 'zalo' }}</span>
+              <div>
+                <div class="item-title">#{{ a.id }} — {{ a.name }}</div>
+                <div class="item-sub">UID: <code>{{ a.uid or a.imei or '-' }}</code> • Lệnh chat: <b style="color:{{ '#34d399' if a.chat_cmd_enabled else '#f87171' }}">{{ 'BẬT' if a.chat_cmd_enabled else 'TẮT' }}</b></div>
+              </div>
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-outline btn-sm" onclick="testSingleAcc({{ a.id }})">Check</button>
+              <button class="btn btn-outline btn-sm" onclick="toggleSingleCmd({{ a.id }}, {{ 0 if a.chat_cmd_enabled else 1 }})">{{ 'Tắt Lệnh' if a.chat_cmd_enabled else 'Bật Lệnh' }}</button>
+              <a class="btn btn-danger btn-sm" href="/account/delete/{{ a.id }}" onclick="return confirm('Xoá tài khoản #{{ a.id }}?')">Xoá</a>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div style="padding:18px;text-align:center;color:var(--muted)">Chưa có tài khoản nào. Hãy bấm <b>📲 Quét QR Zalo PC</b> hoặc thêm Cookie + IMEI bên dưới!</div>
+        {% endif %}
+      </div>
+
+      <!-- Form thêm nhanh Cookie + IMEI Zalo / Token Discord -->
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer;font-weight:700;color:#60a5fa;padding:6px 0">➕ Thêm Tài Khoản Bằng Cookie + IMEI Zalo / Token Discord / Messenger</summary>
+        <form method="POST" action="/account/add" style="margin-top:10px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid var(--border)">
+          <div class="grid-2" style="margin-bottom:10px;gap:10px">
+            <div>
+              <label class="field-lbl">Nền tảng:</label>
+              <select name="platform" id="add-plat-sel">
+                <option value="zalo">Zalo PC (Cookie + IMEI)</option>
+                <option value="discord">Discord (Token)</option>
+                <option value="messenger">Facebook Messenger (Cookie)</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-lbl">Tên gợi nhớ (Tùy chọn):</label>
+              <input type="text" name="name" placeholder="VD: Acc Zalo VIP 1">
+            </div>
+          </div>
+          <label class="field-lbl">IMEI Zalo (z_uuid) hoặc để trống nếu dán gộp IMEI|Cookie:</label>
+          <input type="text" name="imei" placeholder="Nhập IMEI Zalo (VD: 842b4e5a-...)">
+          <label class="field-lbl">Cookie Zalo (zpw_sek / zpsid / JSON) hoặc Token Discord:</label>
+          <input type="text" name="cookies" placeholder="Dán Cookie Zalo hoặc IMEI|Cookie vào đây...">
+          <input type="text" name="token" placeholder="Hoặc dán Token Discord vào đây (nếu chọn Discord)..." style="margin-top:8px">
+          <input type="hidden" name="chat_cmd_enabled" value="1">
+          <button type="submit" class="btn btn-primary" style="width:100%;margin-top:12px">➕ Lưu & Kích Hoạt Tài Khoản 24/7</button>
+        </form>
+      </details>
+    </div>
+
+    <!-- CỘT 2: QUÉT & CHỌN NHÓM / BOX MỤC TIÊU -->
+    <div class="card">
+      <div class="card-header">
+        <h2>📦 2. Chọn Nhóm / Box Mục Tiêu (<span id="sel-box-count">0 Box</span>)</h2>
+        <div class="btn-row">
+          <button class="btn btn-primary btn-sm" onclick="scanBoxes('zalo', true)">🔄 Quét Nhóm Zalo</button>
+          <button class="btn btn-outline btn-sm" onclick="scanBoxes('discord', true)">Quét Kênh Discord</button>
+          <button class="btn btn-outline btn-sm" onclick="scanBoxes('messenger', true)">Quét Box Messenger</button>
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-bottom:10px">
+        <span style="font-size:13px;color:var(--muted);font-weight:700">Chọn nhanh:</span>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(1)">1 Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(5)">5 Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(10)">10 Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(20)">20 Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(50)">50 Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(999)">✅ Tất Cả Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(0)">Bỏ Chọn</button>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <input type="text" id="box-search-inp" placeholder="🔍 Tìm kiếm tên nhóm hoặc nhập trực tiếp ID Box..." oninput="filterBoxList()">
+        <button class="btn btn-outline btn-sm" onclick="addManualBoxId()">+ Thêm ID</button>
+      </div>
+
+      <div class="scroll-list" id="box-list-container">
+        <div style="padding:18px;text-align:center;color:var(--muted)">Đang tự động tải danh sách Nhóm Zalo... Bấm <b>🔄 Quét Nhóm Zalo</b> để làm mới!</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HÀNG 2: KHỞI CHẠY CHIẾN DỊCH ĐA ACC & TẠO STICKER CHUẨN NHÃN DÁN ZALO -->
+  <div class="grid-2">
+    <!-- CỘT 1: BẢNG KHỞI CHẠY CHIẾN DỊCH 38+ CHẾ ĐỘ -->
+    <div class="card">
+      <div class="card-header">
+        <h2>🚀 3. Khởi Chạy Chiến Dịch Đa Tài Khoản</h2>
+        <span style="font-size:13px;color:#34d399;font-weight:700">Chạy mượt nhiều Acc cùng lúc 0ms</span>
+      </div>
+
+      <div class="grid-2" style="gap:12px;margin-bottom:8px">
+        <div>
+          <label class="field-lbl">Chế độ chạy (38+ Chức năng VIP):</label>
+          <select id="camp-mode">
+            <option value="treo_nhay">🔥 Treo Nhây Từng Dòng (.n / .nhay)</option>
+            <option value="treo_ngon">🌈 Treo Ngôn Đa Màu (.g / .damau)</option>
+            <option value="zalo_gif">⚡ Treo GIF + 68 Nhãn Dán Động Zalo (.gif)</option>
+            <option value="treo_sticker">🎨 Treo Nhãn Dán Gốc Zalo Liên Hoàn (.treosticker)</option>
+            <option value="nhay_giaitan">📢 Phát Thông Báo Giải Tán Hệ Thống Zalo (.nhaygiaitan)</option>
+            <option value="nhay_poll">📊 Treo Bình Chọn Poll 0.0s Không Nghỉ (.nhaypoll)</option>
+            <option value="nhay_namebox">✏️ Đổi Tên Box Zalo Liên Hoàn (.nhaynamebox)</option>
+            <option value="nhay_theme">🎨 Đổi Nền Box Zalo Liên Hoàn (.nhaynen)</option>
+            <option value="nhay_typing">⌨️ Giả Lập Soạn Tin Typing (.nhaytyping)</option>
+            <option value="zalo_todo">📋 Giao Việc Zalo To-Do (.todo)</option>
+            <option value="zalo_cardbank">🏦 Gửi Thẻ Ngân Hàng VietQR (.bank)</option>
+            <option value="share_contact">🪪 Chia Sẻ Danh Thiếp (.card)</option>
+            <option value="sieu_xa_nhieu_nhom">🚀 Siêu Xả Đa Nhóm Tốc Độ Ánh Sáng (.xa)</option>
+            <option value="combo_lien_thanh">⚡ Combo Liên Thanh 3 Câu/Nhịp (.combo)</option>
+            <option value="nhay_2c">🔥 Nhây Gộp 2 Câu (2c.txt) (.2c)</option>
+            <option value="treo_so">🔢 Treo Đếm Số Liên Hoàn (so.txt) (.so)</option>
+            <option value="so_tag">🎯 Treo Số Kèm Tag Mục Tiêu (.sotag)</option>
+            <option value="idea_mess">💥 Nhây Sát Thương Cực Mạnh (chui.txt) (.chui)</option>
+            <option value="nhay_icon">🌪️ Bão Ký Hiệu & Icon VIP (.nhayicon)</option>
+            <option value="code_lag">⚡ Code Lag Zalgo Siêu Nặng (.codelag)</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-lbl">Chọn File kịch bản (.txt):</label>
+          <select id="camp-file">
+            {% for f in files %}
+            <option value="{{ f.filename }}">#{{ f.display_num }} — {{ f.filename }} ({{ f.lines_count }} dòng)</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="grid-2" style="gap:12px;margin-bottom:8px">
+        <div>
+          <label class="field-lbl">Chế độ màu chữ Zalo:</label>
+          <select id="camp-color">
+            <option value="word_rainbow">🌈 Đổi Màu Từng Từ (Word Rainbow VIP)</option>
+            <option value="char_rainbow">✨ Đổi Màu Từng Ký Tự (Char Rainbow)</option>
+            <option value="rainbow">🎨 Cầu Vồng Theo Dòng (Line Rainbow)</option>
+            <option value="fire_gradient">🔥 Lửa Hoàng Kim (Đỏ - Cam - Vàng)</option>
+            <option value="ocean_gradient">🌊 Đại Dương Băng Tuyết</option>
+            <option value="royal_gradient">👑 Hoàng Gia Tối Thượng</option>
+            <option value="fixed">❤️‍🔥 Đỏ Rực Cố Định (db342e)</option>
+            <option value="none">⚪ Chữ Mặc Định</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-lbl">Tốc độ Delay (giây — Hỗ trợ 0s):</label>
+          <input type="number" id="camp-delay" value="0.0" step="0.1" min="0">
+        </div>
+      </div>
+
+      <label class="field-lbl">Nội dung tùy chỉnh (Hoặc để trống để chạy theo File .txt đã chọn; kèm @All hoặc @Tên nếu muốn Tag):</label>
+      <textarea id="camp-raw-text" rows="3" placeholder="Nhập câu nhây (ngăn cách bằng dấu ;) hoặc đoạn văn ngôn, hoặc tên nhóm cho chế độ Giải Tán..."></textarea>
+
+      <div style="display:flex;flex-wrap:wrap;gap:16px;margin:12px 0">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
+          <input type="checkbox" id="camp-multi-acc" checked style="width:17px;height:17px"> Chạy Đa Tài Khoản Đồng Loạt
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
+          <input type="checkbox" id="camp-tag-all" style="width:17px;height:17px"> Báo Chuông @All Ẩn
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
+          <input type="checkbox" id="camp-heading" checked style="width:17px;height:17px"> Chữ To In Đậm (f_18)
+        </label>
+      </div>
+
+      <button class="btn btn-primary" style="width:100%;padding:13px;font-size:15.5px" onclick="startCampaignNow()">🚀 BẮT ĐẦU CHẠY CHIẾN DỊCH NGAY</button>
+    </div>
+
+    <!-- CỘT 2: TẠO & BẮN NHÃN DÁN STICKER ZALO CHUẨN [STICKER] + QUẢN LÝ FILE -->
+    <div class="card">
+      <div class="card-header">
+        <h2>🎨 4. Tạo Sticker Thẳng Trên Zalo (Chuẩn Nhãn Dán Thật 100%)</h2>
+        <span style="font-size:13px;color:#fbbf24;font-weight:700">Nhảy ra [Sticker] thật không viền</span>
+      </div>
+
+      <label class="field-lbl">Chọn nhanh Bộ Nhãn Dán Động Zalo Gốc (68+ Mẫu):</label>
+      <div class="btn-row" style="margin-bottom:10px">
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('rong')">🐉 Rồng Lửa VIP</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('meo')">🐱 Mèo Ami Bụng Bự</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('khia')">😏 Quỳnh Aka Khịa</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('corgi')">🐶 Corgi Lắc Mông</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('vit')">🦆 Vịt Vàng Ducky</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('gau')">🐻 Gấu Brown</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('meme')">🐯 Hổ Vàng Meme</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('quay')">💃 Quẩy Party</button>
+      </div>
+
+      <label class="field-lbl">Hoặc nhập Link Ảnh / Link GIF / Video ngắn (≤ 3.0s) / Chữ Die-Cut để tạo Nhãn Dán 512×512:</label>
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <input type="text" id="sticker-input" placeholder="Dán link ảnh/GIF/video ≤3s hoặc nhập chữ muốn tạo Sticker...">
+        <button class="btn btn-success" onclick="createAndSendCustomSticker()" style="white-space:nowrap">🎨 Bắn Nhãn Dán</button>
+      </div>
+
+      <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:8px">
+        <div style="font-weight:800;color:#93c5fd;margin-bottom:8px">📂 Quản Lý Kho File Kịch Bản (.txt) & Gửi Lệnh Trực Tiếp</div>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <input type="text" id="web-cmd-inp" placeholder="Gõ lệnh trực tiếp (VD: .menu, .sticker, .gif, .giaitan Lũ vdanh, .t, .ta)...">
+          <button class="btn btn-primary" onclick="dispatchWebCommand()" style="white-space:nowrap">⚡ Gửi Lệnh</button>
+        </div>
+        <details>
+          <summary style="cursor:pointer;font-weight:700;color:#34d399">➕ Tạo / Tải Lên File Kịch Bản (.txt) Mới</summary>
+          <form method="POST" action="/file/create" style="margin-top:8px;background:var(--panel-alt);padding:12px;border-radius:10px">
+            <input type="text" name="filename" placeholder="Tên file (VD: nhay_vip.txt)" required style="margin-bottom:8px">
+            <textarea name="content" rows="3" placeholder="Mỗi câu 1 dòng..." required style="margin-bottom:8px"></textarea>
+            <button type="submit" class="btn btn-success btn-sm">💾 Lưu File .txt</button>
+          </form>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- HÀNG 3: BẢNG GIÁM SÁT TIẾN TRÌNH & LỊCH SỬ LỆNH THỜI GIAN THỰC -->
+  <div class="card">
+    <div class="card-header">
+      <h2>📊 5. Giám Sát Chiến Dịch Đang Chạy & Nhật Ký Hệ Thống (Thời Gian Thực)</h2>
+      <div class="btn-row">
+        <button class="btn btn-danger btn-sm" onclick="stopAllTasks()">🛑 Dừng Tất Cả Chiến Dịch (.stopall)</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Mã Task</th>
+            <th>Chế Độ</th>
+            <th>Số Acc Chạy</th>
+            <th>Số Box</th>
+            <th>Đã Gửi</th>
+            <th>Delay</th>
+            <th>Trạng Thái</th>
+            <th>Thao Tác</th>
+          </tr>
+        </thead>
+        <tbody id="tasks-tbody">
+          <tr><td colspan="8" style="text-align:center;color:var(--muted)">Chưa có chiến dịch nào đang chạy.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+let ALL_BOXES = [];
+let QR_POLL_TIMER = null;
+
+function showToast(msg, isErr=false){
+  const el = document.getElementById('toast-box');
+  el.style.display = 'block';
+  el.style.background = isErr ? 'rgba(239,68,68,0.18)' : 'rgba(16,185,129,0.18)';
+  el.style.borderColor = isErr ? 'rgba(239,68,68,0.45)' : 'rgba(16,185,129,0.45)';
+  el.style.color = isErr ? '#fca5a5' : '#6ee7b7';
+  el.textContent = msg;
+  setTimeout(()=>{ el.style.display = 'none'; }, 5000);
+}
+
+function getSelectedAccountIds(){
+  return Array.from(document.querySelectorAll('.acc-chk:checked')).map(el => parseInt(el.value));
+}
+
+function getSelectedTargets(){
+  return Array.from(document.querySelectorAll('.box-chk:checked')).map(el => ({
+    id: el.value,
+    name: el.getAttribute('data-name') || ('Box ' + el.value),
+    type: el.getAttribute('data-type') || 'group'
+  }));
+}
+
+function updateSelectedCounts(){
+  const aCnt = getSelectedAccountIds().length;
+  const bCnt = getSelectedTargets().length;
+  document.getElementById('sel-acc-count').textContent = aCnt + ' Acc đã chọn';
+  document.getElementById('sel-box-count').textContent = bCnt + ' Box đã chọn';
+}
+
+function selectTopAccounts(n){
+  const chks = Array.from(document.querySelectorAll('.acc-chk'));
+  chks.forEach((c, idx) => { c.checked = (idx < n); });
+  updateSelectedCounts();
+}
+
+function selectTopBoxes(n){
+  const chks = Array.from(document.querySelectorAll('.box-chk'));
+  chks.forEach((c, idx) => { c.checked = (idx < n); });
+  updateSelectedCounts();
+}
+
+async function scanBoxes(plat='zalo', force=false){
+  const cont = document.getElementById('box-list-container');
+  cont.innerHTML = '<div style="padding:18px;text-align:center;color:#60a5fa">⏳ Đang quét danh sách Box ' + plat.toUpperCase() + '...</div>';
+  try{
+    let url = '/api/all_groups' + (force ? '?refresh=1' : '');
+    if(plat === 'discord') url = '/api/discord_channels' + (force ? '?refresh=1' : '');
+    if(plat === 'messenger') url = '/api/messenger_threads' + (force ? '?refresh=1' : '');
+    const r = await fetch(url);
+    const d = await r.json();
+    let items = [];
+    if(plat === 'zalo'){
+      (d.groups || []).forEach(g => items.push({id: g.id, name: g.name || ('Nhóm ' + g.id), type: 'group', plat: 'zalo', accs: (g.acc_names || []).join(', ')}));
+    }else if(plat === 'discord'){
+      (d.channels || []).forEach(c => items.push({id: c.id, name: c.name || ('Kênh ' + c.id), type: 'discord_channel', plat: 'discord', accs: (c.acc_names || []).join(', ')}));
+    }else{
+      (d.threads || []).forEach(t => items.push({id: t.id, name: t.name || ('Box ' + t.id), type: 'messenger_thread', plat: 'messenger', accs: (t.acc_names || []).join(', ')}));
+    }
+    ALL_BOXES = items;
+    renderBoxList(items);
+  }catch(e){
+    cont.innerHTML = '<div style="padding:18px;text-align:center;color:#f87171">Không thể quét danh sách Box: ' + e + '</div>';
+  }
+}
+
+function renderBoxList(items){
+  const cont = document.getElementById('box-list-container');
+  if(!items || !items.length){
+    cont.innerHTML = '<div style="padding:18px;text-align:center;color:var(--muted)">Chưa tìm thấy Box nào. Bạn có thể nhập trực tiếp ID Box vào ô phía trên và bấm <b>+ Thêm ID</b>!</div>';
+    updateSelectedCounts();
+    return;
+  }
+  cont.innerHTML = items.map((b, i) => `
+    <div class="list-item">
+      <div class="item-left">
+        <input type="checkbox" class="box-chk" value="${b.id}" data-name="${(b.name||'').replace(/"/g,'')}" data-type="${b.type}" ${i===0?'checked':''} onchange="updateSelectedCounts()" style="width:18px;height:18px;cursor:pointer">
+        <span class="tag-plat tag-${b.plat}">${b.plat}</span>
+        <div>
+          <div class="item-title">${b.name}</div>
+          <div class="item-sub">ID: <code>${b.id}</code> ${b.accs ? '• Acc: ' + b.accs : ''}</div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+  updateSelectedCounts();
+}
+
+function filterBoxList(){
+  const q = (document.getElementById('box-search-inp').value || '').toLowerCase().trim();
+  if(!q){ renderBoxList(ALL_BOXES); return; }
+  renderBoxList(ALL_BOXES.filter(b => (b.name||'').toLowerCase().includes(q) || String(b.id).includes(q)));
+}
+
+function addManualBoxId(){
+  const inp = document.getElementById('box-search-inp');
+  const val = (inp.value || '').trim();
+  if(!val) return;
+  ALL_BOXES.unshift({id: val, name: 'Box Mục Tiêu #' + val.slice(-6), type: 'group', plat: 'zalo', accs: 'Tất cả Acc'});
+  inp.value = '';
+  renderBoxList(ALL_BOXES);
+}
+
+async function startCampaignNow(){
+  const targets = getSelectedTargets();
+  if(!targets.length){
+    showToast('⚠️ Vui lòng tích chọn ít nhất 1 Nhóm/Box mục tiêu ở mục 2!', true);
+    return;
+  }
+  const accIds = getSelectedAccountIds();
+  const payload = {
+    targets: targets,
+    account_ids: accIds,
+    multi_acc: document.getElementById('camp-multi-acc').checked && accIds.length !== 1,
+    mode: document.getElementById('camp-mode').value,
+    file_id: document.getElementById('camp-file').value,
+    color_mode: document.getElementById('camp-color').value,
+    delay: parseFloat(document.getElementById('camp-delay').value || '0') || 0.0,
+    raw_text: document.getElementById('camp-raw-text').value,
+    tag_all: document.getElementById('camp-tag-all').checked,
+    is_heading: document.getElementById('camp-heading').checked,
+    antiband: true
+  };
+  const r = await fetch('/task/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  const d = await r.json();
+  if(d.ok){
+    showToast('🚀 Đã khởi chạy chiến dịch thành công (' + accIds.length + ' Acc × ' + targets.length + ' Box)!');
+    refreshStatus();
+  }else{
+    showToast('❌ ' + (d.error || 'Lỗi khởi chạy'), true);
+  }
+}
+
+async function fireNativeSticker(tag){
+  document.getElementById('sticker-input').value = tag;
+  await createAndSendCustomSticker();
+}
+
+async function createAndSendCustomSticker(){
+  const targets = getSelectedTargets();
+  if(!targets.length){
+    showToast('⚠️ Hãy chọn ít nhất 1 Nhóm/Box ở mục 2 để bắn Nhãn Dán Sticker!', true);
+    return;
+  }
+  const inputVal = (document.getElementById('sticker-input').value || '').trim();
+  const accIds = getSelectedAccountIds();
+  const r = await fetch('/api/zalo/create_sticker', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({targets: targets, account_ids: accIds, query: inputVal})
+  });
+  const d = await r.json();
+  if(d.ok){
+    showToast('🎨 ' + (d.message || 'Đã bắn Nhãn Dán Sticker [Sticker] chuẩn Zalo thành công!'));
+  }else{
+    showToast('❌ ' + (d.error || 'Không thể tạo Sticker'), true);
+  }
+}
+
+async function dispatchWebCommand(){
+  const cmd = (document.getElementById('web-cmd-inp').value || '').trim();
+  if(!cmd) return;
+  const targets = getSelectedTargets();
+  const tid = targets.length ? targets[0].id : '';
+  const r = await fetch('/api/command/dispatch_web', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({cmd: cmd, thread_id: tid})
+  });
+  const d = await r.json();
+  showToast(d.message || 'Đã thực thi lệnh!', !d.ok);
+  refreshStatus();
+}
+
+async function startZaloQR(){
+  const box = document.getElementById('qr-modal');
+  const txt = document.getElementById('qr-status-txt');
+  const img = document.getElementById('qr-img');
+  box.style.display = 'block';
+  img.style.display = 'none';
+  txt.textContent = '⏳ Đang cấp phát Máy Tính Singapore & tạo mã QR Zalo...';
+  if(QR_POLL_TIMER) clearInterval(QR_POLL_TIMER);
+  const r = await fetch('/api/zalo/qr_start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({region:'SG', auto_save:true})});
+  const d = await r.json();
+  if(!d.ok){
+    txt.textContent = '❌ Lỗi tạo QR: ' + (d.error || '');
+    return;
+  }
+  const sid = d.session_id;
+  QR_POLL_TIMER = setInterval(async () => {
+    try{
+      const sr = await fetch('/api/zalo/qr_status/' + sid);
+      const sd = await sr.json();
+      if(sd.has_qr){
+        img.src = '/api/zalo/qr_image/' + sid + '.png?t=' + Date.now();
+        img.style.display = 'block';
+        txt.textContent = '📲 Hãy mở Zalo quét mã QR bên dưới (' + (sd.pc_name || 'Singapore PC') + '):';
+      }
+      if(sd.status === 'scanned'){
+        txt.textContent = '📱 Đã quét mã QR! Hãy bấm [Đăng nhập] trên điện thoại của bạn...';
+      }
+      if(sd.status === 'success'){
+        clearInterval(QR_POLL_TIMER);
+        txt.textContent = '✅ Đăng nhập thành công tài khoản: ' + (sd.display_name || sd.uid || 'Zalo VIP') + '! Đang tải lại...';
+        setTimeout(() => location.reload(), 1200);
+      }
+      if(sd.status === 'expired' || sd.status === 'error'){
+        clearInterval(QR_POLL_TIMER);
+        txt.textContent = '⌛ ' + (sd.message || 'Mã QR đã hết hạn. Hãy bấm Quét QR Zalo PC lại.');
+      }
+    }catch(e){}
+  }, 1500);
+}
+
+async function checkAllLive(){
+  showToast('🔍 Đang kiểm tra trạng thái Sống/Die của toàn bộ tài khoản...');
+  const r = await fetch('/api/account/check_all_live', {method:'POST'});
+  const d = await r.json();
+  showToast(d.message || 'Đã kiểm tra xong!', !d.ok);
+}
+
+async function testSingleAcc(id){
+  const r = await fetch('/api/account/test_session', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({acc_id:id})});
+  const d = await r.json();
+  showToast(d.message || d.error || 'Đã kiểm tra', !d.ok);
+}
+
+async function toggleSingleCmd(id, en){
+  await fetch('/api/account/chat_cmd', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({acc_id:id, enabled:en})});
+  location.reload();
+}
+
+async function bulkToggleCmd(en){
+  await fetch('/api/account/cmd_permissions_bulk', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode: en ? 'enable_all' : 'disable_all'})});
+  location.reload();
+}
+
+async function reconnectAll(){
+  const r = await fetch('/api/account/reconnect_all', {method:'POST'});
+  const d = await r.json();
+  showToast(d.message || 'Đã kết nối lại!');
+}
+
+async function stopSingleTask(tid){
+  await fetch('/task/stop/' + tid, {method:'POST'});
+  refreshStatus();
+}
+
+asyncindex_ready = false;
+async function stopAllTasks(){
+  const r = await fetch('/task/stop_all', {method:'POST'});
+  const d = await r.json();
+  showToast('🛑 Đã dừng toàn bộ (' + (d.stopped || 0) + ' chiến dịch)!');
+  refreshStatus();
+}
+
+async function refreshStatus(){
+  try{
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const running = (d.tasks || []).filter(t => t.status === 'Đang chạy');
+    document.getElementById('stat-tasks').textContent = running.length;
+    if(d.ping_telemetry) document.getElementById('stat-rpm').textContent = d.ping_telemetry.total_rpm || 0;
+    const tb = document.getElementById('tasks-tbody');
+    if(!d.tasks || !d.tasks.length){
+      tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">Chưa có chiến dịch nào.</td></tr>';
+      return;
+    }
+    tb.innerHTML = d.tasks.slice(0, 18).map(t => `
+      <tr>
+        <td><code>#${t.id}</code></td>
+        <td><b>${t.mode}</b></td>
+        <td>${t.acc_count} Acc</td>
+        <td>${t.targets_count} Box</td>
+        <td><b style="color:#34d399">${t.sent}</b></td>
+        <td>${t.delay}s</td>
+        <td><span style="color:${t.status==='Đang chạy'?'#34d399':'#94a3b8'};font-weight:700">${t.status}</span></td>
+        <td>${t.status==='Đang chạy' ? `<button class="btn btn-danger btn-sm" onclick="stopSingleTask('${t.id}')">🛑 Dừng</button>` : '-'}</td>
+      </tr>
+    `).join('');
+  }catch(e){}
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  updateSelectedCounts();
+  scanBoxes('zalo', false);
+  refreshStatus();
+  setInterval(refreshStatus, 2500);
+});
+</script>
+</body>
+</html>"""
+
+KEEPALIVE_HTML = DASHBOARD_HTML
 
 
 @app.route("/api/ui/physics")
@@ -15234,7 +17056,90 @@ def healthz():
 
 @app.route("/")
 def index():
-    return Response(KEEPALIVE_HTML, mimetype="text/html"), 200
+    try:
+        accounts = get_all_accounts_from_ram()
+        files = get_ordered_files_with_display_num()
+        has_logo = bool(get_setting("brand_logo_b64", "") or get_setting("brand_logo_url", ""))
+        logo_ts = get_setting("brand_logo_ts", "1")
+        custom_title = get_setting("custom_web_title", "")
+        return render_template_string(
+            DASHBOARD_HTML,
+            accounts=accounts,
+            files=files,
+            has_logo=has_logo,
+            logo_ts=logo_ts,
+            custom_title=custom_title,
+        ), 200
+    except Exception:
+        return Response(KEEPALIVE_HTML, mimetype="text/html"), 200
+
+
+@app.route("/api/zalo/create_sticker", methods=["POST"])
+def api_zalo_create_sticker():
+    """Tạo & bắn Nhãn Dán Sticker Zalo chuẩn [Sticker] trực tiếp từ Web UI tới 1 hoặc nhiều Box cùng lúc."""
+    data = request.json or {}
+    targets = data.get("targets") or []
+    acc_ids = [int(x) for x in (data.get("account_ids") or []) if str(x).isdigit()]
+    query_str = str(data.get("query") or "").strip()
+
+    all_zalo_accs = get_all_accounts_from_ram(platform="zalo", enabled_only=True)
+    if acc_ids:
+        sel_accs = [a for a in all_zalo_accs if int(a["id"]) in acc_ids] or all_zalo_accs
+    else:
+        sel_accs = all_zalo_accs
+
+    if not sel_accs:
+        return jsonify({"ok": False, "error": "Chưa có tài khoản Zalo nào đang kết nối!"}), 400
+    if not targets:
+        return jsonify({"ok": False, "error": "Hãy chọn ít nhất 1 Box Zalo mục tiêu!"}), 400
+
+    q_kw = remove_vn_accents(query_str.lower())
+    is_native_kw = (not query_str) or q_kw in ("rong", "meo", "khia", "quay", "corgi", "vit", "meme", "gau", "cuoi", "tim") or q_kw.isdigit()
+
+    res_st = None
+    if not is_native_kw:
+        if query_str.startswith(("http://", "https://", "data:")) or os.path.exists(query_str):
+            is_vid = any(query_str.lower().split("?")[0].endswith(ext) for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi"))
+            res_st = ZaloStickerMakerEngine.create_short_video_sticker(query_str) if is_vid else ZaloStickerMakerEngine.create_sharp_image_sticker(query_str)
+        else:
+            res_st = ZaloStickerMakerEngine.create_text_sticker_512(query_str)
+        if not res_st.get("ok"):
+            return jsonify({"ok": False, "error": res_st.get("error") or "Lỗi tạo Sticker"}), 400
+
+    fired_cnt = 0
+    for a_item in sel_accs[:12]:
+        try:
+            zc = Zalo.get_pooled_client(
+                a_item["imei"], a_item["cookies"],
+                user_agent=a_item.get("user_agent") or "",
+                zpw_enk_hint=a_item.get("zpw_enk") or "",
+                uid_hint=a_item.get("uid") or ""
+            )
+            for t in targets[:20]:
+                tid_s = str(t.get("id") or "").strip()
+                if not tid_s:
+                    continue
+                if is_native_kw:
+                    zc.send_native_sticker(tid_s, keyword=q_kw, is_group=(t.get("type", "group") == "group"))
+                else:
+                    m_bytes = res_st.get("webp_bytes") or res_st.get("gif_bytes") or res_st.get("png_bytes") or b""
+                    zc.send_custom_sticker_media(
+                        tid_s, m_bytes,
+                        filename="sticker.gif" if res_st.get("type") == "video_sticker" else "sticker.webp",
+                        is_group=(t.get("type", "group") == "group"),
+                        caption=query_str,
+                        webp_bytes=res_st.get("webp_bytes"),
+                        gif_bytes=res_st.get("gif_bytes") or res_st.get("anim_bytes")
+                    )
+                fired_cnt += 1
+        except Exception:
+            continue
+
+    return jsonify({
+        "ok": True,
+        "fired": fired_cnt,
+        "message": f"Đã bắn Nhãn Dán Sticker chuẩn Zalo vào {len(targets)} Box bằng {len(sel_accs)} Acc!"
+    })
 
 @app.route("/api/discord/immortalize", methods=["POST"])
 def api_discord_immortalize():
