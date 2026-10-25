@@ -476,6 +476,448 @@ VIETNAM_PC_PRESETS = {
         "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
         "sec_platform": '"Windows"',
     },
+    "sg_alienware_m18": {
+        "region_code": "sg_alienware_m18",
+        "region": "SG",
+        "region_label": "Alienware m18 R2 Ultra — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "Singtel Fiber SG",
+        "pc_prefix": "ALIENWARE-M18-SG",
+        "computer_name": "Alienware m18 R2 (Singapore)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "dell",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["116.88", "42.60", "175.156"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_razer_blade18": {
+        "region_code": "sg_razer_blade18",
+        "region": "SG",
+        "region_label": "Razer Blade 18 4K 200Hz — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "MyRepublic Gamer SG",
+        "pc_prefix": "RAZER-BLADE18-SG",
+        "computer_name": "Razer Blade 18 (Singapore)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "intel",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["175.156", "103.252", "119.74"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_legion_9i": {
+        "region_code": "sg_legion_9i",
+        "region": "SG",
+        "region_label": "Lenovo Legion 9i Gen 9 — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "StarHub Fiber SG",
+        "pc_prefix": "LEGION-9I-SG",
+        "computer_name": "Lenovo Legion 9i (Singapore)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "lenovo",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["119.74", "116.87", "103.252"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_surface_studio2": {
+        "region_code": "sg_surface_studio2",
+        "region": "SG",
+        "region_label": "Surface Laptop Studio 2 — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "M1 Fiber SG",
+        "pc_prefix": "SURFACE-STUDIO2-SG",
+        "computer_name": "Surface Studio 2 (Singapore)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "intel",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["119.56", "116.88", "42.60"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_mac_pro_m4": {
+        "region_code": "sg_mac_pro_m4",
+        "region": "SG",
+        "region_label": "MacBook Pro 16 M4 Max — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "Singtel Fiber SG",
+        "pc_prefix": "MacBook-Pro-M4-SG",
+        "computer_name": "MacBook Pro M4 Max (SG)",
+        "os_label": "macOS Sequoia 15.2 SG",
+        "vendor": "apple",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["116.88", "103.252", "119.74"],
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"macOS"',
+    },
+    "sg_mac_mini_m4": {
+        "region_code": "sg_mac_mini_m4",
+        "region": "SG",
+        "region_label": "Mac mini M4 Pro — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "ViewQwest Fiber SG",
+        "pc_prefix": "Mac-mini-M4-SG",
+        "computer_name": "Mac mini M4 Pro (Singapore)",
+        "os_label": "macOS Sequoia 15.2 SG",
+        "vendor": "apple",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["175.156", "103.252", "116.88"],
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"macOS"',
+    },
+    "sg_mac_pro_tower": {
+        "region_code": "sg_mac_pro_tower",
+        "region": "SG",
+        "region_label": "Mac Pro M2 Ultra Tower — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "Singtel Enterprise SG",
+        "pc_prefix": "Mac-Pro-Tower-SG",
+        "computer_name": "Mac Pro M2 Ultra (Singapore)",
+        "os_label": "macOS Sonoma SG",
+        "vendor": "apple",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["42.60", "116.88", "119.74"],
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"macOS"',
+    },
+    "sg_predator_helios": {
+        "region_code": "sg_predator_helios",
+        "region": "SG",
+        "region_label": "Acer Predator Helios 18 — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "StarHub Fiber SG",
+        "pc_prefix": "PREDATOR-HELIOS-SG",
+        "computer_name": "Acer Predator Helios 18 (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "intel",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["119.74", "116.88", "175.156"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_aorus_17x": {
+        "region_code": "sg_aorus_17x",
+        "region": "SG",
+        "region_label": "GIGABYTE AORUS 17X — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "MyRepublic Fiber SG",
+        "pc_prefix": "AORUS-17X-SG",
+        "computer_name": "GIGABYTE AORUS 17X (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "intel",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["175.156", "42.60", "116.88"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_omen_transcend": {
+        "region_code": "sg_omen_transcend",
+        "region": "SG",
+        "region_label": "HP OMEN Transcend 16 — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "M1 Fiber SG",
+        "pc_prefix": "HP-OMEN16-SG",
+        "computer_name": "HP OMEN Transcend 16 (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "hp",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["119.56", "119.74", "116.88"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_lg_gram_pro": {
+        "region_code": "sg_lg_gram_pro",
+        "region": "SG",
+        "region_label": "LG gram Pro 17 OLED — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "Singtel Fiber SG",
+        "pc_prefix": "LG-GRAM-PRO-SG",
+        "computer_name": "LG gram Pro 17 (Singapore)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "intel",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["116.88", "103.252", "42.60"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_galaxy_book4": {
+        "region_code": "sg_galaxy_book4",
+        "region": "SG",
+        "region_label": "Samsung Galaxy Book4 Ultra — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "StarHub Fiber SG",
+        "pc_prefix": "GALAXY-BOOK4-SG",
+        "computer_name": "Galaxy Book4 Ultra (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "intel",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["119.74", "175.156", "116.88"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_thinkpad_x1_carbon": {
+        "region_code": "sg_thinkpad_x1_carbon",
+        "region": "SG",
+        "region_label": "ThinkPad X1 Carbon Gen 12 — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "Singtel Enterprise SG",
+        "pc_prefix": "THINKPAD-X1C12-SG",
+        "computer_name": "ThinkPad X1 Carbon G12 (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "lenovo",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["42.60", "116.88", "119.74"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_dell_xps_16": {
+        "region_code": "sg_dell_xps_16",
+        "region": "SG",
+        "region_label": "Dell XPS 16 9640 OLED — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "ViewQwest Fiber SG",
+        "pc_prefix": "DELL-XPS16-SG",
+        "computer_name": "Dell XPS 16 9640 (Singapore)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "dell",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["175.156", "103.252", "116.88"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_msi_raider_ge78": {
+        "region_code": "sg_msi_raider_ge78",
+        "region": "SG",
+        "region_label": "MSI Raider GE78 HX — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "MyRepublic Gamer SG",
+        "pc_prefix": "MSI-RAIDER-SG",
+        "computer_name": "MSI Raider GE78 HX (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "msi",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["175.156", "119.74", "42.60"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_asus_zenbook_duo": {
+        "region_code": "sg_asus_zenbook_duo",
+        "region": "SG",
+        "region_label": "ASUS Zenbook DUO OLED — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "Singtel Fiber SG",
+        "pc_prefix": "ZENBOOK-DUO-SG",
+        "computer_name": "ASUS Zenbook DUO (Singapore)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "asus",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["116.88", "119.74", "103.252"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_corsair_voyager": {
+        "region_code": "sg_corsair_voyager",
+        "region": "SG",
+        "region_label": "Corsair Voyager a1600 — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "StarHub Fiber SG",
+        "pc_prefix": "CORSAIR-VOYAGER-SG",
+        "computer_name": "Corsair Voyager a1600 (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "intel",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["119.74", "116.87", "175.156"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_hp_zbook_fury": {
+        "region_code": "sg_hp_zbook_fury",
+        "region": "SG",
+        "region_label": "HP ZBook Fury 16 G11 — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "M1 Fiber SG",
+        "pc_prefix": "HP-ZBOOK-FURY-SG",
+        "computer_name": "HP ZBook Fury 16 G11 (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "hp",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["119.56", "116.88", "42.60"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_thinkpad_p16": {
+        "region_code": "sg_thinkpad_p16",
+        "region": "SG",
+        "region_label": "ThinkPad P16 Gen 2 Workstation — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "Singtel Enterprise SG",
+        "pc_prefix": "THINKPAD-P16-SG",
+        "computer_name": "ThinkPad P16 Gen 2 (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "lenovo",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["42.60", "116.88", "103.252"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_nzxt_h9_elite": {
+        "region_code": "sg_nzxt_h9_elite",
+        "region": "SG",
+        "region_label": "NZXT H9 Elite RTX 4090 PC — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "ViewQwest Fiber SG",
+        "pc_prefix": "NZXT-H9-ELITE-SG",
+        "computer_name": "NZXT H9 Elite PC (Singapore)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "intel",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["175.156", "119.74", "116.88"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_rog_hyperion": {
+        "region_code": "sg_rog_hyperion",
+        "region": "SG",
+        "region_label": "ROG Hyperion GR701 Custom PC — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "MyRepublic Gamer SG",
+        "pc_prefix": "ROG-HYPERION-SG",
+        "computer_name": "ROG Hyperion GR701 (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "asus",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["175.156", "103.252", "116.88"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_threadripper_ws": {
+        "region_code": "sg_threadripper_ws",
+        "region": "SG",
+        "region_label": "AMD Threadripper PRO 7995WX — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "Singtel Enterprise SG",
+        "pc_prefix": "THREADRIPPER-PRO-SG",
+        "computer_name": "Threadripper PRO 7995WX (SG)",
+        "os_label": "Windows 11 Pro Workstation SG",
+        "vendor": "asus",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["42.60", "116.88", "119.74"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_imac_m4": {
+        "region_code": "sg_imac_m4",
+        "region": "SG",
+        "region_label": "iMac 24 M4 Retina 4.5K — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "StarHub Fiber SG",
+        "pc_prefix": "iMac-M4-Retina-SG",
+        "computer_name": "iMac 24 M4 (Singapore)",
+        "os_label": "macOS Sequoia 15.2 SG",
+        "vendor": "apple",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["119.74", "103.252", "116.88"],
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"macOS"',
+    },
+    "sg_macbook_air_m2": {
+        "region_code": "sg_macbook_air_m2",
+        "region": "SG",
+        "region_label": "MacBook Air 13 M2 Midnight — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "M1 Fiber SG",
+        "pc_prefix": "MacBook-Air-M2-SG",
+        "computer_name": "MacBook Air M2 (Singapore)",
+        "os_label": "macOS Sequoia SG",
+        "vendor": "apple",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["119.56", "116.88", "175.156"],
+        "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"macOS"',
+    },
+    "sg_conceptd_7": {
+        "region_code": "sg_conceptd_7",
+        "region": "SG",
+        "region_label": "Acer ConceptD 7 Ezel Pro — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "ViewQwest Fiber SG",
+        "pc_prefix": "CONCEPTD-7-SG",
+        "computer_name": "Acer ConceptD 7 Pro (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "intel",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["175.156", "103.252", "116.88"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
+    "sg_yoga_book_9i": {
+        "region_code": "sg_yoga_book_9i",
+        "region": "SG",
+        "region_label": "Lenovo Yoga Book 9i Dual OLED — Singapore",
+        "vn_location": "Singapore",
+        "vn_isp": "Singtel Fiber SG",
+        "pc_prefix": "YOGA-BOOK-9I-SG",
+        "computer_name": "Lenovo Yoga Book 9i (SG)",
+        "os_label": "Windows 11 Pro SG",
+        "vendor": "lenovo",
+        "tz": "Asia/Singapore",
+        "country": "SG",
+        "ip_prefixes": ["116.88", "42.60", "119.74"],
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        "sec_platform": '"Windows"',
+    },
 }
 
 VIETNAM_PC_PRESETS["vn_mac"] = VIETNAM_PC_PRESETS["sg_mac_pro"]
@@ -503,6 +945,32 @@ SINGAPORE_ALL_FLEET = [
     "sg_hp_spectre",
     "sg_mac_studio",
     "sg_asus_proart",
+    "sg_alienware_m18",
+    "sg_razer_blade18",
+    "sg_legion_9i",
+    "sg_surface_studio2",
+    "sg_mac_pro_m4",
+    "sg_mac_mini_m4",
+    "sg_mac_pro_tower",
+    "sg_predator_helios",
+    "sg_aorus_17x",
+    "sg_omen_transcend",
+    "sg_lg_gram_pro",
+    "sg_galaxy_book4",
+    "sg_thinkpad_x1_carbon",
+    "sg_dell_xps_16",
+    "sg_msi_raider_ge78",
+    "sg_asus_zenbook_duo",
+    "sg_corsair_voyager",
+    "sg_hp_zbook_fury",
+    "sg_thinkpad_p16",
+    "sg_nzxt_h9_elite",
+    "sg_rog_hyperion",
+    "sg_threadripper_ws",
+    "sg_imac_m4",
+    "sg_macbook_air_m2",
+    "sg_conceptd_7",
+    "sg_yoga_book_9i",
 ]
 
 SINGAPORE_MAC_FLEET = [
@@ -510,6 +978,11 @@ SINGAPORE_MAC_FLEET = [
     "sg_mac_air",
     "sg_imac",
     "sg_mac_studio",
+    "sg_mac_pro_m4",
+    "sg_mac_mini_m4",
+    "sg_mac_pro_tower",
+    "sg_imac_m4",
+    "sg_macbook_air_m2",
 ]
 
 COUNTRY_PC_ROTATION_FLEETS = {
@@ -1661,6 +2134,103 @@ def verify_zalo_pc_device_logged_in_account(imei, cookies_dict, zpw_enk="", user
     return res["alive"], res["groups_count"], res["reason"]
 
 
+
+class SmartQRSessionPool:
+    """Hệ thống Quản Lý Nhiều Máy Tính & Tái Sử Dụng Mã QR Chưa Quét / Loại Bỏ Vĩnh Viễn Mã Đã Quét:
+    - Mã QR đã tạo nhưng CHƯA QUÉT (còn hạn < 95s): Có thể tái sử dụng ngay lập tức (0ms) khi người dùng gọi lại hoặc tạo song song nhiều máy tính khác nhau.
+    - Mã QR ĐÃ ĐƯỢC QUÉT (QRCodeScanned / QRCodeConfirmed / GotLoginInfo): Lập tức đóng dấu ĐÃ QUÉT (SCANNED_RETIRED), loại bỏ khỏi Pool và KHÔNG BAO GIỜ tái sử dụng lại mã đó hay IMEI đó cho phiên QR mới!"""
+    _LOCK = threading.RLock()
+    _UNSCANNED_POOL = {}      # qr_code_id -> dict(session, cookie_jar_dict, vn_id, qr_b64_raw, qr_data_uri, raw_png, v_str, created_ts, status, owner_key)
+    _SCANNED_QR_CODES = set() # Tập hợp các qr_code_id đã được quét -> Cấm tái sử dụng vĩnh viễn
+    _USED_SCANNED_IMEIS = set() # Tập hợp các IMEI đã quét thành công -> Không cấp trùng cho máy mới
+
+    @classmethod
+    def is_qr_scanned_or_retired(cls, qr_code_id):
+        if not qr_code_id:
+            return True
+        with cls._LOCK:
+            return str(qr_code_id) in cls._SCANNED_QR_CODES
+
+    @classmethod
+    def is_imei_already_scanned(cls, imei):
+        if not imei:
+            return False
+        with cls._LOCK:
+            return str(imei) in cls._USED_SCANNED_IMEIS
+
+    @classmethod
+    def mark_qr_scanned_and_retire(cls, qr_code_id, imei=""):
+        """Đánh dấu mã QR đã được quét: lập tức xoá khỏi kho tái sử dụng và đưa vào danh sách cấm tái sử dụng."""
+        with cls._LOCK:
+            if qr_code_id:
+                q_str = str(qr_code_id)
+                cls._SCANNED_QR_CODES.add(q_str)
+                entry = cls._UNSCANNED_POOL.pop(q_str, None)
+                if entry:
+                    entry["status"] = "scanned_retired"
+            if imei:
+                cls._USED_SCANNED_IMEIS.add(str(imei))
+
+    @classmethod
+    def mark_qr_expired_or_declined(cls, qr_code_id):
+        with cls._LOCK:
+            if qr_code_id:
+                q_str = str(qr_code_id)
+                cls._SCANNED_QR_CODES.add(q_str)
+                cls._UNSCANNED_POOL.pop(q_str, None)
+
+    @classmethod
+    def register_unscanned_qr(cls, qr_code_id, entry_dict):
+        if not qr_code_id or not isinstance(entry_dict, dict):
+            return
+        with cls._LOCK:
+            q_str = str(qr_code_id)
+            if q_str in cls._SCANNED_QR_CODES:
+                return
+            entry_dict["qr_code_id"] = q_str
+            entry_dict.setdefault("created_ts", time.time())
+            entry_dict["status"] = "waiting_scan"
+            cls._UNSCANNED_POOL[q_str] = entry_dict
+
+    @classmethod
+    def get_reusable_unscanned_qr(cls, owner_key="", max_age_sec=75.0):
+        """Lấy lại mã QR đã tạo nhưng CHƯA QUÉT (còn hạn sử dụng) để tái sử dụng siêu tốc."""
+        now = time.time()
+        with cls._LOCK:
+            expired_keys = []
+            chosen_entry = None
+            for q_id, ent in list(cls._UNSCANNED_POOL.items()):
+                age = now - float(ent.get("created_ts") or 0.0)
+                if q_id in cls._SCANNED_QR_CODES or ent.get("status") != "waiting_scan" or age > max_age_sec:
+                    expired_keys.append(q_id)
+                    continue
+                if owner_key and ent.get("owner_key") and str(ent.get("owner_key")) != str(owner_key):
+                    continue
+                if chosen_entry is None or ent.get("created_ts", 0) > chosen_entry.get("created_ts", 0):
+                    chosen_entry = ent
+            for k in expired_keys:
+                cls._UNSCANNED_POOL.pop(k, None)
+            if chosen_entry:
+                chosen_entry["reused_count"] = int(chosen_entry.get("reused_count") or 0) + 1
+                return chosen_entry
+            return None
+
+    @classmethod
+    def get_pool_stats(cls):
+        now = time.time()
+        with cls._LOCK:
+            valid_unscanned = [
+                e for q, e in cls._UNSCANNED_POOL.items()
+                if q not in cls._SCANNED_QR_CODES and e.get("status") == "waiting_scan" and (now - float(e.get("created_ts") or 0)) <= 75.0
+            ]
+            return {
+                "unscanned_available": len(valid_unscanned),
+                "scanned_retired_total": len(cls._SCANNED_QR_CODES),
+                "used_imeis_total": len(cls._USED_SCANNED_IMEIS),
+                "pc_fleet_models": len(SINGAPORE_ALL_FLEET),
+            }
+
+
 class ZaloPCSessionKeeper:
     """Bộ Giữ Sống Thiết Bị Máy Tính Sống Trong Tài Khoản Zalo 24/7 (Single Unified WebSocket & Heartbeat Engine):
     - Khóa duy nhất theo `imei` (`cls._ACTIVE_KEEPERS[imei]`) để tuyệt đối KHÔNG BAO GIỜ tạo 2 kết nối WebSocket trùng nhau gây lỗi `cmd_id = 3000` (văng phiên sau 3 giây!).
@@ -2027,8 +2597,25 @@ class ZaloPCSessionKeeper:
                 rj_grp = r_grp.json() if r_grp.content else {}
                 err_g = rj_grp.get("error_code")
                 if err_g in (-401, 401, -102, 102, -30, -13, 3003):
+                    # Cơ chế Sống Bất Tử > 5 Tháng (180+ Ngày): Tự động xin cấp lại zpw_sek + zpw_enk từ zpsid SSO gốc khi hết hạn ngắn hạn!
+                    sec_ch = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
+                    sec_plat = '"macOS"' if "Macintosh" in ua else '"Windows"'
+                    if refresh_zpw_sek_from_zpsid(s, cookies, ua, sec_ch, sec_plat):
+                        cookie_updated = True
+                    re_enk = exchange_cookies_for_zpw_enk(
+                        s, imei, cookies, ua, sec_ch, sec_plat, {},
+                        computer_name=st.get("computer_name") or "Web", force_refresh=True
+                    )
+                    if isinstance(re_enk, dict) and re_enk.get("zpw_enk"):
+                        st["zpw_enk"] = re_enk["zpw_enk"]
+                        st["fail_streak"] = 0
+                        st["alive"] = True
+                        st["in_account"] = True
+                        st["last_sso_renew_ts"] = time.time()
+                        cls._persist_refreshed_session_to_db(st)
+                        return True
                     st["fail_streak"] = st.get("fail_streak", 0) + 1
-                    if st["fail_streak"] >= 3:
+                    if st["fail_streak"] >= 6:
                         st["alive"] = False
                         st["in_account"] = False
                         st["stop_ev"].set()
@@ -2049,8 +2636,22 @@ class ZaloPCSessionKeeper:
                     except Exception:
                         pass
 
+            now_pulse = time.time()
+            last_sso = float(st.get("last_sso_renew_ts") or st.get("started_ts") or now_pulse)
+            st.setdefault("started_ts", now_pulse)
+            st["session_ttl_days"] = 185  # > 5 tháng (185 ngày)
+            # Tự động làm mới chứng chỉ SSO mỗi 3 tiếng để zpsid & zpw_sek sống xuyên suốt > 5 tháng (180+ ngày)
+            if now_pulse - last_sso >= 10800.0 and cookies.get("zpsid"):
+                try:
+                    sec_ch = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
+                    sec_plat = '"macOS"' if "Macintosh" in ua else '"Windows"'
+                    if refresh_zpw_sek_from_zpsid(s, cookies, ua, sec_ch, sec_plat):
+                        cookie_updated = True
+                    st["last_sso_renew_ts"] = now_pulse
+                except Exception:
+                    pass
             st["ping_count"] = st.get("ping_count", 0) + 1
-            st["last_ping_ts"] = time.time()
+            st["last_ping_ts"] = now_pulse
             if cookie_updated:
                 cls._persist_refreshed_session_to_db(st)
             return True
@@ -2388,8 +2989,33 @@ def _execute_qr_login_sync(
     qr_b64_raw = ""
     qr_code_id = ""
     start_ts = time.time()
+    reuse_unscanned = bool(kwargs.get("reuse_unscanned", True))
+    owner_pool_key = str(kwargs.get("owner_key") or custom_pc_name or "")
+    reused_from_pool = False
 
-    for attempt in range(3):
+    if reuse_unscanned:
+        cached_qr = SmartQRSessionPool.get_reusable_unscanned_qr(owner_key=owner_pool_key, max_age_sec=75.0)
+        if cached_qr and not SmartQRSessionPool.is_qr_scanned_or_retired(cached_qr.get("qr_code_id")):
+            qr_b64_raw = cached_qr.get("qr_b64_raw") or ""
+            qr_code_id = cached_qr.get("qr_code_id") or ""
+            v_str = cached_qr.get("v_str") or v_str
+            if isinstance(cached_qr.get("session"), requests.Session):
+                s = cached_qr["session"]
+            if isinstance(cached_qr.get("cookie_jar_dict"), dict):
+                cookie_jar_dict = cached_qr["cookie_jar_dict"]
+            if isinstance(cached_qr.get("vn_id"), dict):
+                vn_id = cached_qr["vn_id"]
+                ua = vn_id["ua"]
+                sec_ch_ua = vn_id.get("sec_ch_ua") or sec_ch_ua
+                sec_platform = vn_id.get("sec_platform") or sec_platform
+                pc_name = vn_id["pc_name"]
+                comp_name = vn_id.get("computer_name") or "Web"
+                mac_address = vn_id["mac_address"]
+                vn_ip = vn_id["vn_ip"]
+                imei = vn_id["imei"]
+            reused_from_pool = True
+
+    for attempt in range(0 if reused_from_pool else 3):
         if stop_ev is not None and stop_ev.is_set():
             return None
         if attempt == 1 and s.proxies and not qr_b64_raw:
@@ -2450,12 +3076,32 @@ def _execute_qr_login_sync(
             wf.write(raw_png)
         return filepath
 
+    if not reused_from_pool:
+        SmartQRSessionPool.register_unscanned_qr(
+            qr_code_id,
+            {
+                "qr_code_id": qr_code_id,
+                "qr_b64_raw": qr_b64_raw,
+                "qr_data_uri": qr_data_uri,
+                "raw_png": raw_png,
+                "v_str": v_str,
+                "session": s,
+                "cookie_jar_dict": cookie_jar_dict,
+                "vn_id": vn_id,
+                "owner_key": owner_pool_key,
+                "created_ts": start_ts,
+            },
+        )
+
     qr_gen_event = {
         "type": LoginQRCallbackEventType.QRCodeGenerated,
         "data": {
             "code": qr_code_id,
             "image": qr_data_uri,
             "imei": imei,
+            "reused_unscanned": reused_from_pool,
+            "pc_fleet_size": len(SINGAPORE_ALL_FLEET),
+            "session_ttl_months": "5+ Tháng (185 Ngày)",
             "pc_name": pc_name,
             "computer_name": comp_name,
             "mac_address": mac_address,
@@ -2512,6 +3158,8 @@ def _execute_qr_login_sync(
                 continue
             sd = j_scan.get("data")
             if err_c == 0 and isinstance(sd, dict) and (sd.get("display_name") or sd.get("avatar")):
+                # Mã QR ĐÃ ĐƯỢC QUÉT -> Lập tức huỷ quyền tái sử dụng mã này vĩnh viễn!
+                SmartQRSessionPool.mark_qr_scanned_and_retire(qr_code_id, imei=imei)
                 display_name = str(sd.get("display_name") or "Người dùng").strip()
                 avatar = str(sd.get("avatar") or "").strip()
                 scanned_ok = True
@@ -2540,6 +3188,10 @@ def _execute_qr_login_sync(
             time.sleep(0.5)
 
     if not scanned_ok:
+        if stop_ev is not None and stop_ev.is_set():
+            # Nếu chỉ bị huỷ chờ tạm thời khi chưa ai quét và chưa hết hạn thì giữ trong Pool để có thể tái sử dụng
+            return None
+        SmartQRSessionPool.mark_qr_expired_or_declined(qr_code_id)
         emit_event_fn({"type": LoginQRCallbackEventType.QRCodeExpired, "data": {}})
         return None
 
@@ -2796,7 +3448,7 @@ async def _login_qr_async_runner(callback=None, qr_callback=None, timeout=110, c
             pass
 
     return await asyncio.to_thread(
-        _execute_qr_login_sync, _emit_from_thread, qr_callback, timeout, custom_pc_name, region_code, vn_region, proxy_vn, vn_proxy, pre_identity, stop_ev
+        _execute_qr_login_sync, _emit_from_thread, qr_callback, timeout, custom_pc_name, region_code, vn_region, proxy_vn, vn_proxy, pre_identity, stop_ev, **kwargs
     )
 
 
@@ -2827,7 +3479,7 @@ def login_qr_with_unique_imei(callback=None, qr_callback=None, timeout=110, cust
     return _execute_qr_login_sync(
         _emit_sync, qr_callback=qr_callback, timeout=timeout,
         custom_pc_name=custom_pc_name, region_code=region_code, vn_region=vn_region,
-        proxy_vn=proxy_vn, vn_proxy=vn_proxy, pre_identity=pre_identity, stop_ev=stop_ev
+        proxy_vn=proxy_vn, vn_proxy=vn_proxy, pre_identity=pre_identity, stop_ev=stop_ev, **kwargs
     )
 
 
