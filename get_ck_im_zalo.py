@@ -173,11 +173,11 @@ FUNCTION_ITEMS_32 = [
     # Trang 3/4
     {"id": "fn_nhay_poll",     "label": "📊 Treo Poll 0s (Không Nghỉ)", "mode": "nhay_poll", "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Tạo bình chọn (Poll) tự động liên hoàn 0.0s KHÔNG CÓ THỜI GIAN NGHỈ (.nhaypoll)", "emoji_id": "5438496463044752972"},
     {"id": "fn_typing",        "label": "⌨️ Hiệu Ứng Typing",    "mode": "typing_loop", "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Giả lập đang soạn tin nhắn liên tục chống khóa chat (.nhaytyping)", "emoji_id": "5431449001532594346"},
-    {"id": "fn_tenbox",        "label": "✏️ Đổi Tên Box",        "mode": "nhay_tenbox", "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhaynamebox.txt", "desc": "Đổi tên nhóm liên hoàn theo kịch bản (.nhaynamebox)", "emoji_id": "5368324170671202286"},
+    {"id": "fn_tenbox",        "label": "✏️ Đổi Tên Box Zalo",   "mode": "nhay_tenbox", "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhaynamebox.txt", "desc": "Đổi tên Box Zalo & Messenger liên hoàn 0s (.tenbox / .nhaynamebox)", "emoji_id": "5368324170671202286"},
     {"id": "fn_todo",          "label": "📋 Giao Việc To-Do",    "mode": "zalo_todo",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Giao việc Zalo To-Do nhắc nhở thẳng mục tiêu (.todo)", "emoji_id": "5206607081334906820"},
     {"id": "fn_bankcard",      "label": "🏦 Thẻ Ngân Hàng",      "mode": "zalo_bank",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Gửi thẻ ngân hàng VietQR tự động vào nhóm (.bank)", "emoji_id": "5472164874886846699"},
     {"id": "fn_sharecontact",  "label": "🪪 Gửi Danh Thiếp",     "mode": "share_contact","color_mode": "word_rainbow","fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Chia sẻ danh thiếp (Contact Card) vào nhóm (.card)", "emoji_id": "5427009714745517609"},
-    {"id": "fn_theme",         "label": "🎨 Đổi Nền MQTT",       "mode": "nen_mqtt",    "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Đổi chủ đề nền nhóm tự động (.theme)", "emoji_id": "5359785904535774578"},
+    {"id": "fn_theme",         "label": "🎨 Đổi Nền Box Zalo",   "mode": "nen_mqtt",    "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Đổi nền trò chuyện Box Zalo & Messenger liên hoàn (.theme / .nen)", "emoji_id": "5359785904535774578"},
     {"id": "fn_sharelink",     "label": "🔗 Chia Sẻ Link",       "mode": "share_link",  "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo chia sẻ liên kết kèm tiêu đề nổi bật (.sharelink)", "emoji_id": "5397782960512444700"},
 
     # Trang 4/4
@@ -602,7 +602,14 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
         clean_ck.setdefault("_zlang", "vn")
         ua = (user_agent or "").strip() or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-        uid_str = str(uid or "").strip()
+        raw_uid_in = str(uid or "").strip()
+        uid_str = raw_uid_in if (raw_uid_in.isdigit() and len(raw_uid_in) >= 6 and raw_uid_in != imei_str) else ""
+        if not uid_str:
+            for ck_v in clean_ck.values():
+                m_u = re.match(r"^(\d{8,22})\.", str(ck_v or "").strip())
+                if m_u:
+                    uid_str = m_u.group(1)
+                    break
         enk_str = str(zpw_enk or "").strip()
         dname_str = str(display_name or "").strip()
         owner_str = str(owner_tg_id or "").strip()
@@ -714,7 +721,7 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
         # Đồng bộ ngay vào Vault, ZaloPCSessionKeeper, OWNER_UIDS_CACHE & ZaloRealtimeListener để acc sài được trọn bộ 32 lệnh (.menu, .treodo, .damau, .nhaypoll, .n, .g, .t...) ngay lập tức!
         try:
             ZaloPCSessionKeeper.register_and_keep_alive(
-                uid=uid_str or imei_str,
+                uid=uid_str,
                 imei=imei_str,
                 cookies_dict=clean_ck,
                 zpw_enk=enk_str,
@@ -1907,7 +1914,7 @@ class DirectTelegramBotRunner:
                 antiband=(mode != "nhay_poll"),
                 strip_line_num=True,
                 hide_tag_all=bool(fn_meta.get("hide_tag_all", True)),
-                hide_tag_name=bool(fn_meta.get("hide_tag_name", True)),
+                hide_tag_name=bool(fn_meta.get("hide_tag_name", False)),
                 font_style=cur_font,
             )
 
