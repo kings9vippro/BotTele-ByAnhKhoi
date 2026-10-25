@@ -1847,8 +1847,9 @@ class ZaloPCSessionKeeper:
             conn = sqlite3.connect(db_p, timeout=10)
             cur = conn.cursor()
             c_json = json.dumps(st["cookies"], ensure_ascii=False)
-            uid_s = str(st.get("uid") or "")
-            imei_s = str(st.get("imei") or "")
+            raw_u = str(st.get("uid") or "").strip()
+            imei_s = str(st.get("imei") or "").strip()
+            uid_s = raw_u if (raw_u.isdigit() and len(raw_u) >= 6 and raw_u != imei_s) else ""
             enk_s = str(st.get("zpw_enk") or "")
             ua_s = str(st.get("ua") or "")
             dname_s = str(st.get("display_name") or "")
@@ -1860,8 +1861,8 @@ class ZaloPCSessionKeeper:
                 (uid_s or imei_s, dname_s, imei_s, c_json, enk_s, ua_s, now),
             )
             cur.execute(
-                "UPDATE accounts SET cookies=?, zpw_enk=?, user_agent=?, uid=? WHERE platform='zalo' AND (imei=? OR (uid != '' AND uid=?))",
-                (c_json, enk_s, ua_s, uid_s, imei_s, uid_s),
+                "UPDATE accounts SET cookies=?, zpw_enk=CASE WHEN ? != '' THEN ? ELSE zpw_enk END, user_agent=CASE WHEN ? != '' THEN ? ELSE user_agent END, uid=CASE WHEN ? != '' THEN ? ELSE uid END WHERE platform='zalo' AND (imei=? OR (? != '' AND uid=?))",
+                (c_json, enk_s, enk_s, ua_s, ua_s, uid_s, uid_s, imei_s, uid_s, uid_s),
             )
             conn.commit()
             conn.close()
