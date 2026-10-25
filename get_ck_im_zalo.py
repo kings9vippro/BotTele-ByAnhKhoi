@@ -1590,15 +1590,60 @@ class DirectTelegramBotRunner:
     def _get_available_txt_files(self):
         try:
             import app as _main_app
-            return _main_app.get_ordered_files_with_display_num()
+            files = _main_app.get_ordered_files_with_display_num()
+            if files:
+                return files
         except Exception:
-            up_dir = os.path.join(BASE_DIR, "uploads")
-            out = []
-            if os.path.exists(up_dir):
-                for idx, fn in enumerate(sorted(os.listdir(up_dir)), 1):
+            pass
+        out = []
+        seen = set()
+        for folder in (os.path.join(BASE_DIR, "presets"), os.path.join(BASE_DIR, "uploads")):
+            if os.path.isdir(folder):
+                for fn in sorted(os.listdir(folder)):
                     if fn.endswith(".txt"):
-                        out.append({"num": idx, "filename": fn})
-            return out
+                        clean_fn = fn[7:] if fn.startswith("preset_") else fn
+                        if clean_fn.lower() not in seen:
+                            seen.add(clean_fn.lower())
+                            fp = os.path.join(folder, fn)
+                            try:
+                                with open(fp, "r", encoding="utf-8", errors="ignore") as rf:
+                                    l_cnt = sum(1 for ln in rf if ln.strip())
+                            except Exception:
+                                l_cnt = 1
+                            out.append({
+                                "display_num": len(out) + 1,
+                                "num": len(out) + 1,
+                                "filename": clean_fn,
+                                "filepath": fp,
+                                "lines_count": max(1, l_cnt),
+                            })
+        return out
+
+    def _read_txt_file_blocks(self, file_name, mode="treo_nhay"):
+        try:
+            import app as _main_app
+            blocks = _main_app.get_blocks_from_file_query(file_name, mode=mode)
+            if blocks:
+                return blocks
+        except Exception:
+            pass
+        base_fn = os.path.basename(str(file_name or "nhay.txt"))
+        candidates = [
+            os.path.join(BASE_DIR, "uploads", base_fn),
+            os.path.join(BASE_DIR, "uploads", f"preset_{base_fn}"),
+            os.path.join(BASE_DIR, "presets", base_fn),
+        ]
+        for fpath in candidates:
+            if os.path.isfile(fpath):
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as rf:
+                        raw_c = rf.read()
+                    if mode == "treo_ngon":
+                        return [raw_c.strip()] if raw_c.strip() else []
+                    return [ln.strip() for ln in raw_c.splitlines() if ln.strip()]
+                except Exception:
+                    continue
+        return []
 
     def render_function_wizard(self, chat_id, message_id, user_id, fn_id):
         fn_meta = FUNCTION_MAP_BY_ID.get(fn_id)
@@ -1741,14 +1786,15 @@ class DirectTelegramBotRunner:
             self.edit_menu_message(chat_id, message_id, cap, reply_markup=kb)
             return
 
-        # Khởi tạo lựa chọn Wizard cho chiến dịch (chỉ trên các Acc thuộc quyền của user_id)
+        # Khởi tạo lựa chọn Wizard cho chiến dịch (Bắt buộc chọn File tệp .txt trước khi chạy)
         wiz = self.wizard_selections.get(user_id) or {}
         wiz["fn_id"] = fn_id
         wiz.setdefault("box_id", "ALL")
         wiz.setdefault("box_name", "Tất Cả Các Box (All)")
         wiz.setdefault("acc_id", "ALL")
         wiz.setdefault("acc_name", "Tất Cả Acc Của Bạn (Đa Acc)")
-        wiz.setdefault("file_name", fn_meta.get("file_hint") or "nhay.txt")
+        wiz.setdefault("file_name", "")
+        wiz.setdefault("file_selected", False)
         wiz.setdefault("custom_text", "")
         wiz.setdefault("tag_query", "")
         self.wizard_selections[user_id] = wiz
@@ -1757,62 +1803,89 @@ class DirectTelegramBotRunner:
         files = self._get_available_txt_files()
         vis_accs = get_user_visible_accounts(user_id, enabled_only=True)
         acc_cnt = len(vis_accs)
+        has_file_ready = bool((wiz.get("file_selected") and wiz.get("file_name")) or wiz.get("custom_text"))
 
-        kb_rows = [
-            [tg_btn(f"BẮT ĐẦU CHẠY: {fn_meta['label']}", f"runfn:{fn_id}", emoji_key="rocket")],
-            [
-                tg_btn(f"Box: {wiz['box_name'][:18]}", f"wiz_pickbox:{fn_id}", emoji_key="folder"),
-                tg_btn(f"Acc: {wiz['acc_name'][:18]}", f"wiz_pickacc:{fn_id}", emoji_key="users"),
-            ],
-        ]
+        kb_rows = []
+        if has_file_ready:
+            kb_rows.append([tg_btn(f"BẮT ĐẦU CHẠY: {fn_meta['label']}", f"runfn:{fn_id}", emoji_key="rocket")])
+        else:
+            kb_rows.append([tg_btn("⚠️ BƯỚC 1: HÃY CHỌN FILE (.TXT) BÊN DƯỚI TRƯỚC", f"runfn:{fn_id}", emoji_key="warn")])
+
         file_btns = []
-        for f_item in files[:6]:
+        for idx_f, f_item in enumerate(files[:10], 1):
             fn_s = f_item["filename"]
-            is_sel = (wiz.get("file_name") == fn_s and not wiz.get("custom_text"))
+            d_num = f_item.get("display_num") or f_item.get("num") or idx_f
+            is_sel = bool(wiz.get("file_selected") and wiz.get("file_name") == fn_s and not wiz.get("custom_text"))
+            btn_lbl = f"#{d_num}: {fn_s} (Đã Chọn)" if is_sel else f"Chọn #{d_num}: {fn_s}"
             file_btns.append(
-                tg_btn(fn_s, f"wiz_setfile:{fn_id}:{fn_s}", emoji_key="check" if is_sel else "download")
+                tg_btn(btn_lbl, f"wiz_setfile:{fn_id}:{fn_s}", emoji_key="check" if is_sel else "download")
             )
         for i in range(0, len(file_btns), 2):
             kb_rows.append(file_btns[i:i + 2])
 
         kb_rows.append([
+            tg_btn(f"Box: {wiz['box_name'][:18]}", f"wiz_pickbox:{fn_id}", emoji_key="folder"),
+            tg_btn(f"Acc: {wiz['acc_name'][:18]}", f"wiz_pickacc:{fn_id}", emoji_key="users"),
+        ])
+        kb_rows.append([
             tg_btn("Nhập Nội Dung / @Tag", f"wiz_customtxt:{fn_id}", emoji_key="sparkle"),
-            tg_btn("Dừng Khẩn Cấp (.ta)", "fn_stop_all_quick", emoji_key="stop"),
+            tg_btn("Dừng Tất Cả Lệnh Ngầm (.ta)", "fn_stop_all_quick", emoji_key="stop"),
         ])
         kb_rows.append([tg_btn("Quay lại Bảng Chức Năng", "tab_func_1", emoji_key="back")])
 
-        content_preview = (
-            f"Văn bản tự nhập ({len(wiz['custom_text'])} ký tự)"
-            if wiz.get("custom_text")
-            else f"File kịch bản <code>{wiz.get('file_name')}</code>"
-        )
+        if wiz.get("custom_text"):
+            content_preview = f"✅ Văn bản tự nhập ({len(wiz['custom_text'])} ký tự)"
+        elif wiz.get("file_selected") and wiz.get("file_name"):
+            content_preview = f"✅ Đã chọn File: <code>{wiz.get('file_name')}</code>"
+        else:
+            content_preview = "⚠️ <b>Chưa chọn File .txt (Bắt buộc chọn 1 File bên dưới trước!)</b>"
+
         tag_info = f"\n🏷️ Tag mục tiêu: <code>{wiz['tag_query']}</code>" if wiz.get("tag_query") else ""
         poll_speed_note = "\n⚡ Tốc độ Poll: <b>0.0s KHÔNG NGHỈ (Non-Stop Liên Tục)</b>" if mode == "nhay_poll" else ""
+        step_guide = (
+            f"{tg_anim('rocket', '👉')} <b>Đã chọn File kịch bản!</b> Bấm <b>BẮT ĐẦU CHẠY</b> để phang ngay:"
+            if has_file_ready
+            else f"{tg_anim('warn', '📂')} <b>BƯỚC 1 (BẮT BUỘC):</b> Hãy bấm chọn 1 <b>File tệp (.txt)</b> bên dưới trước khi bấm Bắt Đầu Chạy:"
+        )
 
         cap = (
             f"{tg_anim('gear', '⚙️')} <b>CẤU HÌNH: {fn_meta['label'].upper()}</b>\n"
             f"<i>{fn_meta['desc']}</i>\n\n"
             f"<blockquote>"
+            f"{tg_anim('download', '📂')} File tệp (.txt): {content_preview}\n"
             f"{tg_anim('users', '👥')} Tài khoản chạy: <b>{wiz['acc_name']}</b> ({acc_cnt} Acc khả dụng)\n"
-            f"{tg_anim('folder', '📦')} Mục tiêu: <b>{wiz['box_name']}</b> ({len(boxes)} Box)\n"
-            f"{tg_anim('download', '📄')} Nội dung: {content_preview}"
+            f"{tg_anim('folder', '📦')} Mục tiêu: <b>{wiz['box_name']}</b> ({len(boxes)} Box)"
             f"{tag_info}"
             f"{poll_speed_note}\n"
-            f"{tg_anim('magic', '🎨')} Màu chữ: <b>{'Đỏ Rực (db342e)' if fn_meta['color_mode'] == 'fixed' else 'Chữ Đổi Từng Màu (0% Trắng)'}</b>"
+            f"{tg_anim('magic', '🎨')} Màu chữ: <b>{'Đỏ Rực (db342e)' if fn_meta['color_mode'] == 'fixed' else 'Chữ Đổi Từng Màu Cầu Vồng (0% Trắng)'}</b>"
             f"</blockquote>\n\n"
-            f"{tg_anim('rocket', '👉')} Bấm <b>BẮT ĐẦU CHẠY</b> để phang ngay hoặc chọn Box/Acc/File bên dưới:"
+            f"{step_guide}"
         )
         self.edit_menu_message(chat_id, message_id, cap, reply_markup={"inline_keyboard": kb_rows})
 
-    def launch_wizard_campaign(self, chat_id, message_id, user_id, fn_id):
+    def launch_wizard_campaign(self, chat_id, message_id, user_id, fn_id, cb_id=None):
         fn_meta = FUNCTION_MAP_BY_ID.get(fn_id)
         if not fn_meta:
             return
         wiz = self.wizard_selections.get(user_id) or {}
+        custom_text = (wiz.get("custom_text") or "").strip()
+        file_selected = bool(wiz.get("file_selected") and wiz.get("file_name"))
+        if not file_selected and not custom_text:
+            if cb_id:
+                self.answer_callback(
+                    cb_id,
+                    "⚠️ Bắt buộc chọn trước 1 File tệp (.txt) bên dưới trước khi bấm Bắt Đầu Chạy!",
+                    show_alert=True,
+                )
+            self.render_function_wizard(chat_id, message_id, user_id, fn_id)
+            return
+
+        if cb_id:
+            self.answer_callback(cb_id, "🚀 Đang khởi chạy chiến dịch...")
+
         box_id = wiz.get("box_id") or "ALL"
         acc_sel = str(wiz.get("acc_id") or "ALL")
         file_name = wiz.get("file_name") or fn_meta.get("file_hint") or "nhay.txt"
-        custom_text = (wiz.get("custom_text") or "").strip()
         tag_query = (wiz.get("tag_query") or "").strip()
 
         try:
@@ -1848,20 +1921,22 @@ class DirectTelegramBotRunner:
                 )
                 return
 
-            raw_content = custom_text
-            if not raw_content:
-                fpath = os.path.join(BASE_DIR, "uploads", os.path.basename(file_name))
-                if os.path.exists(fpath):
-                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-                        raw_content = f.read()
-                else:
-                    raw_content = "Sủa mạnh lên con chó ngu"
-
             mode = fn_meta["mode"]
-            if mode == "treo_ngon":
-                blocks = [raw_content.strip()] if raw_content.strip() else ["Treo ngôn VIP"]
+            if custom_text:
+                if mode == "treo_ngon":
+                    blocks = [custom_text]
+                else:
+                    blocks = [ln.strip() for ln in custom_text.splitlines() if ln.strip()] or [custom_text]
             else:
-                blocks = [ln.strip() for ln in raw_content.splitlines() if ln.strip()] or [raw_content.strip()]
+                blocks = self._read_txt_file_blocks(file_name, mode=mode)
+                if not blocks:
+                    self.send_text(chat_id, f"⚠️ File <code>{file_name}</code> đang trống! Hãy chọn file khác.")
+                    return
+
+            # Dừng các tiến trình cũ đang chạy ngầm trước khi khởi chạy chiến dịch mới
+            _main_app.stop_tasks_for_thread(None)
+            with _main_app.SYSTEM_CFG_LOCK:
+                _main_app.SYSTEM_RUNTIME_CONFIG["selected_file"] = file_name
 
             if tag_query:
                 blocks = [f"{b} {tag_query}" for b in blocks]
@@ -2304,8 +2379,7 @@ class DirectTelegramBotRunner:
 
         if data.startswith("runfn:"):
             fn_id = data.split(":", 1)[1]
-            self.answer_callback(cb_id, "🚀 Đang khởi chạy chiến dịch...")
-            self.launch_wizard_campaign(chat_id, msg_id, user_id, fn_id)
+            self.launch_wizard_campaign(chat_id, msg_id, user_id, fn_id, cb_id=cb_id)
             return
 
         if data.startswith("wiz_setfile:"):
@@ -2313,8 +2387,15 @@ class DirectTelegramBotRunner:
             fn_id, file_s = parts[1], parts[2]
             wiz = self.wizard_selections.setdefault(user_id, {})
             wiz["file_name"] = file_s
+            wiz["file_selected"] = True
             wiz["custom_text"] = ""
-            self.answer_callback(cb_id, f"Đã chọn file {file_s}")
+            try:
+                import app as _main_app
+                with _main_app.SYSTEM_CFG_LOCK:
+                    _main_app.SYSTEM_RUNTIME_CONFIG["selected_file"] = file_s
+            except Exception:
+                pass
+            self.answer_callback(cb_id, f"✅ Đã chọn file: {file_s}")
             self.render_function_wizard(chat_id, msg_id, user_id, fn_id)
             return
 
@@ -3064,11 +3145,32 @@ class DirectTelegramBotRunner:
             dest = os.path.join(up_dir, safe_fn)
             with open(dest, "wb") as f:
                 f.write(raw_bytes)
-            lines_cnt = len(raw_bytes.decode("utf-8", errors="ignore").splitlines())
+            lines_cnt = max(1, sum(1 for ln in raw_bytes.decode("utf-8", errors="ignore").splitlines() if ln.strip()))
+            try:
+                conn = _open_db()
+                existing_f = conn.execute("SELECT id FROM files WHERE filename=?", (safe_fn,)).fetchone()
+                if existing_f:
+                    conn.execute("UPDATE files SET filepath=?, lines_count=?, created_at=? WHERE id=?", (dest, lines_cnt, time.time(), existing_f[0]))
+                else:
+                    conn.execute("INSERT INTO files (filename, filepath, lines_count, created_at) VALUES (?, ?, ?, ?)", (safe_fn, dest, lines_cnt, time.time()))
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+            wiz = self.wizard_selections.setdefault(user_id, {})
+            wiz["file_name"] = safe_fn
+            wiz["file_selected"] = True
+            wiz["custom_text"] = ""
+            try:
+                import app as _main_app
+                with _main_app.SYSTEM_CFG_LOCK:
+                    _main_app.SYSTEM_RUNTIME_CONFIG["selected_file"] = safe_fn
+            except Exception:
+                pass
             self.send_text(
                 chat_id,
-                f"✅ <b>Đã nạp file kịch bản <code>{safe_fn}</code> ({lines_cnt} dòng) vào Kho File!</b>\n"
-                f"👉 Mở <code>/menu</code> để chọn file này và chạy ngay.",
+                f"✅ <b>Đã nạp & tự động chọn trước file kịch bản <code>{safe_fn}</code> ({lines_cnt} dòng)!</b>\n"
+                f"👉 Mở <code>/menu</code> để bấm chạy ngay.",
                 reply_to=msg_id,
             )
         except Exception as e:
