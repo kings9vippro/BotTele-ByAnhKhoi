@@ -84,6 +84,19 @@ TG_ANIM_EMOJI_MAP = {
 _TG_CUSTOM_EMOJI_RE = re.compile(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", re.DOTALL)
 
 
+TG_ANIM_EMOJI_MAP.update({
+    "zzz":     ("5368324170671202286", "💤"),
+    "mega":    ("5397782960512444700", "📢"),
+    "user":    ("5373141891321699086", "👤"),
+    "cart":    ("5445284980978621387", "🛒"),
+    "chart":   ("5438496463044752972", "📊"),
+    "down":    ("5427009714745517609", "📥"),
+    "send":    ("5431449001532594346", "✈️"),
+    "cookie":  ("5465665476971471368", "🍪"),
+    "lock":    ("5373141891321699086", "🔐"),
+})
+
+
 def tg_anim(key: str, fallback: str = "") -> str:
     """Trả về thẻ HTML <tg-emoji emoji-id="...">...</tg-emoji> chuẩn Telegram Animated Emoji."""
     em_id, def_fb = TG_ANIM_EMOJI_MAP.get(key, ("5431449001532594346", fallback or "⚡"))
@@ -91,10 +104,49 @@ def tg_anim(key: str, fallback: str = "") -> str:
     return f'<tg-emoji emoji-id="{em_id}">{fb_use}</tg-emoji>'
 
 
+def tg_btn(text: str, callback_data: str = None, url: str = None, emoji_key: str = None, emoji_id: str = None) -> dict:
+    """Tạo nút bấm InlineKeyboardButton kèm icon_custom_emoji_id (giống Tphat Store bot 83b86043.jpeg)."""
+    btn = {"text": str(text)}
+    if callback_data is not None:
+        btn["callback_data"] = str(callback_data)
+    if url is not None:
+        btn["url"] = str(url)
+    eff_eid = emoji_id
+    if not eff_eid and emoji_key and emoji_key in TG_ANIM_EMOJI_MAP:
+        eff_eid = TG_ANIM_EMOJI_MAP[emoji_key][0]
+    if eff_eid:
+        btn["icon_custom_emoji_id"] = str(eff_eid)
+    return btn
+
+
 def strip_tg_anim_tags(html_text: str) -> str:
     if not html_text or "<tg-emoji" not in html_text:
         return html_text
     return _TG_CUSTOM_EMOJI_RE.sub(r"\1", html_text)
+
+
+def strip_button_custom_emojis(reply_markup):
+    """Gỡ bỏ icon_custom_emoji_id khỏi inline_keyboard nếu môi trường Bot trả mã 400 BUTTON_CUSTOM_EMOJI_INVALID."""
+    if not reply_markup:
+        return reply_markup
+    is_json_str = isinstance(reply_markup, str)
+    try:
+        rm_obj = json.loads(reply_markup) if is_json_str else dict(reply_markup)
+        if isinstance(rm_obj, dict) and "inline_keyboard" in rm_obj:
+            new_kb = []
+            for row in rm_obj["inline_keyboard"]:
+                new_row = []
+                for btn in row:
+                    if isinstance(btn, dict):
+                        b_copy = {k: v for k, v in btn.items() if k != "icon_custom_emoji_id"}
+                        new_row.append(b_copy)
+                    else:
+                        new_row.append(btn)
+                new_kb.append(new_row)
+            rm_obj["inline_keyboard"] = new_kb
+        return json.dumps(rm_obj, ensure_ascii=False) if is_json_str else rm_obj
+    except Exception:
+        return reply_markup
 
 # DANH SÁCH 32 CHỨC NĂNG VIP CHIA 4 TRANG (8 MỤC / TRANG, 2 CỘT / HÀNG GIỐNG Y HỆT ẢNH MẪU)
 FUNCTION_ITEMS_32 = [
@@ -109,34 +161,34 @@ FUNCTION_ITEMS_32 = [
     {"id": "fn_antan",         "label": "💎 Nhây Tag Tên Ẩn",    "mode": "antan",       "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Tag tên thật báo chuông nhưng ẩn chữ @Tên trên khung chat", "hide_tag_name": True, "emoji_id": "5472164874886846699"},
 
     # Trang 2/4
-    {"id": "fn_sieu_xa",       "label": "🚀 Siêu Xả Đa Box",     "mode": "fast",        "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Siêu xả đồng loạt đa nhóm tốc độ cao chống cấm chat"},
-    {"id": "fn_combo3",        "label": "⚡ Combo 3 Câu/Nhịp",   "mode": "combo3",      "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Xả liên thanh 3 câu mỗi nhịp đổi màu từng từ"},
-    {"id": "fn_nhay_2c",       "label": "🔥 Nhây Gộp 2 Câu",     "mode": "nhay2c",      "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "2c.txt",          "desc": "Nhây gộp 2 câu liên hoàn (2c.txt) đổi màu từng chữ"},
-    {"id": "fn_treo_so",       "label": "🔢 Treo Số Liên Hoàn",  "mode": "treo_so",     "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "so.txt",          "desc": "Treo đếm số liên hoàn (so.txt) đổi màu từng chữ"},
-    {"id": "fn_so_tag",        "label": "🎯 Số Kèm Tag",         "mode": "so_tag",      "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "so.txt",          "desc": "Treo số kèm Tag thẳng tên mục tiêu"},
-    {"id": "fn_faketen",       "label": "👑 Số Fake Tên",        "mode": "faketen",     "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "so.txt",          "desc": "Treo số giả danh tên đối phương"},
-    {"id": "fn_nhay_icon",     "label": "🌪️ Bão Icon VIP",      "mode": "nhayicon",    "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhayicon.txt",    "desc": "Xả bão ký hiệu & icon VIP (nhayicon.txt)"},
-    {"id": "fn_chui",          "label": "💥 Nhây Sát Thương",    "mode": "chui",        "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "chui.txt",        "desc": "Nhây sát thương cực mạnh (chui.txt) đổi màu từng từ"},
+    {"id": "fn_sieu_xa",       "label": "🚀 Siêu Xả Đa Box",     "mode": "fast",        "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Siêu xả đồng loạt đa nhóm tốc độ cao chống cấm chat (.xa)", "emoji_id": "5445284980978621387"},
+    {"id": "fn_combo3",        "label": "⚡ Combo 3 Câu/Nhịp",   "mode": "combo3",      "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Xả liên thanh 3 câu mỗi nhịp đổi màu từng từ (.combo)", "emoji_id": "5431449001532594346"},
+    {"id": "fn_nhay_2c",       "label": "🔥 Nhây Gộp 2 Câu",     "mode": "nhay2c",      "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "2c.txt",          "desc": "Nhây gộp 2 câu liên hoàn (2c.txt) đổi màu từng chữ (.2c)", "emoji_id": "5424972470023104089"},
+    {"id": "fn_treo_so",       "label": "🔢 Treo Số Liên Hoàn",  "mode": "treo_so",     "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "so.txt",          "desc": "Treo đếm số liên hoàn (so.txt) đổi màu từng chữ (.so)", "emoji_id": "5438496463044752972"},
+    {"id": "fn_so_tag",        "label": "🎯 Số Kèm Tag",         "mode": "so_tag",      "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "so.txt",          "desc": "Treo số kèm Tag thẳng tên mục tiêu (.sotag)", "emoji_id": "5350351256923673521"},
+    {"id": "fn_faketen",       "label": "👑 Số Fake Tên",        "mode": "faketen",     "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "so.txt",          "desc": "Treo số giả danh tên đối phương (.faketen)", "emoji_id": "5219805704906270925"},
+    {"id": "fn_nhay_icon",     "label": "🌪️ Bão Icon VIP",      "mode": "nhayicon",    "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhayicon.txt",    "desc": "Xả bão ký hiệu & icon VIP (.nhayicon)", "emoji_id": "5368324170671202286"},
+    {"id": "fn_chui",          "label": "💥 Nhây Sát Thương",    "mode": "chui",        "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "chui.txt",        "desc": "Nhây sát thương cực mạnh (chui.txt) đổi màu từng từ (.chui)", "emoji_id": "5424972470023104089"},
 
     # Trang 3/4
-    {"id": "fn_nhay_poll",     "label": "📊 Tạo Poll Tự Động",   "mode": "nhay_poll",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Tạo bình chọn (Poll) tự động liên hoàn trong Box"},
-    {"id": "fn_typing",        "label": "⌨️ Hiệu Ứng Typing",    "mode": "typing_loop", "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Giả lập đang soạn tin nhắn liên tục chống khóa chat"},
-    {"id": "fn_tenbox",        "label": "✏️ Đổi Tên Box",        "mode": "nhay_tenbox", "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhaynamebox.txt", "desc": "Đổi tên nhóm liên hoàn theo kịch bản (nhaynamebox.txt)"},
-    {"id": "fn_todo",          "label": "📋 Giao Việc To-Do",    "mode": "zalo_todo",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Giao việc Zalo To-Do nhắc nhở thẳng mục tiêu"},
-    {"id": "fn_bankcard",      "label": "🏦 Thẻ Ngân Hàng",      "mode": "zalo_bank",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Gửi thẻ ngân hàng VietQR tự động vào nhóm"},
-    {"id": "fn_sharecontact",  "label": "🪪 Gửi Danh Thiếp",     "mode": "share_contact","color_mode": "word_rainbow","fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Chia sẻ danh thiếp (Contact Card) vào nhóm"},
-    {"id": "fn_theme",         "label": "🎨 Đổi Nền MQTT",       "mode": "nen_mqtt",    "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Đổi chủ đề nền nhóm tự động"},
-    {"id": "fn_sharelink",     "label": "🔗 Chia Sẻ Link",       "mode": "share_link",  "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo chia sẻ liên kết kèm tiêu đề nổi bật"},
+    {"id": "fn_nhay_poll",     "label": "📊 Treo Poll 0s (Không Nghỉ)", "mode": "nhay_poll", "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Tạo bình chọn (Poll) tự động liên hoàn 0.0s KHÔNG CÓ THỜI GIAN NGHỈ (.nhaypoll)", "emoji_id": "5438496463044752972"},
+    {"id": "fn_typing",        "label": "⌨️ Hiệu Ứng Typing",    "mode": "typing_loop", "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Giả lập đang soạn tin nhắn liên tục chống khóa chat (.nhaytyping)", "emoji_id": "5431449001532594346"},
+    {"id": "fn_tenbox",        "label": "✏️ Đổi Tên Box",        "mode": "nhay_tenbox", "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhaynamebox.txt", "desc": "Đổi tên nhóm liên hoàn theo kịch bản (.nhaynamebox)", "emoji_id": "5368324170671202286"},
+    {"id": "fn_todo",          "label": "📋 Giao Việc To-Do",    "mode": "zalo_todo",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Giao việc Zalo To-Do nhắc nhở thẳng mục tiêu (.todo)", "emoji_id": "5206607081334906820"},
+    {"id": "fn_bankcard",      "label": "🏦 Thẻ Ngân Hàng",      "mode": "zalo_bank",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Gửi thẻ ngân hàng VietQR tự động vào nhóm (.bank)", "emoji_id": "5472164874886846699"},
+    {"id": "fn_sharecontact",  "label": "🪪 Gửi Danh Thiếp",     "mode": "share_contact","color_mode": "word_rainbow","fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Chia sẻ danh thiếp (Contact Card) vào nhóm (.card)", "emoji_id": "5427009714745517609"},
+    {"id": "fn_theme",         "label": "🎨 Đổi Nền MQTT",       "mode": "nen_mqtt",    "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Đổi chủ đề nền nhóm tự động (.theme)", "emoji_id": "5359785904535774578"},
+    {"id": "fn_sharelink",     "label": "🔗 Chia Sẻ Link",       "mode": "share_link",  "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo chia sẻ liên kết kèm tiêu đề nổi bật (.sharelink)", "emoji_id": "5397782960512444700"},
 
     # Trang 4/4
-    {"id": "fn_setname",       "label": "🏷️ Đổi Biệt Danh",      "mode": "set_nickname","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhaynamebox.txt", "desc": "Đổi biệt danh thành viên trong nhóm liên hoàn"},
-    {"id": "fn_chan",          "label": "🛡️ Chặn & Bám Sát",    "mode": "special_chan","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Tự động vả lại đối thủ 0ms ngay khi họ vừa nhắn (.chan)"},
-    {"id": "fn_proxy",         "label": "🌐 Xoay Vòng Proxy",    "mode": "special_prx", "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "",                "desc": "Quản lý & kiểm tra dàn Proxy chống nghẽn đường truyền"},
-    {"id": "fn_antiban_box",   "label": "🛡️ Anti Cấm Chat Box",  "mode": "special_anti","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "",                "desc": "Cấu hình Lá Chắn Chống Zalo Cấm Chat Box (Typing + Pacing)"},
-    {"id": "fn_delay",         "label": "⏱️ Chỉnh Tốc Độ Delay", "mode": "special_delay","color_mode": "word_rainbow","fixed_color": "red",    "file_hint": "",                "desc": "Chỉnh tốc độ gửi tin (0s, 0.3s, 0.5s, 1s, 2s, 5s)"},
-    {"id": "fn_colormode",     "label": "🎨 Chế Độ Màu Chữ",     "mode": "special_color","color_mode": "word_rainbow","fixed_color": "red",    "file_hint": "",                "desc": "Chọn chế độ Đổi Màu Từng Chữ hoặc Màu Cố Định"},
-    {"id": "fn_fontstyle",     "label": "🔤 Cỡ & Kiểu Chữ",      "mode": "special_font","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "",                "desc": "Chọn cỡ chữ To Đậm (f_18), Vừa Đậm (f_15), Xen Kẽ"},
-    {"id": "fn_stop_all",      "label": "🛑 Dừng Tất Cả (.ta)",  "mode": "special_stop","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "",                "desc": "Dừng khẩn cấp toàn bộ các chiến dịch đang chạy"},
+    {"id": "fn_setname",       "label": "🏷️ Đổi Biệt Danh",      "mode": "set_nickname","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhaynamebox.txt", "desc": "Đổi biệt danh thành viên trong nhóm liên hoàn (.setname)", "emoji_id": "5386367538735104399"},
+    {"id": "fn_chan",          "label": "🛡️ Chặn & Bám Sát",    "mode": "special_chan","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Tự động vả lại đối thủ 0ms ngay khi họ vừa nhắn (.chan)", "emoji_id": "5373141891321699086"},
+    {"id": "fn_proxy",         "label": "🌐 Xoay Vòng Proxy",    "mode": "special_prx", "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "",                "desc": "Quản lý & kiểm tra dàn Proxy chống nghẽn đường truyền (.prx)", "emoji_id": "5397782960512444700"},
+    {"id": "fn_antiban_box",   "label": "🛡️ Anti Cấm Chat Box",  "mode": "special_anti","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "",                "desc": "Cấu hình Lá Chắn Chống Zalo Cấm Chat Box (.ab)", "emoji_id": "5373141891321699086"},
+    {"id": "fn_delay",         "label": "⏱️ Chỉnh Tốc Độ Delay", "mode": "special_delay","color_mode": "word_rainbow","fixed_color": "red",    "file_hint": "",                "desc": "Chỉnh tốc độ gửi tin (0.0s, 0.05s, 0.1s, 0.2s, 0.5s, 1s) (.d)", "emoji_id": "5431449001532594346"},
+    {"id": "fn_colormode",     "label": "🎨 Chế Độ Màu Chữ",     "mode": "special_color","color_mode": "word_rainbow","fixed_color": "red",    "file_hint": "",                "desc": "Chọn chế độ Đổi Màu Từng Chữ hoặc Màu Cố Định (.mau)", "emoji_id": "5359785904535774578"},
+    {"id": "fn_fontstyle",     "label": "🔤 Cỡ & Kiểu Chữ",      "mode": "special_font","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "",                "desc": "Chọn cỡ chữ To Đậm (f_18), Vừa Đậm (f_15), Xen Kẽ (.font)", "emoji_id": "5368324170671202286"},
+    {"id": "fn_stop_all",      "label": "🛑 Dừng Tất Cả (.ta)",  "mode": "special_stop","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "",                "desc": "Dừng khẩn cấp toàn bộ các chiến dịch đang chạy (.ta)", "emoji_id": "5210952531676504517"},
 ]
 
 FUNCTION_MAP_BY_ID = {item["id"]: item for item in FUNCTION_ITEMS_32}
@@ -298,6 +350,58 @@ def _ensure_auth_tables(conn):
 
 def is_root_admin(user_id) -> bool:
     return str(user_id or "").strip() == ROOT_ADMIN_ID
+
+
+def can_user_access_account(user_id, owner_tg_id) -> bool:
+    """Phân quyền Cookie/Acc nghiêm ngặt:
+    - Admin chính (8827605973) có quyền tối cao: xem, kiểm tra, lấy token và điều khiển TẤT CẢ Cookie/Acc trên hệ thống!
+    - Người được Admin thêm vào Bot: CHỈ xem, kiểm tra, lấy token và điều khiển được đúng các Cookie/Acc do chính họ quét hoặc nạp vào (owner_tg_id == user_id)!"""
+    if is_root_admin(user_id):
+        return True
+    u_s = str(user_id or "").strip()
+    o_s = str(owner_tg_id or "").strip()
+    return bool(u_s and o_s and u_s == o_s)
+
+
+def get_user_visible_accounts(user_id, enabled_only=False, platform=None):
+    """Trả về danh sách tài khoản mà user_id được phép nhìn thấy và sử dụng."""
+    out = []
+    try:
+        conn = _open_db()
+        try:
+            conn.execute("ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''")
+        except Exception:
+            pass
+        rows = conn.execute(
+            "SELECT id, name, platform, uid, imei, cookies, user_agent, zpw_enk, chat_cmd_enabled, enabled, token, is_bot, owner_tg_id FROM accounts ORDER BY id DESC"
+        ).fetchall()
+        conn.close()
+        for r in rows:
+            aid, aname, aplat, auid, aimei, ack, aua, aenk, cmd_on, en_on, atok, is_b, owner_id = r
+            if enabled_only and not (en_on is None or int(en_on)):
+                continue
+            if platform and str(aplat or "zalo").lower() != str(platform).lower():
+                continue
+            if not can_user_access_account(user_id, owner_id):
+                continue
+            out.append({
+                "id": aid,
+                "name": aname or f"Acc #{aid}",
+                "platform": (aplat or "zalo").lower(),
+                "uid": auid or "",
+                "imei": aimei or "",
+                "cookies": ack or "{}",
+                "user_agent": aua or "",
+                "zpw_enk": aenk or "",
+                "chat_cmd_enabled": 1 if (cmd_on is None or int(cmd_on)) else 0,
+                "enabled": 1 if (en_on is None or int(en_on)) else 0,
+                "token": atok or "",
+                "is_bot": int(is_b or 0),
+                "owner_tg_id": str(owner_id or ""),
+            })
+    except Exception:
+        pass
+    return out
 
 
 def is_telegram_user_authorized(user_id, username="", auto_claim_first_owner=False) -> bool:
@@ -484,8 +588,8 @@ def _set_db_setting(key, value):
         pass
 
 
-def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="", user_agent="", pc_name=""):
-    """Lưu tài khoản Zalo (quét QR hoặc nhập Cookie + IMEI) vào SQLite database.db & kích hoạt luồng lắng nghe lệnh in-chat (.menu, .n, .g, .t) 24/7 trên Đa Acc."""
+def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="", user_agent="", pc_name="", owner_tg_id=""):
+    """Lưu tài khoản Zalo (quét QR hoặc nhập Cookie + IMEI) vào SQLite database.db, gắn quyền sở hữu owner_tg_id & kích hoạt luồng lắng nghe 32 lệnh in-chat (.menu, .n, .g, .nhaypoll, .t...) 24/7 trên Đa Acc."""
     try:
         clean_ck = {
             str(k): str(v)
@@ -501,8 +605,9 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
         uid_str = str(uid or "").strip()
         enk_str = str(zpw_enk or "").strip()
         dname_str = str(display_name or "").strip()
+        owner_str = str(owner_tg_id or "").strip()
 
-        # Nếu nhập Cookie + IMEI mà chưa có zpw_enk hoặc uid -> tự động lấy khóa phiên zpw_enk & UID thật ngay lập tức
+        # 1. Nếu nhập Cookie + IMEI mà chưa có zpw_enk hoặc uid -> tự động lấy khóa phiên zpw_enk & UID thật ngay lập tức
         if imei_str and clean_ck and (not enk_str or not uid_str):
             try:
                 chk = check_zalo_cookie_imei_live(imei_str, clean_ck, zpw_enk=enk_str, user_agent=ua, uid=uid_str, db_path=DB_PATH)
@@ -516,6 +621,20 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
                     uid_str = str(chk["uid"]).strip()
                 if chk.get("display_name") and (not dname_str or dname_str.startswith("Zalo_")):
                     dname_str = str(chk["display_name"]).strip()
+            except Exception:
+                pass
+
+        # 2. Dự phòng trích xuất trực tiếp qua Zalo.get_pooled_client để đảm bảo 100% có UID + zpw_enk khi thêm Cookie + IMEI
+        if imei_str and clean_ck and (not enk_str or not uid_str):
+            try:
+                import app as _main_app
+                zc_init = _main_app.Zalo.get_pooled_client(
+                    imei_str, clean_ck, user_agent=ua, zpw_enk_hint=enk_str, uid_hint=uid_str
+                )
+                if getattr(zc_init, "uid", None) and not uid_str:
+                    uid_str = str(zc_init.uid).strip()
+                if getattr(zc_init, "secret_key", None) and not enk_str:
+                    enk_str = str(zc_init.secret_key).strip()
             except Exception:
                 pass
 
@@ -536,7 +655,8 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
                 enabled INTEGER DEFAULT 1,
                 uid TEXT DEFAULT '',
                 zpw_enk TEXT DEFAULT '',
-                user_agent TEXT DEFAULT ''
+                user_agent TEXT DEFAULT '',
+                owner_tg_id TEXT DEFAULT ''
             )"""
         )
         for col_sql in (
@@ -547,6 +667,7 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
             "ALTER TABLE accounts ADD COLUMN uid TEXT DEFAULT ''",
             "ALTER TABLE accounts ADD COLUMN zpw_enk TEXT DEFAULT ''",
             "ALTER TABLE accounts ADD COLUMN user_agent TEXT DEFAULT ''",
+            "ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''",
         ):
             try:
                 conn.execute(col_sql)
@@ -557,36 +678,40 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
         existing = None
         if uid_str:
             existing = cur.execute(
-                "SELECT id FROM accounts WHERE platform='zalo' AND uid=?", (uid_str,)
+                "SELECT id, owner_tg_id FROM accounts WHERE platform='zalo' AND uid=?", (uid_str,)
             ).fetchone()
         if not existing and imei_str:
             existing = cur.execute(
-                "SELECT id FROM accounts WHERE platform='zalo' AND imei=?", (imei_str,)
+                "SELECT id, owner_tg_id FROM accounts WHERE platform='zalo' AND imei=?", (imei_str,)
             ).fetchone()
 
         acc_label = dname_str or f"Zalo_{(uid_str or imei_str)[-4:]}"
         if existing:
             acc_id = existing[0]
+            old_owner = str(existing[1] or "").strip()
+            eff_owner = owner_str if owner_str else (old_owner or ROOT_ADMIN_ID)
             cur.execute(
                 """UPDATE accounts
                    SET name=?, imei=?, cookies=?, uid=CASE WHEN ? != '' THEN ? ELSE uid END,
                        zpw_enk=CASE WHEN ? != '' THEN ? ELSE zpw_enk END,
-                       user_agent=?, chat_cmd_enabled=1, cmd_prefix='.', allow_all_cmd=0, enabled=1
+                       user_agent=?, chat_cmd_enabled=1, cmd_prefix='.', allow_all_cmd=0, enabled=1,
+                       owner_tg_id=?
                    WHERE id=?""",
-                (acc_label, imei_str, cookies_json, uid_str, uid_str, enk_str, enk_str, ua, acc_id),
+                (acc_label, imei_str, cookies_json, uid_str, uid_str, enk_str, enk_str, ua, eff_owner, acc_id),
             )
         else:
+            eff_owner = owner_str or ROOT_ADMIN_ID
             cur.execute(
-                """INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, uid, zpw_enk, user_agent)
-                   VALUES (?, ?, ?, 'zalo', '', 0, 1, '.', 0, 1, ?, ?, ?)""",
-                (acc_label, imei_str, cookies_json, uid_str, enk_str, ua),
+                """INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, uid, zpw_enk, user_agent, owner_tg_id)
+                   VALUES (?, ?, ?, 'zalo', '', 0, 1, '.', 0, 1, ?, ?, ?, ?)""",
+                (acc_label, imei_str, cookies_json, uid_str, enk_str, ua, eff_owner),
             )
             acc_id = cur.lastrowid
 
         conn.commit()
         conn.close()
 
-        # Đồng bộ ngay vào Vault, ZaloPCSessionKeeper, OWNER_UIDS_CACHE & ZaloRealtimeListener để acc sài lệnh .menu, .n, .g ngay lập tức!
+        # Đồng bộ ngay vào Vault, ZaloPCSessionKeeper, OWNER_UIDS_CACHE & ZaloRealtimeListener để acc sài được trọn bộ 32 lệnh (.menu, .treodo, .damau, .nhaypoll, .n, .g, .t...) ngay lập tức!
         try:
             ZaloPCSessionKeeper.register_and_keep_alive(
                 uid=uid_str or imei_str,
@@ -611,6 +736,7 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
                     cookies_dict=clean_ck,
                     zpw_enk=enk_str,
                     user_agent=ua,
+                    owner_tg_id=eff_owner,
                 )
             if uid_str:
                 _main_app.OWNER_UIDS_CACHE.add(uid_str)
@@ -623,19 +749,38 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
             if hasattr(_main_app, "sync_all_zalo_listeners"):
                 _main_app.sync_all_zalo_listeners()
 
-            # Khởi động ấm (pre-warm) danh sách nhóm của Acc trong luồng nền để gõ lệnh ở bất kỳ Box nào cũng ăn ngay 0ms
+            # Khởi động ấm (pre-warm) danh sách nhóm & phiên Zalo.get_pooled_client trong luồng nền để gõ 32 lệnh ở bất kỳ Box nào cũng ăn ngay 0ms
             def _warm_acc_groups():
                 try:
                     zc = _main_app.Zalo.get_pooled_client(
                         imei_str, clean_ck, user_agent=ua, zpw_enk_hint=enk_str, uid_hint=uid_str
                     )
-                    if zc.uid:
-                        _main_app.OWNER_UIDS_CACHE.add(str(zc.uid))
+                    resolved_u = str(getattr(zc, "uid", "") or uid_str).strip()
+                    resolved_enk = str(getattr(zc, "secret_key", "") or enk_str).strip()
+                    if resolved_u:
+                        _main_app.OWNER_UIDS_CACHE.add(resolved_u)
+                        if hasattr(_main_app, "add_authorized_user"):
+                            _main_app.add_authorized_user(resolved_u, acc_label)
+                        if not uid_str or (resolved_enk and not enk_str):
+                            try:
+                                c_up = _open_db()
+                                c_up.execute(
+                                    "UPDATE accounts SET uid=CASE WHEN uid='' THEN ? ELSE uid END, zpw_enk=CASE WHEN zpw_enk='' THEN ? ELSE zpw_enk END WHERE id=?",
+                                    (resolved_u, resolved_enk, acc_id)
+                                )
+                                c_up.commit()
+                                c_up.close()
+                                if hasattr(_main_app, "refresh_accounts_ram_cache"):
+                                    _main_app.refresh_accounts_ram_cache()
+                                if hasattr(_main_app, "sync_all_zalo_listeners"):
+                                    _main_app.sync_all_zalo_listeners()
+                            except Exception:
+                                pass
                         gmap = zc.get_grid_ver_map() or {}
                         for gk in gmap.keys():
                             gs = str(gk).split("_")[0].strip()
-                            if gs and gs != str(zc.uid):
-                                _main_app.KNOWN_GROUPS_BY_ACC[str(zc.uid)].add(gs)
+                            if gs and gs != resolved_u:
+                                _main_app.KNOWN_GROUPS_BY_ACC[resolved_u].add(gs)
                                 _main_app.ALL_KNOWN_ZALO_GROUP_IDS.add(gs)
                 except Exception:
                     pass
@@ -670,10 +815,11 @@ def parse_imei_and_cookie_from_text(raw_text, extra_cookies_text=""):
     return imei_clean, cookies_dict, meta
 
 
-def sync_and_keepalive_tokens_to_db(raw_text):
+def sync_and_keepalive_tokens_to_db(raw_text, owner_tg_id=""):
     saved_items = []
     if not raw_text:
         return saved_items
+    owner_str = str(owner_tg_id or ROOT_ADMIN_ID).strip()
 
     for m in DISCORD_TOKEN_RE.finditer(raw_text):
         tok = m.group(1).strip()
@@ -698,6 +844,10 @@ def sync_and_keepalive_tokens_to_db(raw_text):
                 uid = str(u.get("id") or "")
                 uname = u.get("global_name") or u.get("username") or f"Discord_{uid[-4:]}"
                 conn = _open_db()
+                try:
+                    conn.execute("ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''")
+                except Exception:
+                    pass
                 cur = conn.cursor()
                 ex = cur.execute(
                     "SELECT id FROM accounts WHERE platform='discord' AND (token=? OR uid=?)",
@@ -706,13 +856,13 @@ def sync_and_keepalive_tokens_to_db(raw_text):
                 if ex:
                     acc_id = ex[0]
                     cur.execute(
-                        "UPDATE accounts SET name=?, token=?, is_bot=?, uid=?, enabled=1 WHERE id=?",
-                        (uname, tok, is_bot, uid, acc_id),
+                        "UPDATE accounts SET name=?, token=?, is_bot=?, uid=?, enabled=1, owner_tg_id=? WHERE id=?",
+                        (uname, tok, is_bot, uid, owner_str, acc_id),
                     )
                 else:
                     cur.execute(
-                        "INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, uid, enabled) VALUES (?, '', '{}', 'discord', ?, ?, ?, 1)",
-                        (uname, tok, is_bot, uid),
+                        "INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, uid, enabled, owner_tg_id) VALUES (?, '', '{}', 'discord', ?, ?, ?, 1, ?)",
+                        (uname, tok, is_bot, uid, owner_str),
                     )
                     acc_id = cur.lastrowid
                 conn.commit()
@@ -727,6 +877,10 @@ def sync_and_keepalive_tokens_to_db(raw_text):
         fb_name = f"FB_{uid[-4:]}" if uid else "Messenger_Acc"
         try:
             conn = _open_db()
+            try:
+                conn.execute("ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''")
+            except Exception:
+                pass
             cur = conn.cursor()
             ex = cur.execute(
                 "SELECT id FROM accounts WHERE platform='messenger' AND uid=?", (uid,)
@@ -734,12 +888,12 @@ def sync_and_keepalive_tokens_to_db(raw_text):
             if ex:
                 acc_id = ex[0]
                 cur.execute(
-                    "UPDATE accounts SET cookies=?, enabled=1 WHERE id=?", (raw_text.strip(), acc_id)
+                    "UPDATE accounts SET cookies=?, enabled=1, owner_tg_id=? WHERE id=?", (raw_text.strip(), owner_str, acc_id)
                 )
             else:
                 cur.execute(
-                    "INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, uid, enabled) VALUES (?, '', ?, 'messenger', '', 0, ?, 1)",
-                    (fb_name, raw_text.strip(), uid),
+                    "INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, uid, enabled, owner_tg_id) VALUES (?, '', ?, 'messenger', '', 0, ?, 1, ?)",
+                    (fb_name, raw_text.strip(), uid, owner_str),
                 )
                 acc_id = cur.lastrowid
             conn.commit()
@@ -880,12 +1034,12 @@ class FacebookCookieGetter:
 
 
 class DirectTelegramBotRunner:
-    """Bộ điều khiển trung tâm BOT TREO 4APP 🇻🇳 qua Telegram (Giao diện Video + 3 Tab 32 Item + Phân quyền ID + Anti-Ban Box)."""
+    """Bộ điều khiển trung tâm BOT TREO 4APP 🇻🇳 qua Telegram (Giao diện Card Quote + Custom Emoji giống Tphat Store + Phân quyền Admin/User độc lập + Treo Poll 0s)."""
 
     @staticmethod
     def _create_isolated_session():
         s = requests.Session()
-        adapter = HTTPAdapter(pool_connections=32, pool_maxsize=64, max_retries=1)
+        adapter = HTTPAdapter(pool_connections=48, pool_maxsize=96, max_retries=1)
         s.mount("https://", adapter)
         s.mount("http://", adapter)
         return s
@@ -908,9 +1062,11 @@ class DirectTelegramBotRunner:
         self.started_at = time.time()
         self.last_poll_ok_ts = time.time()
         self.poll_thread = None
-        self.executor = ThreadPoolExecutor(max_workers=24, thread_name_prefix="TgWorker")
+        self.executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="TgFastWorker")
         self._cached_welcome_file_id = _get_db_setting("tg_welcome_file_id", "")
         self._cached_welcome_kind = _get_db_setting("tg_welcome_kind", "animation")
+        self._cached_boxes_by_user = {}
+        self._boxes_refreshing_users = set()
 
     def _get_worker_session(self):
         sess = getattr(self._tls, "session", None)
@@ -919,31 +1075,62 @@ class DirectTelegramBotRunner:
             self._tls.session = sess
         return sess
 
-    def api_call(self, method, data=None, files=None, timeout=20, use_poll_session=False):
+    def api_call(self, method, data=None, files=None, timeout=15, use_poll_session=False):
         url = f"{self.api_base}/{method}"
         sess = self.poll_session if use_poll_session else self._get_worker_session()
-        eff_timeout = (8.0, float(timeout)) if isinstance(timeout, (int, float)) else timeout
+        eff_timeout = (5.0, float(timeout)) if isinstance(timeout, (int, float)) else timeout
         try:
             if files:
                 r = sess.post(url, data=data, files=files, timeout=eff_timeout)
             else:
                 r = sess.post(url, json=data, timeout=eff_timeout)
             res = r.json() if r.content else {"ok": False, "description": f"HTTP {r.status_code}"}
-            # Tự động fallback trong 0ms nếu nội dung chứa thẻ <tg-emoji> mà tài khoản Bot chưa bật Custom Emoji
+            # Tự động fallback 0ms nếu Telegram báo lỗi BUTTON_CUSTOM_EMOJI_INVALID hoặc thẻ <tg-emoji>
             if not res.get("ok") and isinstance(data, dict):
                 desc_up = str(res.get("description") or "").upper()
-                has_anim_tag = ("<tg-emoji" in str(data.get("text") or "")) or ("<tg-emoji" in str(data.get("caption") or ""))
-                if has_anim_tag and any(k in desc_up for k in ("EMOJI", "ENTITY", "ENTITIES", "PARSE", "DOCUMENT_INVALID")):
+                if any(k in desc_up for k in ("EMOJI", "ENTITY", "ENTITIES", "PARSE", "BUTTON", "DOCUMENT_INVALID", "BAD REQUEST")):
                     fallback_data = dict(data)
-                    if "text" in fallback_data and isinstance(fallback_data["text"], str):
-                        fallback_data["text"] = strip_tg_anim_tags(fallback_data["text"])
-                    if "caption" in fallback_data and isinstance(fallback_data["caption"], str):
-                        fallback_data["caption"] = strip_tg_anim_tags(fallback_data["caption"])
-                    if files:
-                        r2 = sess.post(url, data=fallback_data, files=files, timeout=eff_timeout)
-                    else:
-                        r2 = sess.post(url, json=fallback_data, timeout=eff_timeout)
-                    return r2.json() if r2.content else res
+                    changed = False
+                    if "reply_markup" in fallback_data and fallback_data["reply_markup"]:
+                        rm_raw = fallback_data["reply_markup"]
+                        if isinstance(rm_raw, str):
+                            try:
+                                rm_obj = json.loads(rm_raw)
+                                fallback_data["reply_markup"] = json.dumps(strip_button_custom_emojis(rm_obj), ensure_ascii=False)
+                                changed = True
+                            except Exception:
+                                pass
+                        elif isinstance(rm_raw, dict):
+                            fallback_data["reply_markup"] = strip_button_custom_emojis(rm_raw)
+                            changed = True
+                    # Nếu lỗi do parse entity trong text/caption thì mới lược bỏ <tg-emoji>
+                    if any(k in desc_up for k in ("ENTITY", "ENTITIES", "PARSE", "DOCUMENT_INVALID")) or not changed:
+                        if "text" in fallback_data and isinstance(fallback_data["text"], str) and "<tg-emoji" in fallback_data["text"]:
+                            fallback_data["text"] = strip_tg_anim_tags(fallback_data["text"])
+                            changed = True
+                        if "caption" in fallback_data and isinstance(fallback_data["caption"], str) and "<tg-emoji" in fallback_data["caption"]:
+                            fallback_data["caption"] = strip_tg_anim_tags(fallback_data["caption"])
+                            changed = True
+                    if changed:
+                        if files:
+                            r2 = sess.post(url, data=fallback_data, files=files, timeout=eff_timeout)
+                        else:
+                            r2 = sess.post(url, json=fallback_data, timeout=eff_timeout)
+                        res2 = r2.json() if r2.content else res
+                        if not res2.get("ok") and (
+                            ("<tg-emoji" in str(fallback_data.get("text") or ""))
+                            or ("<tg-emoji" in str(fallback_data.get("caption") or ""))
+                        ):
+                            if "text" in fallback_data and isinstance(fallback_data["text"], str):
+                                fallback_data["text"] = strip_tg_anim_tags(fallback_data["text"])
+                            if "caption" in fallback_data and isinstance(fallback_data["caption"], str):
+                                fallback_data["caption"] = strip_tg_anim_tags(fallback_data["caption"])
+                            if files:
+                                r3 = sess.post(url, data=fallback_data, files=files, timeout=eff_timeout)
+                            else:
+                                r3 = sess.post(url, json=fallback_data, timeout=eff_timeout)
+                            return r3.json() if r3.content else res2
+                        return res2
             return res
         except Exception as e:
             self.last_error = str(e)
@@ -956,8 +1143,8 @@ class DirectTelegramBotRunner:
 
     def clear_webhook_and_init(self):
         try:
-            self.api_call("deleteWebhook", {"drop_pending_updates": False}, timeout=10)
-            me = self.api_call("getMe", timeout=10)
+            self.api_call("deleteWebhook", {"drop_pending_updates": False}, timeout=8)
+            me = self.api_call("getMe", timeout=8)
             if me.get("ok") and me.get("result"):
                 self.bot_username = me["result"].get("username") or ""
                 self.bot_id = me["result"].get("id")
@@ -968,16 +1155,16 @@ class DirectTelegramBotRunner:
                             {"command": "start", "description": "🎬 Mở bảng điều khiển BOT TREO 4APP 🇻🇳"},
                             {"command": "menu", "description": "📋 Mở nhanh Menu 32 Chức Năng VIP"},
                             {"command": "qr", "description": "📲 Quét mã QR Zalo PC lấy Token & Sống Đa Acc"},
-                            {"command": "addck", "description": "🍪 Nhập Cookie + IMEI Zalo (Sài lệnh trên Acc)"},
-                            {"command": "addid", "description": "➕ Thêm ID người dùng được phép sài Bot"},
-                            {"command": "delid", "description": "➖ Xoá ID người dùng khỏi Bot"},
-                            {"command": "listid", "description": "📋 Xem danh sách ID được phép sài Bot"},
+                            {"command": "addck", "description": "🍪 Nhập Cookie + IMEI Zalo (Sài 32 lệnh trên Acc)"},
+                            {"command": "addid", "description": "➕ [Admin] Thêm ID người dùng được phép sài Bot"},
+                            {"command": "delid", "description": "➖ [Admin] Xoá quyền sài Bot của ID người dùng"},
+                            {"command": "listid", "description": "📋 [Admin] Xem danh sách ID được phép sài Bot"},
                             {"command": "checkzalo", "description": "🔍 Kiểm tra & Cứu Cookie Zalo Live/Die"},
                             {"command": "status", "description": "📊 Xem trạng thái Acc & Chiến dịch đang chạy"},
                             {"command": "stopall", "description": "🛑 Dừng khẩn cấp toàn bộ chiến dịch (.ta)"},
                         ]
                     },
-                    timeout=10,
+                    timeout=8,
                 )
                 return True
         except Exception as e:
@@ -996,11 +1183,10 @@ class DirectTelegramBotRunner:
             payload["reply_to_message_id"] = reply_to
         if reply_markup:
             payload["reply_markup"] = reply_markup
-        return self.api_call("sendMessage", payload, timeout=15)
+        return self.api_call("sendMessage", payload, timeout=12)
 
     def send_welcome_video_menu(self, chat_id, caption_html, reply_to=None, reply_markup=None):
-        """Gửi bảng điều khiển kèm Video chào (welcome.mp4) giống hệt ảnh mẫu, tự động cache file_id để phản hồi 0.05s!"""
-        # 1. Thử dùng file_id đã cache để gửi tức thì không tốn băng thông
+        """Gửi bảng điều khiển kèm Video chào (welcome.mp4), tự động cache file_id để phản hồi 0.02s!"""
         if self._cached_welcome_file_id:
             method = "sendAnimation" if self._cached_welcome_kind == "animation" else "sendVideo"
             media_key = "animation" if self._cached_welcome_kind == "animation" else "video"
@@ -1014,13 +1200,11 @@ class DirectTelegramBotRunner:
                 payload["reply_to_message_id"] = reply_to
             if reply_markup:
                 payload["reply_markup"] = reply_markup
-            res = self.api_call(method, payload, timeout=15)
+            res = self.api_call(method, payload, timeout=12)
             if res.get("ok"):
                 return res
-            # Nếu token đổi làm file_id cũ hết hạn, xóa cache để upload lại
             self._cached_welcome_file_id = ""
 
-        # 2. Tải trực tiếp file welcome.mp4 lên Telegram lần đầu và lưu file_id
         if os.path.exists(WELCOME_VIDEO_PATH):
             try:
                 with open(WELCOME_VIDEO_PATH, "rb") as vf:
@@ -1039,7 +1223,7 @@ class DirectTelegramBotRunner:
                     "sendAnimation",
                     data=data,
                     files={"animation": ("welcome.mp4", video_bytes, "video/mp4")},
-                    timeout=35,
+                    timeout=30,
                 )
                 if res.get("ok") and res.get("result"):
                     r_obj = res["result"]
@@ -1056,12 +1240,11 @@ class DirectTelegramBotRunner:
                         _set_db_setting("tg_welcome_kind", kind)
                     return res
 
-                # Fallback sang sendVideo nếu sendAnimation bị từ chối
                 res2 = self.api_call(
                     "sendVideo",
                     data=data,
                     files={"video": ("welcome.mp4", video_bytes, "video/mp4")},
-                    timeout=35,
+                    timeout=30,
                 )
                 if res2.get("ok") and res2.get("result"):
                     r_obj = res2["result"]
@@ -1078,7 +1261,7 @@ class DirectTelegramBotRunner:
         return self.send_text(chat_id, caption_html, reply_to=reply_to, reply_markup=reply_markup)
 
     def edit_menu_message(self, chat_id, message_id, caption_html, reply_markup=None):
-        """Cập nhật mượt mà nội dung & nút bấm ngay dưới Video chào (giống 'đã sửa' trong ảnh mẫu)."""
+        """Cập nhật tức thì nội dung & nút bấm dưới Video chào (0ms perceived latency)."""
         payload_cap = {
             "chat_id": chat_id,
             "message_id": message_id,
@@ -1087,7 +1270,7 @@ class DirectTelegramBotRunner:
         }
         if reply_markup:
             payload_cap["reply_markup"] = reply_markup
-        res = self.api_call("editMessageCaption", payload_cap, timeout=12)
+        res = self.api_call("editMessageCaption", payload_cap, timeout=10)
         if res.get("ok") or "message is not modified" in str(res.get("description", "")).lower():
             return res
 
@@ -1100,16 +1283,21 @@ class DirectTelegramBotRunner:
         }
         if reply_markup:
             payload_txt["reply_markup"] = reply_markup
-        res2 = self.api_call("editMessageText", payload_txt, timeout=12)
+        res2 = self.api_call("editMessageText", payload_txt, timeout=10)
         if res2.get("ok") or "message is not modified" in str(res2.get("description", "")).lower():
             return res2
         return self.send_welcome_video_menu(chat_id, caption_html, reply_markup=reply_markup)
 
-    def answer_callback(self, callback_query_id, text="", show_alert=False):
+    def answer_callback(self, callback_query_id, text="", show_alert=False, async_mode=True):
+        if not callback_query_id:
+            return
         payload = {"callback_query_id": callback_query_id, "show_alert": bool(show_alert)}
         if text:
             payload["text"] = text[:190]
-        return self.api_call("answerCallbackQuery", payload, timeout=8)
+        if async_mode and not show_alert:
+            self.executor.submit(self.api_call, "answerCallbackQuery", payload, None, 6, False)
+            return {"ok": True}
+        return self.api_call("answerCallbackQuery", payload, timeout=6)
 
     def send_photo_bytes(self, chat_id, png_bytes, caption="", reply_to=None, reply_markup=None):
         data = {"chat_id": str(chat_id), "parse_mode": "HTML"}
@@ -1120,7 +1308,7 @@ class DirectTelegramBotRunner:
         if reply_markup:
             data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
         files = {"photo": ("zalo_qr.png", png_bytes, "image/png")}
-        return self.api_call("sendPhoto", data=data, files=files, timeout=20)
+        return self.api_call("sendPhoto", data=data, files=files, timeout=18)
 
     def send_doc_bytes(self, chat_id, content_bytes, filename, caption="", reply_to=None):
         data = {"chat_id": str(chat_id), "parse_mode": "HTML"}
@@ -1129,24 +1317,24 @@ class DirectTelegramBotRunner:
         if reply_to:
             data["reply_to_message_id"] = str(reply_to)
         files = {"document": (filename, content_bytes, "text/plain")}
-        return self.api_call("sendDocument", data=data, files=files, timeout=20)
+        return self.api_call("sendDocument", data=data, files=files, timeout=18)
 
     def delete_msg(self, chat_id, message_id):
         if not message_id:
             return
-        self.api_call("deleteMessage", {"chat_id": chat_id, "message_id": message_id}, timeout=8)
+        self.executor.submit(self.api_call, "deleteMessage", {"chat_id": chat_id, "message_id": message_id}, None, 6, False)
 
-    # XÂY DỰNG GIAO DIỆN 3 TAB & 4 TRANG GIỐNG HỆT ẢNH MẪU (image.png)
+    # XÂY DỰNG GIAO DIỆN BLOCKQUOTE CARD + ICON ĐỘNG GIỐNG HỆT TPHAT STORE BOT (83b86043.jpeg)
     @staticmethod
-    def _get_live_runtime_summary():
+    def _get_live_runtime_summary(user_id=ROOT_ADMIN_ID):
         acc_cnt = 0
         running_cnt = 0
         color_label = "Đổi Từng Màu"
         delay_val = 0.0
         try:
+            vis_accs = get_user_visible_accounts(user_id, enabled_only=True)
+            acc_cnt = len(vis_accs)
             import app as _main_app
-            accs = _main_app.get_all_accounts_from_ram(enabled_only=True)
-            acc_cnt = len(accs)
             with _main_app.TASKS_LOCK:
                 running_cnt = sum(1 for t in _main_app.TASKS.values() if t.get("status") == "running" or t.get("running"))
             with _main_app.SYSTEM_CFG_LOCK:
@@ -1161,146 +1349,143 @@ class DirectTelegramBotRunner:
     def build_tabbed_caption(cls, user_first_name="Anh", user_id=ROOT_ADMIN_ID, active_tab="func", page=1, extra_notice=""):
         now_vn = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
         time_str = now_vn.strftime("%H:%M %d/%m/%Y")
-        role_str = get_user_role_label(user_id)
+        is_admin = is_root_admin(user_id)
+        role_str = "Admin Chính (Toàn Quyền)" if is_admin else "Thành Viên VIP (Kho Acc Riêng)"
         name_clean = str(user_first_name or "Anh").replace("<", "").replace(">", "").strip() or "Anh"
 
         if active_tab == "func":
             sec_title = f"CHỨC NĂNG VIP – TRANG {page}/4"
         elif active_tab == "mgmt":
-            sec_title = "QUẢN LÝ ĐA ACC & PHÂN QUYỀN ID"
+            sec_title = "QUẢN LÝ ĐA ACC & PHÂN QUYỀN VIP" if is_admin else "QUẢN LÝ COOKIE & ACC CỦA BẠN"
         else:
             sec_title = "TIỆN ÍCH MỞ RỘNG SIÊU CẤP"
 
-        acc_cnt, running_cnt, color_label, delay_val = cls._get_live_runtime_summary()
-        status_bar = (
-            f"\n{tg_anim('radar', '📡')} Acc sống: <b>{acc_cnt}</b> • "
-            f"{tg_anim('fire', '🔥')} Đang chạy: <b>{running_cnt}</b> • "
-            f"{tg_anim('magic', '🌈')} Màu: <b>{color_label}</b> ({delay_val}s)"
-        )
-        notice_block = f"\n\n{extra_notice}" if extra_notice else ""
+        acc_cnt, running_cnt, color_label, delay_val = cls._get_live_runtime_summary(user_id=user_id)
+        scope_lbl = "Tổng Acc hệ thống" if is_admin else "Acc bạn đã quét/nạp"
+        notice_block = f"\n<blockquote>{extra_notice}</blockquote>" if extra_notice else ""
 
+        # Giao diện chuẩn Tphat Store bot (83b86043.jpeg): Tiêu đề chào + khung <blockquote> bo góc có dấu ngoặc kép ” & gạch đứt — — — — — — — — — —
         return (
-            f"{tg_anim('bolt', '⚡')} <b>Xin chào, {name_clean}!</b>\n\n"
-            f"{tg_anim('crown', '👑')} <b>BOT TREO 4APP 🇻🇳 [ULTIMATE VIP]</b>\n"
-            f"{tg_anim('bot', '👾')} Chức năng: <b>32 chế độ VIP</b>\n"
-            f"{tg_anim('diamond', '💎')} Quản lý: <b>6 mục Đa Acc & Phân Quyền</b>\n"
-            f"{tg_anim('sparkle', '✨')} Tiện ích: <b>6 công cụ tự động</b>\n"
-            f"────────────────────\n"
-            f"{tg_anim('star', '🌟')} <b>{time_str}</b>\n"
-            f"{tg_anim('king', '🥷')} Vai trò: <b>{role_str}</b>\n"
-            f"{tg_anim('shield', '🛡️')} Admin: <a href=\"tg://user?id={ROOT_ADMIN_ID}\">Bấm vào đây ↗️</a>"
-            f"{status_bar}"
+            f"<b>CHÀO MỪNG {name_clean.upper()} ĐẾN VỚI BOT TREO 4APP 🇻🇳</b> {tg_anim('sparkle', '✨')}\n\n"
+            f"<blockquote>"
+            f"{tg_anim('bell', '📢')} Hệ thống: <b>32 Chức Năng VIP • Đa Acc 24/7</b>\n"
+            f"{tg_anim('king', '👑')} Admin Chính: <a href=\"tg://user?id={ROOT_ADMIN_ID}\">@{ROOT_ADMIN_ID} ↗️</a>\n"
+            f"— — — — — — — — — —\n"
+            f"{tg_anim('party', '🎉')} Vai trò: <b>{role_str}</b>\n"
+            f"{tg_anim('users', '👥')} {scope_lbl}: <b>{acc_cnt} Acc Live</b> • Đang chạy: <b>{running_cnt} luồng</b>\n"
+            f"{tg_anim('money', '💸')} Chế độ: <b>{color_label}</b> • Delay: <b>{delay_val}s</b> (Poll: <b>0.0s</b>)\n"
+            f"{tg_anim('clock', '🕒')} Thời gian: <b>{time_str}</b>"
+            f"</blockquote>"
             f"{notice_block}\n\n"
             f"{tg_anim('gear', '⚙️')} <b>{sec_title}</b>"
         )
 
     @classmethod
-    def build_tabbed_keyboard(cls, active_tab="func", page=1):
+    def build_tabbed_keyboard(cls, active_tab="func", page=1, user_id=ROOT_ADMIN_ID):
         page = max(1, min(4, int(page or 1)))
+        is_admin = is_root_admin(user_id)
         tab_row = [
-            {
-                "text": f"{'🔥' if active_tab == 'func' else '❖'} Chức Năng",
-                "callback_data": "tab_func_1"
-            },
-            {
-                "text": f"{'👑' if active_tab == 'mgmt' else '❖'} Quản Lý",
-                "callback_data": "tab_mgmt"
-            },
-            {
-                "text": f"{'⚡' if active_tab == 'util' else '❖'} Tiện Ích",
-                "callback_data": "tab_util"
-            },
+            tg_btn("Chức Năng", "tab_func_1", emoji_key="fire" if active_tab == "func" else "diamond"),
+            tg_btn("Quản Lý", "tab_mgmt", emoji_key="crown" if active_tab == "mgmt" else "folder"),
+            tg_btn("Tiện Ích", "tab_util", emoji_key="bolt" if active_tab == "util" else "gear"),
         ]
-        sep_row = [{"text": "────────────────────────", "callback_data": "noop"}]
-        rows = [tab_row, sep_row]
+        rows = [tab_row]
 
         if active_tab == "func":
             start_idx = (page - 1) * 8
             page_items = FUNCTION_ITEMS_32[start_idx:start_idx + 8]
             for i in range(0, len(page_items), 2):
                 pair = page_items[i:i + 2]
-                row = [{"text": item["label"], "callback_data": f"pickfn:{item['id']}"} for item in pair]
+                row = [
+                    tg_btn(item["label"], f"pickfn:{item['id']}", emoji_id=item.get("emoji_id"))
+                    for item in pair
+                ]
                 rows.append(row)
 
             prev_p = 4 if page <= 1 else page - 1
             next_p = 1 if page >= 4 else page + 1
             rows.append([
-                {"text": "⬅️ Trang trước", "callback_data": f"tab_func_{prev_p}"},
-                {"text": f"📄 {page}/4", "callback_data": "noop"},
-                {"text": "Trang sau ➡️", "callback_data": f"tab_func_{next_p}"},
+                tg_btn("Trang trước", f"tab_func_{prev_p}", emoji_key="back"),
+                tg_btn(f"Trang {page}/4", "noop", emoji_key="chart"),
+                tg_btn("Trang sau", f"tab_func_{next_p}", emoji_key="next"),
             ])
 
         elif active_tab == "mgmt":
-            rows.extend([
-                [
-                    {"text": "📲 Quét QR Lấy Token (Đa Acc)", "callback_data": "cmd_qr_sg"},
-                    {"text": "🍪 Nhập Cookie + IMEI Zalo", "callback_data": "mgmt_input_ck_im"},
-                ],
-                [
-                    {"text": "➕ Thêm ID Người Dùng", "callback_data": "mgmt_add_id"},
-                    {"text": "➖ Xoá ID Người Dùng", "callback_data": "mgmt_del_id_menu"},
-                ],
-                [
-                    {"text": "📋 Danh Sách ID VIP", "callback_data": "mgmt_list_ids"},
-                    {"text": "🔍 Check & Cứu Đa Acc", "callback_data": "cmd_checkzalo"},
-                ],
-                [
-                    {"text": "🗂️ Quản Lý Đa Acc & Kho File", "callback_data": "mgmt_acc_files"},
-                ],
+            rows.append([
+                tg_btn("Quét QR Lấy Token", "cmd_qr_sg", emoji_key="qr"),
+                tg_btn("Nhập Cookie + IMEI", "mgmt_input_ck_im", emoji_key="cookie"),
             ])
+            # CHỈ ADMIN CHÍNH (8827605973) MỚI ĐƯỢC THÊM / XOÁ / XEM DANH SÁCH ID SÀI BOT
+            if is_admin:
+                rows.append([
+                    tg_btn("Thêm ID Sài Bot", "mgmt_add_id", emoji_key="plus"),
+                    tg_btn("Xoá Quyền Sài Bot", "mgmt_del_id_menu", emoji_key="minus"),
+                ])
+                rows.append([
+                    tg_btn("Danh Sách ID VIP", "mgmt_list_ids", emoji_key="list"),
+                    tg_btn("Check Tất Cả Cookie", "cmd_checkzalo", emoji_key="search"),
+                ])
+                rows.append([
+                    tg_btn("Tất Cả Cookie & Kho File (Admin)", "mgmt_acc_files", emoji_key="cat"),
+                ])
+            else:
+                rows.append([
+                    tg_btn("Cookie & Acc Của Tôi", "mgmt_acc_files", emoji_key="cat"),
+                    tg_btn("Check Cookie Của Tôi", "cmd_checkzalo", emoji_key="search"),
+                ])
 
         else:  # util
             rows.extend([
                 [
-                    {"text": "🔐 Tạo Mã 2FA OTP", "callback_data": "prompt_2fa"},
-                    {"text": "🤖 Trợ Lý Meta AI", "callback_data": "prompt_ai"},
+                    tg_btn("Tạo Mã 2FA OTP", "prompt_2fa", emoji_key="lock"),
+                    tg_btn("Trợ Lý Meta AI", "prompt_ai", emoji_key="bot"),
                 ],
                 [
-                    {"text": "🎯 Lấy Token Discord", "callback_data": "prompt_gettoken"},
-                    {"text": "🍪 Lấy Cookie FB", "callback_data": "prompt_getcookie"},
+                    tg_btn("Lấy Token Discord", "prompt_gettoken", emoji_key="target"),
+                    tg_btn("Lấy Cookie FB", "prompt_getcookie", emoji_key="cookie"),
                 ],
                 [
-                    {"text": "✨ Đổi Font Chữ VIP", "callback_data": "pickfn:fn_fontstyle"},
-                    {"text": "📊 Trạng Thái Hệ Thống", "callback_data": "cmd_status"},
+                    tg_btn("Đổi Font Chữ VIP", "pickfn:fn_fontstyle", emoji_key="sparkle"),
+                    tg_btn("Trạng Thái Hệ Thống", "cmd_status", emoji_key="chart"),
                 ],
             ])
 
         return {"inline_keyboard": rows}
 
-    # BẢNG CHỌN CHIẾN DỊCH TƯƠNG TÁC (CHỌN BOX + CHỌN FILE + CHẠY NGAY TRÊN TELEGRAM)
-    def _discover_all_boxes(self, force_refresh=False):
+    # BẢNG CHỌN CHIẾN DỊCH TƯƠNG TÁC SIÊU TỐC (PHÂN TÁCH THEO USER_ID & TRẢ VỀ TỨC THÌ TỪ RAM 0MS)
+    def _discover_all_boxes(self, user_id=ROOT_ADMIN_ID, force_refresh=False):
+        uid_key = "ADMIN" if is_root_admin(user_id) else str(user_id or "")
         now = time.time()
-        cached_b = getattr(self, "_cached_boxes_list", None)
-        cached_ts = getattr(self, "_cached_boxes_ts", 0.0)
-        if not force_refresh and cached_b is not None and (now - cached_ts < 15.0):
-            return list(cached_b)
+        cached_entry = self._cached_boxes_by_user.get(uid_key)
+        if not force_refresh and cached_entry and (now - cached_entry[0] < 25.0):
+            return list(cached_entry[1])
 
-        boxes = []
-        seen = set()
-        try:
-            import app as _main_app
-            accs = _main_app.get_all_accounts_from_ram(enabled_only=True)
-            for a in accs:
-                plat = (a.get("platform") or "zalo").lower()
-                if plat == "zalo":
-                    try:
-                        zc = _main_app.Zalo.get_pooled_client(
-                            a["imei"], a["cookies"],
-                            user_agent=a.get("user_agent") or "",
-                            zpw_enk_hint=a.get("zpw_enk") or "",
-                            uid_hint=a.get("uid") or ""
-                        )
-                        for g in (zc.groups(use_cache=not force_refresh) or []):
-                            gid = str(g.get("id") or "").strip()
-                            if gid and gid not in seen and gid != "null":
-                                seen.add(gid)
-                                boxes.append({
-                                    "id": gid,
-                                    "name": g.get("name") or f"Nhóm {gid[-6:]}",
-                                    "platform": "zalo",
-                                    "acc_id": a["id"],
-                                })
-                        for gid_k in _main_app.KNOWN_GROUPS_BY_ACC.get(str(zc.uid or a.get("uid") or ""), set()):
+        def _collect_fast_from_ram():
+            boxes = []
+            seen = set()
+            try:
+                import app as _main_app
+                vis_accs = get_user_visible_accounts(user_id, enabled_only=True)
+                for a in vis_accs:
+                    plat = (a.get("platform") or "zalo").lower()
+                    if plat == "zalo":
+                        auid_s = str(a.get("uid") or "").strip()
+                        # 1. Lấy tức thì từ _GROUPS_CACHE trong RAM nếu đã có
+                        if auid_s and hasattr(_main_app.Zalo, "_GROUPS_CACHE"):
+                            g_cached = _main_app.Zalo._GROUPS_CACHE.get(auid_s)
+                            if g_cached:
+                                for g in (g_cached[1] or []):
+                                    gid = str(g.get("id") or "").strip()
+                                    if gid and gid not in seen and gid != "null":
+                                        seen.add(gid)
+                                        boxes.append({
+                                            "id": gid,
+                                            "name": g.get("name") or f"Nhóm {gid[-6:]}",
+                                            "platform": "zalo",
+                                            "acc_id": a["id"],
+                                        })
+                        # 2. Bổ sung tức thì từ KNOWN_GROUPS_BY_ACC trong RAM
+                        for gid_k in _main_app.KNOWN_GROUPS_BY_ACC.get(auid_s, set()):
                             gid_s = str(gid_k).strip()
                             if gid_s and gid_s not in seen and gid_s != "null":
                                 seen.add(gid_s)
@@ -1310,23 +1495,90 @@ class DirectTelegramBotRunner:
                                     "platform": "zalo",
                                     "acc_id": a["id"],
                                 })
-                    except Exception:
-                        pass
-                elif plat == "discord":
-                    for cid in _main_app.DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS.get(a["id"], set()):
-                        if cid and str(cid) not in seen:
-                            seen.add(str(cid))
-                            boxes.append({
-                                "id": str(cid),
-                                "name": f"Kênh Discord {str(cid)[-4:]}",
-                                "platform": "discord",
-                                "acc_id": a["id"],
-                            })
-        except Exception:
-            pass
-        self._cached_boxes_list = list(boxes)
-        self._cached_boxes_ts = now
-        return boxes
+                    elif plat == "discord":
+                        for cid in _main_app.DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS.get(a["id"], set()):
+                            if cid and str(cid) not in seen:
+                                seen.add(str(cid))
+                                boxes.append({
+                                    "id": str(cid),
+                                    "name": f"Kênh Discord {str(cid)[-4:]}",
+                                    "platform": "discord",
+                                    "acc_id": a["id"],
+                                })
+            except Exception:
+                pass
+            return boxes
+
+        def _deep_refresh_worker():
+            if uid_key in self._boxes_refreshing_users and not force_refresh:
+                return
+            self._boxes_refreshing_users.add(uid_key)
+            try:
+                boxes = []
+                seen = set()
+                import app as _main_app
+                vis_accs = get_user_visible_accounts(user_id, enabled_only=True)
+                for a in vis_accs:
+                    plat = (a.get("platform") or "zalo").lower()
+                    if plat == "zalo":
+                        try:
+                            zc = _main_app.Zalo.get_pooled_client(
+                                a["imei"], a["cookies"],
+                                user_agent=a.get("user_agent") or "",
+                                zpw_enk_hint=a.get("zpw_enk") or "",
+                                uid_hint=a.get("uid") or ""
+                            )
+                            for g in (zc.groups(use_cache=not force_refresh) or []):
+                                gid = str(g.get("id") or "").strip()
+                                if gid and gid not in seen and gid != "null":
+                                    seen.add(gid)
+                                    boxes.append({
+                                        "id": gid,
+                                        "name": g.get("name") or f"Nhóm {gid[-6:]}",
+                                        "platform": "zalo",
+                                        "acc_id": a["id"],
+                                    })
+                            for gid_k in _main_app.KNOWN_GROUPS_BY_ACC.get(str(zc.uid or a.get("uid") or ""), set()):
+                                gid_s = str(gid_k).strip()
+                                if gid_s and gid_s not in seen and gid_s != "null":
+                                    seen.add(gid_s)
+                                    boxes.append({
+                                        "id": gid_s,
+                                        "name": f"Box Zalo {gid_s[-6:]}",
+                                        "platform": "zalo",
+                                        "acc_id": a["id"],
+                                    })
+                        except Exception:
+                            pass
+                    elif plat == "discord":
+                        for cid in _main_app.DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS.get(a["id"], set()):
+                            if cid and str(cid) not in seen:
+                                seen.add(str(cid))
+                                boxes.append({
+                                    "id": str(cid),
+                                    "name": f"Kênh Discord {str(cid)[-4:]}",
+                                    "platform": "discord",
+                                    "acc_id": a["id"],
+                                })
+                self._cached_boxes_by_user[uid_key] = (time.time(), list(boxes))
+            except Exception:
+                pass
+            finally:
+                self._boxes_refreshing_users.discard(uid_key)
+
+        if force_refresh:
+            _deep_refresh_worker()
+            return list((self._cached_boxes_by_user.get(uid_key) or (0, []))[1])
+
+        fast_boxes = _collect_fast_from_ram()
+        if fast_boxes:
+            self._cached_boxes_by_user[uid_key] = (now, list(fast_boxes))
+            self.executor.submit(_deep_refresh_worker)
+            return fast_boxes
+
+        # Nếu RAM chưa có mới quét đồng bộ 1 lần
+        _deep_refresh_worker()
+        return list((self._cached_boxes_by_user.get(uid_key) or (0, []))[1])
 
     def _get_available_txt_files(self):
         try:
@@ -1347,7 +1599,6 @@ class DirectTelegramBotRunner:
             return
 
         mode = fn_meta["mode"]
-        # Các chức năng cấu hình nhanh
         if mode == "special_stop":
             try:
                 import app as _main_app
@@ -1356,34 +1607,35 @@ class DirectTelegramBotRunner:
                 stopped = 0
             cap = self.build_tabbed_caption(
                 user_id=user_id, active_tab="func", page=4,
-                extra_notice=f"<tg-emoji emoji-id='5210952531676504517'>🛑</tg-emoji> <b>ĐÃ DỪNG TẤT CẢ ({stopped} chiến dịch)!</b>"
+                extra_notice=f"{tg_anim('stop', '🛑')} <b>ĐÃ DỪNG TẤT CẢ ({stopped} chiến dịch)!</b>"
             )
-            self.edit_menu_message(chat_id, message_id, cap, reply_markup=self.build_tabbed_keyboard("func", 4))
+            self.edit_menu_message(chat_id, message_id, cap, reply_markup=self.build_tabbed_keyboard("func", 4, user_id=user_id))
             return
 
         if mode == "special_delay":
             kb = {
                 "inline_keyboard": [
                     [
-                        {"text": "⚡ 0.0s (Siêu tốc)", "callback_data": "setdelay:0"},
-                        {"text": "🚀 0.3s (Chuẩn VIP)", "callback_data": "setdelay:0.3"},
+                        tg_btn("0.0s (Không Nghỉ / Poll)", "setdelay:0", emoji_key="bolt"),
+                        tg_btn("0.1s (Siêu Tốc Đa Acc)", "setdelay:0.1", emoji_key="rocket"),
                     ],
                     [
-                        {"text": "🔥 0.5s (Mượt)", "callback_data": "setdelay:0.5"},
-                        {"text": "🛡️ 1.0s (An toàn)", "callback_data": "setdelay:1.0"},
+                        tg_btn("0.3s (Chuẩn VIP)", "setdelay:0.3", emoji_key="fire"),
+                        tg_btn("0.5s (Mượt Bền)", "setdelay:0.5", emoji_key="shield"),
                     ],
                     [
-                        {"text": "🐢 2.0s (Chậm chắc)", "callback_data": "setdelay:2.0"},
-                        {"text": "⏱️ 5.0s (Treo bền)", "callback_data": "setdelay:5.0"},
+                        tg_btn("1.0s (An Toàn)", "setdelay:1.0", emoji_key="check"),
+                        tg_btn("2.0s (Treo Đêm)", "setdelay:2.0", emoji_key="clock"),
                     ],
-                    [{"text": "🔙 Quay lại Chức Năng", "callback_data": "tab_func_4"}],
+                    [tg_btn("Quay lại Chức Năng", "tab_func_4", emoji_key="back")],
                 ]
             }
             cap = (
-                "<tg-emoji emoji-id='5431449001532594346'>⚡</tg-emoji> <b>CHỈNH TỐC ĐỘ DELAY HỆ THỐNG</b>\n"
-                "────────────────────\n"
-                "• Chọn tốc độ gửi tin bên dưới (áp dụng tức thì cho cả các chiến dịch đang chạy):\n"
-                "• <i>Khuyên dùng 0.3s - 0.5s kết hợp Anti Cấm Chat Box để treo bền xuyên đêm!</i>"
+                f"{tg_anim('bolt', '⚡')} <b>CHỈNH TỐC ĐỘ DELAY HỆ THỐNG (KHÔNG LAG ĐA ACC)</b>\n\n"
+                "<blockquote>"
+                "• Chọn tốc độ gửi tin bên dưới (áp dụng tức thì cho cả các chiến dịch đang chạy).\n"
+                "• Riêng chế độ <b>📊 Treo Poll 0s</b> luôn luôn chạy <b>0.0s Không Nghỉ</b> bất kể Delay chung!"
+                "</blockquote>"
             )
             self.edit_menu_message(chat_id, message_id, cap, reply_markup=kb)
             return
@@ -1391,23 +1643,24 @@ class DirectTelegramBotRunner:
         if mode == "special_color":
             kb = {
                 "inline_keyboard": [
-                    [{"text": "✨ Chữ Đổi Từng Màu (VIP - Mặc định)", "callback_data": "setcolor:word_rainbow:red"}],
+                    [tg_btn("Chữ Đổi Từng Màu (VIP - Mặc định)", "setcolor:word_rainbow:red", emoji_key="magic")],
                     [
-                        {"text": "🥀 Đỏ Rực (db342e)", "callback_data": "setcolor:fixed:red"},
-                        {"text": "🔥 Cam Lửa (f27806)", "callback_data": "setcolor:fixed:orange"},
+                        tg_btn("Đỏ Rực (db342e)", "setcolor:fixed:red", emoji_key="fire"),
+                        tg_btn("Cam Lửa (f27806)", "setcolor:fixed:orange", emoji_key="bolt"),
                     ],
                     [
-                        {"text": "👑 Vàng Kim (f7b503)", "callback_data": "setcolor:fixed:yellow"},
-                        {"text": "🍀 Xanh Ngọc (15a85f)", "callback_data": "setcolor:fixed:green"},
+                        tg_btn("Vàng Kim (f7b503)", "setcolor:fixed:yellow", emoji_key="crown"),
+                        tg_btn("Xanh Ngọc (15a85f)", "setcolor:fixed:green", emoji_key="sparkle"),
                     ],
-                    [{"text": "🔙 Quay lại Chức Năng", "callback_data": "tab_func_4"}],
+                    [tg_btn("Quay lại Chức Năng", "tab_func_4", emoji_key="back")],
                 ]
             }
             cap = (
-                "<tg-emoji emoji-id='5359785904535774578'>🌈</tg-emoji> <b>CHẾ ĐỘ MÀU CHỮ ZALO VIP (0% CHỮ TRẮNG)</b>\n"
-                "────────────────────\n"
+                f"{tg_anim('magic', '🌈')} <b>CHẾ ĐỘ MÀU CHỮ ZALO VIP (0% CHỮ TRẮNG)</b>\n\n"
+                "<blockquote>"
                 "• <b>Chữ Đổi Từng Màu</b>: Từng từ/chữ cái tự động đổi qua 4 mã màu gốc rực rỡ của Zalo (Đỏ - Cam - Vàng - Xanh Lá).\n"
-                "• Tuyệt đối không dùng màu trắng cho câu treo/nhây (chỉ để màu trắng cho tin nhắn chức năng hệ thống)."
+                "• Tuyệt đối không dùng màu trắng cho câu treo/nhây."
+                "</blockquote>"
             )
             self.edit_menu_message(chat_id, message_id, cap, reply_markup=kb)
             return
@@ -1416,20 +1669,19 @@ class DirectTelegramBotRunner:
             kb = {
                 "inline_keyboard": [
                     [
-                        {"text": "🔥 Chữ To Đậm (f_18)", "callback_data": "setfont:big_bold"},
-                        {"text": "⚡ Chữ Vừa Đậm (f_15)", "callback_data": "setfont:normal_bold"},
+                        tg_btn("Chữ To Đậm (f_18)", "setfont:big_bold", emoji_key="fire"),
+                        tg_btn("Chữ Vừa Đậm (f_15)", "setfont:normal_bold", emoji_key="bolt"),
                     ],
                     [
-                        {"text": "✨ Xen Kẽ To/Nhỏ", "callback_data": "setfont:alternating_bold"},
-                        {"text": "💎 Nghiêng Đậm VIP", "callback_data": "setfont:italic_bold"},
+                        tg_btn("Xen Kẽ To/Nhỏ", "setfont:alternating_bold", emoji_key="sparkle"),
+                        tg_btn("Nghiêng Đậm VIP", "setfont:italic_bold", emoji_key="diamond"),
                     ],
-                    [{"text": "🔙 Quay lại Chức Năng", "callback_data": "tab_func_4"}],
+                    [tg_btn("Quay lại Chức Năng", "tab_func_4", emoji_key="back")],
                 ]
             }
             cap = (
-                "🔤 <b>CHỈNH CỠ & KIỂU CHỮ ZALO</b>\n"
-                "────────────────────\n"
-                "• Chọn kiểu hiển thị chữ kết hợp cùng bộ đổi màu từng từ:"
+                f"{tg_anim('sparkle', '🔤')} <b>CHỈNH CỠ & KIỂU CHỮ ZALO VIP</b>\n\n"
+                "<blockquote>• Chọn kiểu hiển thị chữ kết hợp cùng bộ đổi màu từng từ:</blockquote>"
             )
             self.edit_menu_message(chat_id, message_id, cap, reply_markup=kb)
             return
@@ -1437,18 +1689,19 @@ class DirectTelegramBotRunner:
         if mode == "special_anti":
             kb = {
                 "inline_keyboard": [
-                    [{"text": "🛡️ Bật Full Anti Cấm Chat Box (Khuyên dùng)", "callback_data": "setanti:1"}],
-                    [{"text": "⚡ Chế Độ Xả Thẳng Tốc Độ Cao", "callback_data": "setanti:0"}],
-                    [{"text": "🔙 Quay lại Chức Năng", "callback_data": "tab_func_4"}],
+                    [tg_btn("Bật Full Anti Cấm Chat Box (0ms Delay)", "setanti:1", emoji_key="shield")],
+                    [tg_btn("Chế Độ Xả Thẳng Tốc Độ Cao", "setanti:0", emoji_key="bolt")],
+                    [tg_btn("Quay lại Chức Năng", "tab_func_4", emoji_key="back")],
                 ]
             }
             cap = (
-                "<tg-emoji emoji-id='5373141891321699086'>🛡️</tg-emoji> <b>LÁ CHẮN CHỐNG ZALO CẤM CHAT BOX (VIP ANTI-BAN)</b>\n"
-                "────────────────────\n"
-                "✅ <b>Sliding-Window Box Pacing</b>: Tự động điều tiết khi bắn dồn dập vào 1 Box, chặn đứng mã phạt <code>-112</code>, <code>-114</code>, <code>300</code>, <code>301</code>.\n"
-                "✅ <b>Typing Pulse Simulation</b>: Giả lập trạng thái đang gõ phím (<code>/api/group/typing</code>) định kỳ như người thật.\n"
-                "✅ <b>Dynamic Polymorphic Tail</b>: Gắn đuôi tàng hình biến thiên 4-10 ký tự giúp mỗi câu có mã băm độc nhất.\n"
-                "✅ <b>Multi-Gateway Rotation</b>: Tự động xoay vòng giữa <code>tt-group-wpa</code> và <code>wpa.chat.zalo.me</code>."
+                f"{tg_anim('shield', '🛡️')} <b>LÁ CHẮN CHỐNG ZALO CẤM CHAT BOX (VIP ANTI-BAN)</b>\n\n"
+                "<blockquote>"
+                "✅ <b>Zero-Wait Adaptive Backoff</b>: Không bao giờ tự delay khi nhóm đang thông suốt; chỉ giảm nhịp thông minh khi Zalo trả mã cảnh báo.\n"
+                "✅ <b>Isolated Typing ThreadPool</b>: Giả lập gõ phím trên luồng nền riêng biệt, không làm nghẽn tin nhắn.\n"
+                "✅ <b>Dynamic Polymorphic Tail</b>: Gắn đuôi tàng hình biến thiên giúp mỗi câu có mã băm độc nhất.\n"
+                "✅ <b>Multi-Gateway Rotation</b>: Xoay vòng giữa <code>tt-group-wpa</code> và <code>wpa.chat.zalo.me</code>."
+                "</blockquote>"
             )
             self.edit_menu_message(chat_id, message_id, cap, reply_markup=kb)
             return
@@ -1462,61 +1715,64 @@ class DirectTelegramBotRunner:
                 pass
             kb = {
                 "inline_keyboard": [
-                    [{"text": "➕ Nạp Thêm Proxy Mới", "callback_data": "prx_add_prompt"}],
+                    [tg_btn("Nạp Thêm Proxy Mới", "prx_add_prompt", emoji_key="plus")],
                     [
-                        {"text": "🔄 Test Ping Proxy", "callback_data": "prx_test_now"},
-                        {"text": "🗑️ Xoá Sạch Proxy", "callback_data": "prx_clear_now"},
+                        tg_btn("Test Ping Proxy", "prx_test_now", emoji_key="bolt"),
+                        tg_btn("Xoá Sạch Proxy", "prx_clear_now", emoji_key="trash"),
                     ],
-                    [{"text": "🔙 Quay lại Chức Năng", "callback_data": "tab_func_4"}],
+                    [tg_btn("Quay lại Chức Năng", "tab_func_4", emoji_key="back")],
                 ]
             }
             cap = (
-                "🌐 <b>QUẢN LÝ HỒ PROXY SIÊU TỐC</b>\n"
-                "────────────────────\n"
+                f"{tg_anim('radar', '🌐')} <b>QUẢN LÝ HỒ PROXY SIÊU TỐC</b>\n\n"
+                "<blockquote>"
                 f"• Tổng Proxy: <b>{snap.get('total', 0)}</b> (Khỏe: <b>{snap.get('healthy', 0)}</b>)\n"
                 f"• Ping nhanh nhất: <b>{snap.get('fastest_ms', 0)} ms</b>\n"
                 f"• Đã định tuyến: <b>{snap.get('routed_ok', 0)} gói tin</b>"
+                "</blockquote>"
             )
             self.edit_menu_message(chat_id, message_id, cap, reply_markup=kb)
             return
 
-        # Khởi tạo lựa chọn Wizard cho chiến dịch (hỗ trợ Đa Acc Zalo song song)
+        # Khởi tạo lựa chọn Wizard cho chiến dịch (chỉ trên các Acc thuộc quyền của user_id)
         wiz = self.wizard_selections.get(user_id) or {}
         wiz["fn_id"] = fn_id
         wiz.setdefault("box_id", "ALL")
         wiz.setdefault("box_name", "Tất Cả Các Box (All)")
         wiz.setdefault("acc_id", "ALL")
-        wiz.setdefault("acc_name", "Tất Cả Acc Đang Sống (Đa Acc)")
+        wiz.setdefault("acc_name", "Tất Cả Acc Của Bạn (Đa Acc)")
         wiz.setdefault("file_name", fn_meta.get("file_hint") or "nhay.txt")
         wiz.setdefault("custom_text", "")
         wiz.setdefault("tag_query", "")
         self.wizard_selections[user_id] = wiz
 
-        boxes = self._discover_all_boxes()
+        boxes = self._discover_all_boxes(user_id=user_id, force_refresh=False)
         files = self._get_available_txt_files()
-        acc_cnt, _, _, _ = self._get_live_runtime_summary()
+        vis_accs = get_user_visible_accounts(user_id, enabled_only=True)
+        acc_cnt = len(vis_accs)
 
         kb_rows = [
-            [{"text": f"🚀 BẮT ĐẦU CHẠY: {fn_meta['label']}", "callback_data": f"runfn:{fn_id}"}],
+            [tg_btn(f"BẮT ĐẦU CHẠY: {fn_meta['label']}", f"runfn:{fn_id}", emoji_key="rocket")],
             [
-                {"text": f"📦 Box: {wiz['box_name'][:20]}", "callback_data": f"wiz_pickbox:{fn_id}"},
-                {"text": f"👥 Acc: {wiz['acc_name'][:20]}", "callback_data": f"wiz_pickacc:{fn_id}"},
+                tg_btn(f"Box: {wiz['box_name'][:18]}", f"wiz_pickbox:{fn_id}", emoji_key="folder"),
+                tg_btn(f"Acc: {wiz['acc_name'][:18]}", f"wiz_pickacc:{fn_id}", emoji_key="users"),
             ],
         ]
-        # Hiển thị nhanh 6 file kịch bản phổ biến
         file_btns = []
         for f_item in files[:6]:
             fn_s = f_item["filename"]
-            mark = "✅ " if wiz.get("file_name") == fn_s and not wiz.get("custom_text") else "📄 "
-            file_btns.append({"text": f"{mark}{fn_s}", "callback_data": f"wiz_setfile:{fn_id}:{fn_s}"})
+            is_sel = (wiz.get("file_name") == fn_s and not wiz.get("custom_text"))
+            file_btns.append(
+                tg_btn(fn_s, f"wiz_setfile:{fn_id}:{fn_s}", emoji_key="check" if is_sel else "download")
+            )
         for i in range(0, len(file_btns), 2):
             kb_rows.append(file_btns[i:i + 2])
 
         kb_rows.append([
-            {"text": "✍️ Nhập Nội Dung / @Tag", "callback_data": f"wiz_customtxt:{fn_id}"},
-            {"text": "🛑 Dừng Khẩn Cấp (.ta)", "callback_data": "fn_stop_all_quick"},
+            tg_btn("Nhập Nội Dung / @Tag", f"wiz_customtxt:{fn_id}", emoji_key="sparkle"),
+            tg_btn("Dừng Khẩn Cấp (.ta)", "fn_stop_all_quick", emoji_key="stop"),
         ])
-        kb_rows.append([{"text": "🔙 Quay lại Bảng Chức Năng", "callback_data": "tab_func_1"}])
+        kb_rows.append([tg_btn("Quay lại Bảng Chức Năng", "tab_func_1", emoji_key="back")])
 
         content_preview = (
             f"Văn bản tự nhập ({len(wiz['custom_text'])} ký tự)"
@@ -1524,18 +1780,20 @@ class DirectTelegramBotRunner:
             else f"File kịch bản <code>{wiz.get('file_name')}</code>"
         )
         tag_info = f"\n🏷️ Tag mục tiêu: <code>{wiz['tag_query']}</code>" if wiz.get("tag_query") else ""
+        poll_speed_note = "\n⚡ Tốc độ Poll: <b>0.0s KHÔNG NGHỈ (Non-Stop Liên Tục)</b>" if mode == "nhay_poll" else ""
 
         cap = (
-            f"<tg-emoji emoji-id='5341715473882955310'>⚙️</tg-emoji> <b>CẤU HÌNH: {fn_meta['label'].upper()}</b>\n"
-            f"<i>{fn_meta['desc']}</i>\n"
-            f"────────────────────\n"
-            f"👥 Tài khoản chạy: <b>{wiz['acc_name']}</b> (Tổng {acc_cnt} Acc)\n"
-            f"📦 Mục tiêu: <b>{wiz['box_name']}</b> (Hiện có {len(boxes)} Box)\n"
-            f"📄 Nội dung: {content_preview}"
-            f"{tag_info}\n"
-            f"🎨 Màu chữ: <b>{'Đỏ Rực (db342e)' if fn_meta['color_mode'] == 'fixed' else 'Chữ Đổi Từng Màu (0% Trắng)'}</b>\n"
-            f"🛡️ Anti-Ban & Chống Die Cookie: <b>Đang Bật (Wave Stagger + Box Pacing)</b>\n\n"
-            f"👉 Bấm <b>🚀 BẮT ĐẦU CHẠY</b> để phang ngay hoặc chọn Box/Acc/File bên dưới:"
+            f"{tg_anim('gear', '⚙️')} <b>CẤU HÌNH: {fn_meta['label'].upper()}</b>\n"
+            f"<i>{fn_meta['desc']}</i>\n\n"
+            f"<blockquote>"
+            f"{tg_anim('users', '👥')} Tài khoản chạy: <b>{wiz['acc_name']}</b> ({acc_cnt} Acc khả dụng)\n"
+            f"{tg_anim('folder', '📦')} Mục tiêu: <b>{wiz['box_name']}</b> ({len(boxes)} Box)\n"
+            f"{tg_anim('download', '📄')} Nội dung: {content_preview}"
+            f"{tag_info}"
+            f"{poll_speed_note}\n"
+            f"{tg_anim('magic', '🎨')} Màu chữ: <b>{'Đỏ Rực (db342e)' if fn_meta['color_mode'] == 'fixed' else 'Chữ Đổi Từng Màu (0% Trắng)'}</b>"
+            f"</blockquote>\n\n"
+            f"{tg_anim('rocket', '👉')} Bấm <b>BẮT ĐẦU CHẠY</b> để phang ngay hoặc chọn Box/Acc/File bên dưới:"
         )
         self.edit_menu_message(chat_id, message_id, cap, reply_markup={"inline_keyboard": kb_rows})
 
@@ -1552,26 +1810,34 @@ class DirectTelegramBotRunner:
 
         try:
             import app as _main_app
-            boxes = self._discover_all_boxes()
+            vis_accs = get_user_visible_accounts(user_id, enabled_only=True)
+            vis_acc_ids = [int(a["id"]) for a in vis_accs]
+            if not vis_accs:
+                self.send_text(
+                    chat_id,
+                    f"{tg_anim('warn', '⚠️')} <b>Bạn chưa có tài khoản Zalo/Discord nào đang sống!</b>\n"
+                    "• Hãy vào tab <b>Quản Lý</b> ➡️ bấm <b>Quét QR Lấy Token</b> hoặc <b>Nhập Cookie + IMEI</b> để thêm tài khoản của bạn.",
+                )
+                return
+
+            boxes = self._discover_all_boxes(user_id=user_id, force_refresh=False)
             if box_id == "ALL":
                 target_boxes = boxes
             else:
                 target_boxes = [b for b in boxes if str(b["id"]) == str(box_id)]
                 if not target_boxes:
-                    accs = _main_app.get_all_accounts_from_ram(enabled_only=True)
-                    if accs:
-                        target_boxes = [{
-                            "id": str(box_id),
-                            "name": f"Box {str(box_id)[-6:]}",
-                            "platform": accs[0].get("platform") or "zalo",
-                            "acc_id": accs[0]["id"],
-                        }]
+                    target_boxes = [{
+                        "id": str(box_id),
+                        "name": f"Box {str(box_id)[-6:]}",
+                        "platform": vis_accs[0].get("platform") or "zalo",
+                        "acc_id": vis_accs[0]["id"],
+                    }]
 
             if not target_boxes:
                 self.send_text(
                     chat_id,
-                    "<tg-emoji emoji-id='5447644880824181073'>⚠️</tg-emoji> <b>Chưa tìm thấy Box Zalo/Discord nào!</b>\n"
-                    "• Hãy quét QR Zalo PC hoặc nhập Cookie + IMEI trong tab <b>Quản Lý</b>, hoặc bấm <b>📦 Box</b> để nhập ID nhóm thủ công.",
+                    f"{tg_anim('warn', '⚠️')} <b>Chưa tìm thấy Box Zalo/Discord nào!</b>\n"
+                    "• Hãy bấm nút <b>Box</b> trong bảng cấu hình ➡️ chọn <b>Nhập ID Box</b> hoặc <b>Làm Mới Box</b>.",
                 )
                 return
 
@@ -1597,6 +1863,10 @@ class DirectTelegramBotRunner:
                 cur_delay = float(_main_app.SYSTEM_RUNTIME_CONFIG.get("delay", 0.0))
                 cur_font = _main_app.SYSTEM_RUNTIME_CONFIG.get("font_style", "big_bold")
 
+            # NÂNG CẤP TREO POLL: KHÔNG CÓ THỜI GIAN NGHỈ (DELAY = 0.0S TUYỆT ĐỐI)
+            if mode == "nhay_poll":
+                cur_delay = 0.0
+
             targets_payload = []
             for b in target_boxes:
                 bid_s = str(b["id"])
@@ -1611,9 +1881,15 @@ class DirectTelegramBotRunner:
                     "tag_all": bool(fn_meta.get("tag_all", False)),
                 })
 
-            is_multi_acc = (acc_sel == "ALL")
-            sel_acc_ids = [int(acc_sel)] if (acc_sel != "ALL" and acc_sel.isdigit()) else None
-            spec_aid = int(acc_sel) if (acc_sel != "ALL" and acc_sel.isdigit()) else None
+            if acc_sel != "ALL" and acc_sel.isdigit() and int(acc_sel) in vis_acc_ids:
+                is_multi_acc = False
+                sel_acc_ids = [int(acc_sel)]
+                spec_aid = int(acc_sel)
+            else:
+                # Chỉ chạy trên các tài khoản thuộc quyền sở hữu của user_id (Admin thì chạy toàn bộ)
+                is_multi_acc = len(vis_acc_ids) > 1
+                sel_acc_ids = vis_acc_ids
+                spec_aid = vis_acc_ids[0] if len(vis_acc_ids) == 1 else None
 
             tid = _main_app.start_task_programmatic(
                 targets=targets_payload,
@@ -1628,34 +1904,35 @@ class DirectTelegramBotRunner:
                 color_mode=fn_meta.get("color_mode", "word_rainbow"),
                 fixed_color=fn_meta.get("fixed_color", "red"),
                 is_heading=True,
-                antiband=True,
+                antiband=(mode != "nhay_poll"),
                 strip_line_num=True,
                 hide_tag_all=bool(fn_meta.get("hide_tag_all", True)),
                 hide_tag_name=bool(fn_meta.get("hide_tag_name", True)),
                 font_style=cur_font,
             )
 
+            speed_badge = "0.0s Không Nghỉ" if mode == "nhay_poll" else f"{cur_delay}s"
             cap = self.build_tabbed_caption(
                 user_id=user_id,
                 active_tab="func",
                 page=1,
                 extra_notice=(
-                    f"<tg-emoji emoji-id='5445284980978621387'>🚀</tg-emoji> <b>ĐÃ KHỞI CHẠY {fn_meta['label'].upper()}!</b>\n"
-                    f"• Mã Task: <code>#{tid}</code> • Chế độ: <b>{wiz.get('acc_name', 'Đa Acc')}</b>\n"
-                    f"• Số Box: <b>{len(targets_payload)}</b> • Kịch bản: <code>{file_name if not custom_text else 'Tự nhập'}</code> ({len(blocks)} câu)\n"
-                    f"• Màu chữ: <b>{'Đỏ Rực' if fn_meta.get('color_mode') == 'fixed' else 'Đổi Từng Màu (0% Trắng)'}</b>"
+                    f"{tg_anim('rocket', '🚀')} <b>ĐÃ KHỞI CHẠY {fn_meta['label'].upper()}!</b>\n"
+                    f"• Mã Task: <code>#{tid}</code> • Số Acc tham gia: <b>{len(sel_acc_ids)} Acc</b>\n"
+                    f"• Số Box: <b>{len(targets_payload)}</b> • Tốc độ: <b>{speed_badge}</b>\n"
+                    f"• Kịch bản: <code>{file_name if not custom_text else 'Tự nhập'}</code> ({len(blocks)} câu)"
                 ),
             )
-            self.edit_menu_message(chat_id, message_id, cap, reply_markup=self.build_tabbed_keyboard("func", 1))
+            self.edit_menu_message(chat_id, message_id, cap, reply_markup=self.build_tabbed_keyboard("func", 1, user_id=user_id))
         except Exception as e:
             self.send_text(chat_id, f"❌ Lỗi khởi chạy chiến dịch: <code>{str(e)[:200]}</code>")
 
-    # NẠP TRỰC TIẾP COOKIE + IMEI ZALO VÀ KÍCH HOẠT SÀI LỆNH TRONG ACC (.menu, .n, .g, .t)
+    # NẠP TRỰC TIẾP COOKIE + IMEI ZALO, GẮN CHỦ SỞ HỮU OWNER_TG_ID & BẬT TRỌN BỘ 32 LỆNH TRÊN ACC (.menu, .treodo, .damau, .nhaypoll, .n, .g, .t...)
     def handle_import_zalo_cookie_imei(self, chat_id, user_id, imei_str, ck_dict, meta=None, reply_to=None):
         meta = meta or {}
         wait_res = self.send_text(
             chat_id,
-            "⏳ <b>Đang kiểm tra Cookie + IMEI, đồng bộ khóa phiên Token (zpw_enk) & kích hoạt chế độ sài lệnh trực tiếp trên Acc Zalo...</b>",
+            f"{tg_anim('bolt', '⏳')} <b>Đang kiểm tra Cookie + IMEI, đồng bộ khóa phiên (zpw_enk) & kích hoạt 32 lệnh trực tiếp trên Acc Zalo...</b>",
             reply_to=reply_to,
         )
         wait_mid = (wait_res.get("result") or {}).get("message_id")
@@ -1682,9 +1959,9 @@ class DirectTelegramBotRunner:
                 cookies_dict=eff_ck,
                 zpw_enk=eff_enk,
                 user_agent=eff_ua,
+                owner_tg_id=str(user_id),
             )
-            # Xoá cache danh sách box để nhận diện ngay các nhóm của Acc mới
-            self._cached_boxes_ts = 0.0
+            self._cached_boxes_by_user.clear()
 
             if wait_mid:
                 self.delete_msg(chat_id, wait_mid)
@@ -1696,12 +1973,15 @@ class DirectTelegramBotRunner:
             )
             enk_preview = eff_enk if eff_enk else "Tự động lấy khi chạy"
             msg_out = (
-                f"<tg-emoji emoji-id='5206607081334906820'>✅</tg-emoji> <b>ĐÃ NẠP COOKIE + IMEI & BẬT SÀI LỆNH TRÊN ACC ZALO!</b>\n"
-                f"────────────────────\n"
+                f"{tg_anim('check', '✅')} <b>ĐÃ NẠP COOKIE + IMEI & KÍCH HOẠT 32 LỆNH TRÊN ACC ZALO!</b>\n\n"
+                f"<blockquote>"
                 f"👤 Tài khoản: <b>#{acc_id} — {eff_name}</b>\n"
                 f"🆔 UID Zalo: <code>{eff_uid or 'Tự động nhận diện'}</code>\n"
                 f"📡 Trạng thái: {st_text}\n"
-                f"💬 Lệnh trên Acc Zalo: <b>🟢 ĐÃ BẬT (Gõ .menu, .n, .g, .xa, .t, .ta trong mọi nhóm Zalo đều ăn lệnh 100%!)</b>\n\n"
+                f"🔒 Quyền quản lý Cookie: <b>Chỉ bạn & Admin chính xem được</b>\n"
+                f"💬 Lệnh trên Acc Zalo: <b>🟢 ĐÃ BẬT TRỌN BỘ 32 LỆNH</b>\n"
+                f"• Gõ trực tiếp trong bất kỳ Box Zalo nào: <code>.menu</code>, <code>.treodo</code>, <code>.damau</code>, <code>.gif</code>, <code>.word</code>, <code>.nhay</code>, <code>.ngon</code>, <code>.nhaytag</code>, <code>.anall</code>, <code>.xa</code>, <code>.combo</code>, <code>.2c</code>, <code>.so</code>, <code>.nhaypoll</code> (0s không nghỉ), <code>.nhaytyping</code>, <code>.tenbox</code>, <code>.todo</code>, <code>.bank</code>, <code>.card</code>, <code>.d</code>, <code>.mau</code>, <code>.t</code>, <code>.ta</code>!"
+                f"</blockquote>\n\n"
                 f"🔑 <b>Token Khóa Phiên (zpw_enk):</b>\n<pre>{enk_preview}</pre>\n\n"
                 f"📱 <b>IMEI (z_uuid):</b>\n<pre>{imei_str}</pre>"
             )
@@ -1711,40 +1991,41 @@ class DirectTelegramBotRunner:
                 self.delete_msg(chat_id, wait_mid)
             self.send_text(chat_id, f"❌ Lỗi khi nạp Cookie + IMEI: <code>{str(e)[:250]}</code>", reply_to=reply_to)
 
-    # KIỂM TRA & TỰ ĐỘNG CỨU SỐNG COOKIE ZALO ĐA ACC
-    def handle_check_all_stored_zalo_cookies(self, chat_id, reply_to=None):
+    # KIỂM TRA & TỰ ĐỘNG CỨU SỐNG COOKIE ZALO (ADMIN XEM TẤT CẢ, USER CHỈ XEM ACC CỦA MÌNH)
+    def handle_check_all_stored_zalo_cookies(self, chat_id, user_id=ROOT_ADMIN_ID, reply_to=None):
+        is_admin = is_root_admin(user_id)
+        scope_title = "TOÀN BỘ HỆ THỐNG (ADMIN)" if is_admin else "CỦA BẠN"
         wait_res = self.send_text(
             chat_id,
-            "🔍 <b>Đang kiểm tra trạng thái Live/Die & tự động làm mới khóa phiên cho toàn bộ dàn tài khoản Zalo...</b>",
+            f"{tg_anim('search', '🔍')} <b>Đang kiểm tra trạng thái Live/Die & làm mới khóa phiên cho dàn tài khoản Zalo {scope_title}...</b>",
             reply_to=reply_to,
         )
         wait_mid = (wait_res.get("result") or {}).get("message_id")
-        try:
-            conn = _open_db()
-            rows = conn.execute(
-                "SELECT id, name, uid, imei, cookies, user_agent, zpw_enk, chat_cmd_enabled FROM accounts WHERE platform='zalo'"
-            ).fetchall()
-            conn.close()
-        except Exception as e:
-            self.delete_msg(chat_id, wait_mid)
-            self.send_text(chat_id, f"❌ Lỗi truy vấn DB: <code>{e}</code>", reply_to=reply_to)
-            return
+        vis_accs = get_user_visible_accounts(user_id, enabled_only=False, platform="zalo")
 
-        if not rows:
+        if not vis_accs:
             self.delete_msg(chat_id, wait_mid)
             self.send_text(
                 chat_id,
-                "📭 <b>Chưa có tài khoản Zalo nào trong hệ thống!</b>\n"
-                "👉 Hãy bấm <b>📲 Quét QR Lấy Token</b> hoặc <b>🍪 Nhập Cookie + IMEI Zalo</b> trong tab <b>Quản Lý</b>.",
+                f"📭 <b>Chưa có tài khoản Zalo nào thuộc phạm vi {scope_title}!</b>\n"
+                "👉 Hãy bấm <b>📲 Quét QR Lấy Token</b> hoặc <b>🍪 Nhập Cookie + IMEI</b> trong tab <b>Quản Lý</b>.",
                 reply_to=reply_to,
             )
             return
 
-        lines = [f"📊 <b>KẾT QUẢ KIỂM TRA {len(rows)} TÀI KHOẢN ZALO ĐA ACC:</b>\n────────────────────"]
+        lines = [f"{tg_anim('chart', '📊')} <b>KẾT QUẢ KIỂM TRA {len(vis_accs)} TÀI KHOẢN ZALO {scope_title}:</b>\n<blockquote>"]
         live_cnt = 0
-        healed_cnt = 0
-        for r in rows:
-            acc_id, name, uid, imei, ck_raw, ua, zpw_enk_db, cmd_on = r
+        for a in vis_accs:
+            acc_id = a["id"]
+            name = a["name"]
+            uid = a["uid"]
+            imei = a["imei"]
+            ck_raw = a["cookies"]
+            ua = a["user_agent"]
+            zpw_enk_db = a["zpw_enk"]
+            cmd_on = a["chat_cmd_enabled"]
+            owner_id = a.get("owner_tg_id") or ROOT_ADMIN_ID
+
             chk = check_zalo_cookie_imei_live(
                 imei=imei,
                 cookies_input=ck_raw,
@@ -1753,9 +2034,9 @@ class DirectTelegramBotRunner:
                 uid=uid or "",
                 db_path=DB_PATH,
             )
+            owner_badge = f" [Owner: <code>{owner_id}</code>]" if is_admin else ""
             if chk.get("alive"):
                 live_cnt += 1
-                healed_cnt += 1
                 sync_zalo_account_to_web_db(
                     uid=chk.get("uid") or uid,
                     display_name=chk.get("display_name") or name,
@@ -1763,28 +2044,29 @@ class DirectTelegramBotRunner:
                     cookies_dict=chk.get("cookies") or parse_cookies_input_flexible(ck_raw),
                     zpw_enk=chk.get("zpw_enk") or zpw_enk_db or "",
                     user_agent=chk.get("user_agent") or ua or "",
+                    owner_tg_id=owner_id,
                 )
                 grp_n = int(chk.get("groups_count") or 0)
-                cmd_lbl = "💬 Lệnh .menu: BẬT" if cmd_on else "🔇 Lệnh: TẮT"
+                cmd_lbl = "💬32 Lệnh:BẬT" if cmd_on else "🔇Lệnh:TẮT"
                 lines.append(
-                    f"• 🟢 <b>#{acc_id} {chk.get('display_name') or name}</b> (UID: <code>{chk.get('uid') or uid}</code>)\n"
-                    f"  └ <b>LIVE TRONG ACC</b> ({grp_n} nhóm) • {cmd_lbl}"
+                    f"• 🟢 <b>#{acc_id} {chk.get('display_name') or name}</b> (<code>{chk.get('uid') or uid}</code>){owner_badge}\n"
+                    f"  └ <b>LIVE 24/7</b> ({grp_n} nhóm) • {cmd_lbl}"
                 )
             else:
                 lines.append(
-                    f"• 🔴 <b>#{acc_id} {name}</b> (UID: <code>{uid}</code>)\n"
+                    f"• 🔴 <b>#{acc_id} {name}</b> (<code>{uid}</code>){owner_badge}\n"
                     f"  └ <b>DIE</b> (<i>{chk.get('reason') or 'Hết hạn phiên'}</i>)"
                 )
 
+        lines.append("</blockquote>")
         lines.append(
-            f"\n✅ Tổng kết: <b>{live_cnt}/{len(rows)} Acc LIVE KHỎE</b> • Đã đồng bộ chống die Cookie/IMEI & sẵn sàng chạy Đa Acc!"
+            f"\n{tg_anim('check', '✅')} Tổng kết: <b>{live_cnt}/{len(vis_accs)} Acc LIVE KHỎE</b> • Đã đồng bộ chống die Cookie/IMEI & sẵn sàng chạy Đa Acc!"
         )
         self.delete_msg(chat_id, wait_mid)
         self.send_text(chat_id, "\n".join(lines), reply_to=reply_to)
 
-    # QUÉT QR ZALO PC TRỰC TIẾP TRÊN TELEGRAM (LẤY TOKEN + COOKIE + IMEI & SỐNG ĐA ACC 24/7)
+    # QUÉT QR ZALO PC TRỰC TIẾP TRÊN TELEGRAM (GẮN OWNER_TG_ID RIÊNG CHO NGƯỜI QUÉT)
     def handle_zalo_qr_command(self, chat_id, user_id, msg_id=None, region_code="sg_vip", custom_pc_name=""):
-        # Nếu có phiên QR cũ đang treo của user_id này -> tự động hủy phiên cũ ngay lập tức để lấy mã QR mới 0ms!
         prev_stop = self.active_qr_stop_events.get(user_id)
         if prev_stop is not None:
             try:
@@ -1827,11 +2109,12 @@ class DirectTelegramBotRunner:
                             wait_msg_id = None
 
                         caption = (
-                            f"{tg_anim('qr', '📲')} <b>MÃ QR ĐĂNG NHẬP ZALO PC (LẤY TOKEN & SỐNG ĐA ACC)</b>\n"
-                            "────────────────────\n"
+                            f"{tg_anim('qr', '📲')} <b>MÃ QR ĐĂNG NHẬP ZALO PC (LẤY TOKEN & SỐNG ĐA ACC)</b>\n\n"
+                            f"<blockquote>"
                             f"{tg_anim('sparkle', '1️⃣')} Mở ứng dụng <b>Zalo</b> trên điện thoại.\n"
                             f"{tg_anim('target', '2️⃣')} Quét mã QR bên trên và bấm <b>Đăng nhập</b>.\n"
-                            f"{tg_anim('shield', '🛡️')} <i>Sau khi quét, Bot sẽ trích xuất trọn bộ Token (zpw_enk) + Cookie + IMEI và giữ sống Acc này song song cùng các Acc khác 24/7!</i>"
+                            f"{tg_anim('shield', '🛡️')} Cookie quét được sẽ thuộc <b>kho riêng của bạn</b> và tự động bật 32 lệnh in-chat!"
+                            f"</blockquote>"
                         )
                         p_res = self.send_photo_bytes(chat_id, bordered_png, caption=caption, reply_to=msg_id)
                         if p_res.get("ok") and p_res.get("result"):
@@ -1852,7 +2135,7 @@ class DirectTelegramBotRunner:
                         if not my_stop_ev.is_set():
                             self.send_text(
                                 chat_id,
-                                f"{tg_anim('warn', '⌛')} <b>Mã QR Zalo đã hết hạn!</b> Bấm <b>📲 Quét QR Lấy Token</b> hoặc gõ <code>/qr</code> để lấy mã mới.",
+                                f"{tg_anim('warn', '⌛')} <b>Mã QR Zalo đã hết hạn!</b> Bấm <b>Quét QR Lấy Token</b> hoặc gõ <code>/qr</code> để lấy mã mới.",
                                 reply_to=msg_id,
                             )
 
@@ -1865,7 +2148,6 @@ class DirectTelegramBotRunner:
                             reply_to=msg_id,
                         )
 
-                # Chạy đồng bộ trực tiếp (không lồng asyncio event loop trong worker thread gây kẹt luồng!)
                 result = login_qr_with_unique_imei(callback=qr_callback, stop_ev=my_stop_ev)
 
                 if not result or my_stop_ev.is_set():
@@ -1893,28 +2175,29 @@ class DirectTelegramBotRunner:
                     cookies_dict=cookies,
                     zpw_enk=zpw_enk,
                     user_agent=ua,
+                    owner_tg_id=str(user_id),
                 )
-                self._cached_boxes_ts = 0.0
+                self._cached_boxes_by_user.clear()
 
                 if qr_msg_id:
                     self.delete_msg(chat_id, qr_msg_id)
 
                 cookies_str = json.dumps(cookies, ensure_ascii=False)
-                total_accs, _, _, _ = self._get_live_runtime_summary()
+                my_accs, _, _, _ = self._get_live_runtime_summary(user_id=user_id)
                 msg_success = (
-                    f"<tg-emoji emoji-id='5219805704906270925'>👑</tg-emoji> <b>QUÉT QR LẤY TOKEN & NẠP ĐA ACC THÀNH CÔNG!</b>\n"
-                    f"────────────────────\n"
+                    f"{tg_anim('crown', '👑')} <b>QUÉT QR LẤY TOKEN & NẠP ĐA ACC THÀNH CÔNG!</b>\n\n"
+                    f"<blockquote>"
                     f"👤 Tài khoản: <b>#{acc_id} — {dname}</b>\n"
                     f"🆔 UID Zalo: <code>{uid}</code> • Nhóm: <b>{grp_cnt} Box</b>\n"
-                    f"📡 Tổng dàn Acc đang chạy: <b>{total_accs} Acc song song</b>\n"
-                    f"💬 Lệnh trong Acc Zalo: <b>🟢 ĐÃ BẬT (.menu, .n, .g, .xa, .t, .ta)</b>\n\n"
+                    f"📡 Số Acc của bạn đang chạy: <b>{my_accs} Acc song song</b>\n"
+                    f"💬 Lệnh trên Acc Zalo: <b>🟢 ĐÃ BẬT 32 LỆNH (.menu, .treodo, .damau, .nhaypoll, .n, .g, .t, .ta)</b>"
+                    f"</blockquote>\n\n"
                     f"🔑 <b>Token Khóa Phiên (zpw_enk):</b>\n<pre>{zpw_enk or 'Đã đồng bộ tự động'}</pre>\n\n"
                     f"📱 <b>IMEI (z_uuid):</b>\n<pre>{imei}</pre>\n\n"
                     f"🍪 <b>Cookies JSON:</b>\n<pre>{cookies_str[:2600]}</pre>"
                 )
                 self.send_text(chat_id, msg_success, reply_to=msg_id)
 
-                # Gửi kèm file backup .txt chứa trọn bộ Token + IMEI + Cookie để lưu trữ an toàn
                 backup_txt = (
                     f"=== THONG TIN TOKEN & COOKIE ZALO PC ===\n"
                     f"Ten_Acc: {dname}\n"
@@ -1929,7 +2212,7 @@ class DirectTelegramBotRunner:
                     chat_id,
                     backup_txt,
                     filename=f"zalo_token_{uid or acc_id}.txt",
-                    caption=f"📂 File sao lưu Token + Cookie + IMEI của <b>{dname}</b> (Có thể dán lại vào Bot bất cứ lúc nào!)",
+                    caption=f"📂 File sao lưu Token + Cookie + IMEI của <b>{dname}</b> (Chỉ hiển thị cho bạn & Admin chính!)",
                     reply_to=msg_id,
                 )
 
@@ -1953,7 +2236,7 @@ class DirectTelegramBotRunner:
 
         self.executor.submit(_qr_worker)
 
-    # XỬ LÝ NÚT BẤM INLINE TRÊN TELEGRAM BOT
+    # XỬ LÝ NÚT BẤM INLINE TRÊN TELEGRAM BOT (PHẢN HỒI TỨC THÌ 0MS & PHÂN QUYỀN ADMIN/USER NGHIÊM NGẶT)
     def process_callback_query(self, cb):
         cb_id = cb.get("id")
         from_u = cb.get("from") or {}
@@ -1967,14 +2250,14 @@ class DirectTelegramBotRunner:
         if not chat_id or not data:
             return
 
-        # KIỂM TRA QUYỀN NGHIÊM NGẶT (CHẶN 100% NGƯỜI LẠ HOẶC ID ĐÃ BỊ XOÁ)
+        # 1. KIỂM TRA QUYỀN SỬ DỤNG BOT (CHẶN 100% NGƯỜI LẠ HOẶC ID ĐÃ BỊ ADMIN XOÁ)
         if not is_telegram_user_authorized(user_id, first_name):
             self.answer_callback(cb_id, "⛔ Bạn không có quyền sử dụng bot này!", show_alert=True)
             self.send_text(
                 chat_id,
                 f"⛔ <b>Bạn không có quyền sử dụng bot này.</b>\n"
                 f"🆔 ID của bạn: <code>{user_id}</code>\n"
-                f"👤 Liên hệ Admin để cấp quyền: <a href=\"tg://user?id={ROOT_ADMIN_ID}\">Bấm vào đây ↗️</a>",
+                f"👤 Liên hệ Admin chính để cấp quyền: <a href=\"tg://user?id={ROOT_ADMIN_ID}\">Bấm vào đây ↗️</a>",
             )
             return
 
@@ -1982,33 +2265,33 @@ class DirectTelegramBotRunner:
             self.answer_callback(cb_id)
             return
 
-        # Chuyển đổi giữa 3 Tab chính & phân trang 1..4
+        # 2. Chuyển đổi giữa 3 Tab chính & phân trang 1..4 (Async answer_callback để edit_menu_message chạy 0ms!)
         if data.startswith("tab_func_"):
             page = int(data.split("_")[-1] or 1)
             self.answer_callback(cb_id, f"Chức năng - Trang {page}/4")
             cap = self.build_tabbed_caption(first_name, user_id, active_tab="func", page=page)
-            kb = self.build_tabbed_keyboard(active_tab="func", page=page)
+            kb = self.build_tabbed_keyboard(active_tab="func", page=page, user_id=user_id)
             self.edit_menu_message(chat_id, msg_id, cap, reply_markup=kb)
             return
 
         if data == "tab_mgmt":
             self.answer_callback(cb_id, "Mở Tab Quản Lý")
             cap = self.build_tabbed_caption(first_name, user_id, active_tab="mgmt")
-            kb = self.build_tabbed_keyboard(active_tab="mgmt")
+            kb = self.build_tabbed_keyboard(active_tab="mgmt", user_id=user_id)
             self.edit_menu_message(chat_id, msg_id, cap, reply_markup=kb)
             return
 
         if data == "tab_util":
             self.answer_callback(cb_id, "Mở Tab Tiện Ích")
             cap = self.build_tabbed_caption(first_name, user_id, active_tab="util")
-            kb = self.build_tabbed_keyboard(active_tab="util")
+            kb = self.build_tabbed_keyboard(active_tab="util", user_id=user_id)
             self.edit_menu_message(chat_id, msg_id, cap, reply_markup=kb)
             return
 
-        # Chọn 1 trong 32 chức năng
+        # 3. Chọn 1 trong 32 chức năng
         if data.startswith("pickfn:"):
             fn_id = data.split(":", 1)[1]
-            self.answer_callback(cb_id, "Đang mở cấu hình chức năng...")
+            self.answer_callback(cb_id, "Mở cấu hình chức năng...")
             self.render_function_wizard(chat_id, msg_id, user_id, fn_id)
             return
 
@@ -2032,20 +2315,19 @@ class DirectTelegramBotRunner:
             force_ref = data.startswith("wiz_refresh_boxes:")
             fn_id = data.split(":", 1)[1]
             self.answer_callback(cb_id, "🔄 Đang làm mới danh sách Box..." if force_ref else "Chọn Box mục tiêu")
-            boxes = self._discover_all_boxes(force_refresh=force_ref)
-            rows = [[{"text": "📦 Tất Cả Các Box (All)", "callback_data": f"wiz_setbox:{fn_id}:ALL"}]]
+            boxes = self._discover_all_boxes(user_id=user_id, force_refresh=force_ref)
+            rows = [[tg_btn("Tất Cả Các Box (All)", f"wiz_setbox:{fn_id}:ALL", emoji_key="folder")]]
             for b in boxes[:14]:
-                b_label = f"💬 {b['name'][:26]} ({b['id'][-4:]})"
-                rows.append([{"text": b_label, "callback_data": f"wiz_setbox:{fn_id}:{b['id']}"}])
+                b_label = f"{b['name'][:26]} ({b['id'][-4:]})"
+                rows.append([tg_btn(b_label, f"wiz_setbox:{fn_id}:{b['id']}", emoji_key="chat")])
             rows.append([
-                {"text": "🔄 Làm Mới Box", "callback_data": f"wiz_refresh_boxes:{fn_id}"},
-                {"text": "✍️ Nhập ID Box", "callback_data": f"wiz_manualbox:{fn_id}"},
+                tg_btn("Làm Mới Box", f"wiz_refresh_boxes:{fn_id}", emoji_key="bolt"),
+                tg_btn("Nhập ID Box", f"wiz_manualbox:{fn_id}", emoji_key="sparkle"),
             ])
-            rows.append([{"text": "🔙 Quay lại", "callback_data": f"pickfn:{fn_id}"}])
+            rows.append([tg_btn("Quay lại", f"pickfn:{fn_id}", emoji_key="back")])
             cap = (
-                f"📦 <b>CHỌN BOX MỤC TIÊU ({len(boxes)} Box hiện có)</b>\n"
-                "────────────────────\n"
-                "• Bấm vào 1 nhóm bên dưới hoặc chọn <b>Tất Cả Các Box</b>:"
+                f"{tg_anim('folder', '📦')} <b>CHỌN BOX MỤC TIÊU ({len(boxes)} Box hiện có)</b>\n\n"
+                "<blockquote>• Bấm vào 1 nhóm bên dưới hoặc chọn <b>Tất Cả Các Box</b>:</blockquote>"
             )
             self.edit_menu_message(chat_id, msg_id, cap, reply_markup={"inline_keyboard": rows})
             return
@@ -2053,22 +2335,17 @@ class DirectTelegramBotRunner:
         if data.startswith("wiz_pickacc:"):
             fn_id = data.split(":", 1)[1]
             self.answer_callback(cb_id, "Chọn chế độ Tài khoản chạy")
-            accs = []
-            try:
-                conn = _open_db()
-                accs = conn.execute("SELECT id, name, platform, uid FROM accounts WHERE enabled=1 ORDER BY id ASC").fetchall()
-                conn.close()
-            except Exception:
-                pass
-            rows = [[{"text": f"👥 Tất Cả Acc Đang Sống ({len(accs)} Acc - Đa Acc)", "callback_data": f"wiz_setacc:{fn_id}:ALL"}]]
-            for a in accs[:14]:
-                aid, aname, aplat, auid = a
-                rows.append([{"text": f"👤 Acc #{aid}: [{str(aplat).upper()}] {aname[:22]}", "callback_data": f"wiz_setacc:{fn_id}:{aid}"}])
-            rows.append([{"text": "🔙 Quay lại", "callback_data": f"pickfn:{fn_id}"}])
+            vis_accs = get_user_visible_accounts(user_id, enabled_only=True)
+            rows = [[tg_btn(f"Tất Cả Acc Của Bạn ({len(vis_accs)} Acc - Đa Acc)", f"wiz_setacc:{fn_id}:ALL", emoji_key="users")]]
+            for a in vis_accs[:14]:
+                aid = a["id"]
+                aname = a["name"]
+                aplat = a["platform"]
+                rows.append([tg_btn(f"Acc #{aid}: [{str(aplat).upper()}] {aname[:22]}", f"wiz_setacc:{fn_id}:{aid}", emoji_key="cat")])
+            rows.append([tg_btn("Quay lại", f"pickfn:{fn_id}", emoji_key="back")])
             cap = (
-                f"👥 <b>CHỌN CHẾ ĐỘ TÀI KHOẢN CHẠY ({len(accs)} Acc sẵn sàng)</b>\n"
-                "────────────────────\n"
-                "• Chọn <b>Tất Cả Acc Đang Sống (Đa Acc)</b> để toàn bộ dàn Acc Zalo cùng xả sóng lệch pha siêu mượt (không lag, không die Cookie), hoặc chọn riêng 1 Acc:"
+                f"{tg_anim('users', '👥')} <b>CHỌN TÀI KHOẢN CHẠY ({len(vis_accs)} Acc khả dụng)</b>\n\n"
+                "<blockquote>• Chọn <b>Tất Cả Acc Của Bạn (Đa Acc)</b> để toàn bộ dàn Acc Zalo cùng xả sóng lệch pha siêu mượt (không lag, không die Cookie), hoặc chọn riêng 1 Acc:</blockquote>"
             )
             self.edit_menu_message(chat_id, msg_id, cap, reply_markup={"inline_keyboard": rows})
             return
@@ -2076,19 +2353,17 @@ class DirectTelegramBotRunner:
         if data.startswith("wiz_setacc:"):
             _, fn_id, aid_str = data.split(":", 2)
             wiz = self.wizard_selections.setdefault(user_id, {})
-            wiz["acc_id"] = aid_str
             if aid_str == "ALL":
-                wiz["acc_name"] = "Tất Cả Acc Đang Sống (Đa Acc)"
+                wiz["acc_id"] = "ALL"
+                wiz["acc_name"] = "Tất Cả Acc Của Bạn (Đa Acc)"
             else:
-                wiz["acc_name"] = f"Acc #{aid_str}"
-                try:
-                    conn = _open_db()
-                    r_a = conn.execute("SELECT name FROM accounts WHERE id=?", (int(aid_str),)).fetchone()
-                    conn.close()
-                    if r_a and r_a[0]:
-                        wiz["acc_name"] = f"#{aid_str} {r_a[0]}"
-                except Exception:
-                    pass
+                vis_accs = get_user_visible_accounts(user_id, enabled_only=False)
+                matched_a = next((a for a in vis_accs if str(a["id"]) == str(aid_str)), None)
+                if not matched_a:
+                    self.answer_callback(cb_id, "⛔ Bạn không có quyền sử dụng tài khoản này!", show_alert=True)
+                    return
+                wiz["acc_id"] = aid_str
+                wiz["acc_name"] = f"#{aid_str} {matched_a['name']}"
             self.answer_callback(cb_id, f"Đã chọn: {wiz['acc_name']}")
             self.render_function_wizard(chat_id, msg_id, user_id, fn_id)
             return
@@ -2100,7 +2375,7 @@ class DirectTelegramBotRunner:
             if bid == "ALL":
                 wiz["box_name"] = "Tất Cả Các Box (All)"
             else:
-                boxes = self._discover_all_boxes()
+                boxes = self._discover_all_boxes(user_id=user_id, force_refresh=False)
                 matched = next((x for x in boxes if str(x["id"]) == str(bid)), None)
                 wiz["box_name"] = matched["name"] if matched else f"Box {bid}"
             self.answer_callback(cb_id, f"Đã chọn: {wiz['box_name'][:24]}")
@@ -2138,9 +2413,9 @@ class DirectTelegramBotRunner:
             self.answer_callback(cb_id, f"🛑 Đã dừng {stopped} chiến dịch!", show_alert=True)
             cap = self.build_tabbed_caption(
                 first_name, user_id, active_tab="func", page=1,
-                extra_notice=f"<tg-emoji emoji-id='5210952531676504517'>🛑</tg-emoji> <b>Đã dừng tất cả ({stopped} chiến dịch)!</b>"
+                extra_notice=f"{tg_anim('stop', '🛑')} <b>Đã dừng tất cả ({stopped} chiến dịch)!</b>"
             )
-            self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 1))
+            self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 1, user_id=user_id))
             return
 
         # Cài đặt nhanh Delay / Màu chữ / Font / Anti-Ban
@@ -2156,9 +2431,9 @@ class DirectTelegramBotRunner:
             self.answer_callback(cb_id, f"⏱️ Đã chỉnh Delay = {d_val}s!", show_alert=True)
             cap = self.build_tabbed_caption(
                 first_name, user_id, active_tab="func", page=4,
-                extra_notice=f"✅ <b>Đã cập nhật tốc độ Delay = {d_val}s trên toàn hệ thống!</b>"
+                extra_notice=f"{tg_anim('check', '✅')} <b>Đã cập nhật tốc độ Delay = {d_val}s trên toàn hệ thống! (Treo Poll luôn giữ 0.0s Không Nghỉ)</b>"
             )
-            self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 4))
+            self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 4, user_id=user_id))
             return
 
         if data.startswith("setcolor:"):
@@ -2175,9 +2450,9 @@ class DirectTelegramBotRunner:
             self.answer_callback(cb_id, f"🎨 Đã bật: {label_c}!", show_alert=True)
             cap = self.build_tabbed_caption(
                 first_name, user_id, active_tab="func", page=4,
-                extra_notice=f"🎨 <b>Đã kích hoạt chế độ màu: {label_c}!</b>"
+                extra_notice=f"{tg_anim('magic', '🎨')} <b>Đã kích hoạt chế độ màu: {label_c}!</b>"
             )
-            self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 4))
+            self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 4, user_id=user_id))
             return
 
         if data.startswith("setfont:"):
@@ -2192,9 +2467,9 @@ class DirectTelegramBotRunner:
             self.answer_callback(cb_id, f"🔤 Đã đổi kiểu chữ: {f_style}!", show_alert=True)
             cap = self.build_tabbed_caption(
                 first_name, user_id, active_tab="func", page=4,
-                extra_notice=f"🔤 <b>Đã cập nhật kiểu chữ: {f_style}!</b>"
+                extra_notice=f"{tg_anim('sparkle', '🔤')} <b>Đã cập nhật kiểu chữ: {f_style}!</b>"
             )
-            self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 4))
+            self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 4, user_id=user_id))
             return
 
         if data.startswith("setanti:"):
@@ -2209,32 +2484,33 @@ class DirectTelegramBotRunner:
             self.answer_callback(cb_id, f"🛡️ Anti-Ban Box: {st_lbl}", show_alert=True)
             cap = self.build_tabbed_caption(
                 first_name, user_id, active_tab="func", page=4,
-                extra_notice=f"🛡️ <b>Trạng thái Anti Cấm Chat Box: {st_lbl}</b>"
+                extra_notice=f"{tg_anim('shield', '🛡️')} <b>Trạng thái Anti Cấm Chat Box: {st_lbl}</b>"
             )
-            self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 4))
+            self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 4, user_id=user_id))
             return
 
-        # QUẢN LÝ THÊM / XOÁ / XEM ID NGƯỜI DÙNG ĐƯỢC PHÉP SÀI BOT
+        # 4. QUẢN LÝ THÊM / XOÁ / XEM ID NGƯỜI DÙNG (CHỈ ADMIN CHÍNH 8827605973 MỚI CÓ QUYỀN CAO NHẤT)
         if data == "mgmt_add_id":
             if not is_root_admin(user_id):
-                self.answer_callback(cb_id, "⛔ Chỉ Admin chính (8827605973) mới có quyền thêm ID!", show_alert=True)
+                self.answer_callback(cb_id, "⛔ Quyền Admin là cao nhất! Chỉ Admin chính mới được thêm người dùng sài Bot!", show_alert=True)
                 return
             self.user_states[user_id] = {"mode": "add_user_id", "menu_msg_id": msg_id}
             self.answer_callback(cb_id, "Nhập ID người dùng cần cấp quyền")
             self.send_text(
                 chat_id,
-                "➕ <b>THÊM ID NGƯỜI DÙNG ĐƯỢC PHÉP SÀI BOT</b>\n"
-                "────────────────────\n"
-                "• Hãy gửi <b>ID Telegram / Zalo</b> kèm tên (tùy chọn) theo cú pháp:\n"
+                f"{tg_anim('plus', '➕')} <b>THÊM ID NGƯỜI DÙNG ĐƯỢC PHÉP SÀI BOT (CHỈ ADMIN CHÍNH)</b>\n\n"
+                "<blockquote>"
+                "• Hãy gửi <b>ID Telegram</b> kèm tên (tùy chọn) theo cú pháp:\n"
                 "  <code>123456789 Tên Người Dùng</code>\n"
-                "• Hoặc gửi nhiều ID (mỗi dòng 1 ID) để cấp quyền hàng loạt!",
+                "• Lưu ý: Người được thêm chỉ xem và dùng được Cookie do chính họ quét/nạp, không thể xem tất cả Cookie của hệ thống và không thể thêm người khác!"
+                "</blockquote>",
                 reply_to=msg_id,
             )
             return
 
         if data == "mgmt_del_id_menu":
             if not is_root_admin(user_id):
-                self.answer_callback(cb_id, "⛔ Chỉ Admin chính (8827605973) mới có quyền xoá ID!", show_alert=True)
+                self.answer_callback(cb_id, "⛔ Chỉ Admin chính mới có quyền xoá người dùng khỏi Bot!", show_alert=True)
                 return
             self.answer_callback(cb_id, "Chọn ID cần xoá quyền sài Bot")
             self._render_delete_user_id_menu(chat_id, msg_id)
@@ -2269,20 +2545,23 @@ class DirectTelegramBotRunner:
             return
 
         if data == "mgmt_list_ids":
+            if not is_root_admin(user_id):
+                self.answer_callback(cb_id, "⛔ Chỉ Admin chính mới xem được danh sách ID toàn hệ thống!", show_alert=True)
+                return
             self.answer_callback(cb_id, "Danh sách ID được phép sài Bot")
             perms = list_telegram_permissions()
-            lines = ["📋 <b>DANH SÁCH ID ĐƯỢC PHÉP SỬ DỤNG BOT:</b>\n────────────────────"]
+            lines = [f"{tg_anim('list', '📋')} <b>DANH SÁCH ID ĐƯỢP PHÉP SỬ DỤNG BOT:</b>\n<blockquote>"]
             for idx, p in enumerate(perms, 1):
-                badge = "👑 <b>Admin Gốc</b>" if p.get("is_root") else "🥷 <b>Thành Viên VIP</b>"
+                badge = "👑 <b>Admin Chính</b>" if p.get("is_root") else "🥷 <b>Thành Viên VIP (Chỉ xem Cookie riêng)</b>"
                 lines.append(f"{idx}. {badge}: <b>{p['name']}</b> — ID: <code>{p['uid']}</code>")
-            lines.append("\n🔒 <i>Tất cả người dùng ngoài danh sách này đều bị chặn 100%!</i>")
+            lines.append("</blockquote>\n🔒 <i>Chỉ Admin chính mới có quyền cấp/xoá quyền sài Bot!</i>")
             kb = {
                 "inline_keyboard": [
                     [
-                        {"text": "➕ Thêm ID Mới", "callback_data": "mgmt_add_id"},
-                        {"text": "➖ Xoá ID Người Dùng", "callback_data": "mgmt_del_id_menu"},
+                        tg_btn("Thêm ID Mới", "mgmt_add_id", emoji_key="plus"),
+                        tg_btn("Xoá Quyền Sài Bot", "mgmt_del_id_menu", emoji_key="minus"),
                     ],
-                    [{"text": "🔙 Quay lại Quản Lý", "callback_data": "tab_mgmt"}],
+                    [tg_btn("Quay lại Quản Lý", "tab_mgmt", emoji_key="back")],
                 ]
             }
             self.edit_menu_message(chat_id, msg_id, "\n".join(lines), reply_markup=kb)
@@ -2293,23 +2572,27 @@ class DirectTelegramBotRunner:
             self.answer_callback(cb_id, "Nhập Cookie + IMEI Zalo")
             self.send_text(
                 chat_id,
-                "🍪 <b>NHẬP COOKIE + IMEI ZALO (SỐNG TRONG ACC & SÀI LỆNH 24/7)</b>\n"
-                "────────────────────\n"
-                "Bạn có thể gửi theo <b>bất kỳ cách nào</b> dưới đây:\n"
-                "1️⃣ <b>Gửi 1 bước:</b> Dán <code>IMEI | Cookie</code> (hoặc <code>Cookie | IMEI</code>, hoặc JSON có cả Cookie & IMEI).\n"
-                "2️⃣ <b>Gửi 2 bước:</b> Dán <b>Cookie</b> (<code>zpw_sek=...</code> hoặc <code>zpsid=...</code>) gửi trước ➡️ Bot sẽ hỏi tiếp <b>IMEI</b>!\n\n"
-                "✨ <i>Ngay sau khi nạp, Acc đó sẽ tự động lấy Token khóa phiên (zpw_enk) và gõ được đầy đủ lệnh <code>.menu</code>, <code>.n</code>, <code>.g</code>, <code>.t</code> trực tiếp trên Zalo!</i>",
+                f"{tg_anim('cookie', '🍪')} <b>NHẬP COOKIE + IMEI ZALO (SÀI TRỌN BỘ 32 LỆNH TRÊN ACC)</b>\n\n"
+                "<blockquote>"
+                "1️⃣ <b>Cách 1 (1 dòng):</b> Dán <code>IMEI | Cookie</code> (hoặc JSON có cả Cookie & IMEI).\n"
+                "2️⃣ <b>Cách 2 (2 bước):</b> Dán <b>Cookie</b> (<code>zpw_sek=...</code> hoặc <code>zpsid=...</code>) trước ➡️ Bot sẽ hỏi tiếp <b>IMEI</b>!\n"
+                "✨ <i>Ngay sau khi nạp, Acc sẽ tự động lấy khóa phiên (zpw_enk) và gõ được đầy đủ 32 lệnh (<code>.menu</code>, <code>.treodo</code>, <code>.damau</code>, <code>.nhaypoll</code>, <code>.n</code>, <code>.g</code>, <code>.t</code>...) trực tiếp trên Zalo!</i>"
+                "</blockquote>",
                 reply_to=msg_id,
             )
             return
 
         if data == "mgmt_acc_files":
-            self.answer_callback(cb_id, "Mở quản lý Đa Acc & Kho File")
-            self._render_accounts_and_files_menu(chat_id, msg_id)
+            self.answer_callback(cb_id, "Mở quản lý Cookie & Kho File")
+            self._render_accounts_and_files_menu(chat_id, msg_id, user_id=user_id)
             return
 
         if data.startswith("toggle_acc_cmd:"):
             acc_id = int(data.split(":", 1)[1])
+            vis_accs = get_user_visible_accounts(user_id, enabled_only=False)
+            if not any(int(a["id"]) == acc_id for a in vis_accs):
+                self.answer_callback(cb_id, "⛔ Bạn chỉ được chỉnh tài khoản do chính bạn quét/nạp!", show_alert=True)
+                return
             new_st = 1
             try:
                 conn = _open_db()
@@ -2324,47 +2607,55 @@ class DirectTelegramBotRunner:
                     _main_app.sync_all_zalo_listeners()
             except Exception:
                 pass
-            lbl = "🟢 BẬT nhận lệnh (.menu)" if new_st else "🔇 TẮT nhận lệnh"
+            lbl = "🟢 BẬT nhận 32 lệnh (.menu)" if new_st else "🔇 TẮT nhận lệnh"
             self.answer_callback(cb_id, f"Acc #{acc_id}: {lbl}!", show_alert=True)
-            self._render_accounts_and_files_menu(chat_id, msg_id, notice=f"✅ Đã chỉnh Acc <b>#{acc_id}</b>: <b>{lbl}</b>!")
+            self._render_accounts_and_files_menu(chat_id, msg_id, user_id=user_id, notice=f"✅ Đã chỉnh Acc <b>#{acc_id}</b>: <b>{lbl}</b>!")
             return
 
         if data.startswith("export_acc_token:"):
             acc_id = int(data.split(":", 1)[1])
+            vis_accs = get_user_visible_accounts(user_id, enabled_only=False)
+            target_a = next((a for a in vis_accs if int(a["id"]) == acc_id), None)
+            if not target_a:
+                self.answer_callback(cb_id, "⛔ Bạn chỉ được xem Cookie do chính bạn quét! Chỉ Admin chính mới xem được tất cả Cookie.", show_alert=True)
+                return
             self.answer_callback(cb_id, f"Đang trích xuất Token/Cookie Acc #{acc_id}...")
-            try:
-                conn = _open_db()
-                row = conn.execute(
-                    "SELECT id, name, platform, uid, imei, cookies, zpw_enk, user_agent, token FROM accounts WHERE id=?",
-                    (acc_id,)
-                ).fetchone()
-                conn.close()
-                if row:
-                    aid, aname, aplat, auid, aimei, ack, aenk, aua, atok = row
-                    if str(aplat).lower() == "discord":
-                        self.send_text(
-                            chat_id,
-                            f"🔑 <b>TOKEN DISCORD ACC #{aid} ({aname}):</b>\n<pre>{atok}</pre>",
-                            reply_to=msg_id,
-                        )
-                    else:
-                        self.send_text(
-                            chat_id,
-                            f"🔑 <b>TRỌN BỘ TOKEN & COOKIE + IMEI ZALO ACC #{aid} ({aname})</b>\n"
-                            f"────────────────────\n"
-                            f"🆔 UID: <code>{auid}</code>\n"
-                            f"🔑 Token (zpw_enk):\n<pre>{aenk or 'Đang đồng bộ'}</pre>\n"
-                            f"📱 IMEI (z_uuid):\n<pre>{aimei}</pre>\n"
-                            f"🍪 Cookies:\n<pre>{str(ack or '')[:2600]}</pre>\n\n"
-                            f"📋 <b>Cú pháp nạp nhanh 1 dòng:</b>\n<pre>{aimei}|{str(ack or '')[:1200]}</pre>",
-                            reply_to=msg_id,
-                        )
-            except Exception as e:
-                self.send_text(chat_id, f"❌ Lỗi xuất Token: <code>{e}</code>", reply_to=msg_id)
+            aid = target_a["id"]
+            aname = target_a["name"]
+            aplat = target_a["platform"]
+            auid = target_a["uid"]
+            aimei = target_a["imei"]
+            ack = target_a["cookies"]
+            aenk = target_a["zpw_enk"]
+            atok = target_a["token"]
+            if str(aplat).lower() == "discord":
+                self.send_text(
+                    chat_id,
+                    f"🔑 <b>TOKEN DISCORD ACC #{aid} ({aname}):</b>\n<pre>{atok}</pre>",
+                    reply_to=msg_id,
+                )
+            else:
+                self.send_text(
+                    chat_id,
+                    f"{tg_anim('key', '🔑')} <b>TRỌN BỘ TOKEN & COOKIE + IMEI ZALO ACC #{aid} ({aname})</b>\n\n"
+                    f"<blockquote>"
+                    f"🆔 UID: <code>{auid}</code>\n"
+                    f"👤 Chủ sở hữu ID: <code>{target_a.get('owner_tg_id') or ROOT_ADMIN_ID}</code>"
+                    f"</blockquote>\n\n"
+                    f"🔑 <b>Token (zpw_enk):</b>\n<pre>{aenk or 'Đang đồng bộ'}</pre>\n"
+                    f"📱 <b>IMEI (z_uuid):</b>\n<pre>{aimei}</pre>\n"
+                    f"🍪 <b>Cookies:</b>\n<pre>{str(ack or '')[:2600]}</pre>\n\n"
+                    f"📋 <b>Cú pháp nạp nhanh 1 dòng:</b>\n<pre>{aimei}|{str(ack or '')[:1200]}</pre>",
+                    reply_to=msg_id,
+                )
             return
 
         if data.startswith("del_acc_now:"):
             acc_id = int(data.split(":", 1)[1])
+            vis_accs = get_user_visible_accounts(user_id, enabled_only=False)
+            if not any(int(a["id"]) == acc_id for a in vis_accs):
+                self.answer_callback(cb_id, "⛔ Bạn không có quyền xoá tài khoản của người khác!", show_alert=True)
+                return
             try:
                 conn = _open_db()
                 conn.execute("DELETE FROM accounts WHERE id=?", (acc_id,))
@@ -2377,9 +2668,9 @@ class DirectTelegramBotRunner:
                     _main_app.reload_accounts_to_ram()
             except Exception:
                 pass
-            self._cached_boxes_ts = 0.0
+            self._cached_boxes_by_user.clear()
             self.answer_callback(cb_id, f"🗑️ Đã xoá tài khoản #{acc_id}!", show_alert=True)
-            self._render_accounts_and_files_menu(chat_id, msg_id, notice=f"✅ Đã xoá tài khoản <b>#{acc_id}</b>!")
+            self._render_accounts_and_files_menu(chat_id, msg_id, user_id=user_id, notice=f"✅ Đã xoá tài khoản <b>#{acc_id}</b>!")
             return
 
         if data == "cmd_qr_sg":
@@ -2388,13 +2679,13 @@ class DirectTelegramBotRunner:
             return
 
         if data == "cmd_checkzalo":
-            self.answer_callback(cb_id, "Đang kiểm tra toàn bộ Cookie Zalo...")
-            self.executor.submit(self.handle_check_all_stored_zalo_cookies, chat_id, msg_id)
+            self.answer_callback(cb_id, "Đang kiểm tra Cookie Zalo...")
+            self.executor.submit(self.handle_check_all_stored_zalo_cookies, chat_id, user_id, msg_id)
             return
 
         if data == "cmd_status":
             self.answer_callback(cb_id, "Đang tải trạng thái...")
-            self.send_status_report(chat_id, reply_to=msg_id)
+            self.send_status_report(chat_id, user_id=user_id, reply_to=msg_id)
             return
 
         if data == "prx_add_prompt":
@@ -2466,105 +2757,101 @@ class DirectTelegramBotRunner:
         rows = []
         for p in sub_users[:16]:
             rows.append([
-                {
-                    "text": f"🗑️ Xoá ID: {p['name']} ({p['uid']})",
-                    "callback_data": f"del_uid_now:{p['uid']}"
-                }
+                tg_btn(f"Xoá Quyền Sài Bot: {p['name']} ({p['uid']})", f"del_uid_now:{p['uid']}", emoji_key="trash")
             ])
         if sub_users:
-            rows.append([{"text": "🔥 Xoá Sạch Tất Cả ID Phụ", "callback_data": "del_all_sub_uids"}])
+            rows.append([tg_btn("Thu Hồi Toàn Bộ ID Phụ", "del_all_sub_uids", emoji_key="fire")])
         rows.append([
-            {"text": "➕ Thêm ID Mới", "callback_data": "mgmt_add_id"},
-            {"text": "🔙 Quay lại Quản Lý", "callback_data": "tab_mgmt"},
+            tg_btn("Thêm ID Mới", "mgmt_add_id", emoji_key="plus"),
+            tg_btn("Quay lại Quản Lý", "tab_mgmt", emoji_key="back"),
         ])
         notice_str = f"\n{notice}\n" if notice else ""
         if sub_users:
             body = (
-                f"➖ <b>XOÁ ID NGƯỜI DÙNG KHỎI BOT ({len(sub_users)} ID phụ)</b>\n"
-                f"────────────────────{notice_str}\n"
-                "• Bấm vào bất kỳ ID nào bên dưới để <b>xoá ngay lập tức</b> quyền sử dụng Bot của ID đó.\n"
+                f"{tg_anim('minus', '➖')} <b>XOÁ QUYỀN SÀI BOT CỦA NGƯỜNG DÙNG ({len(sub_users)} ID phụ)</b>\n\n"
+                f"<blockquote>{notice_str}"
+                "• Bấm vào bất kỳ ID nào bên dưới để <b>thu hồi ngay lập tức</b> quyền sử dụng Bot của ID đó.\n"
                 "• Hoặc gõ lệnh: <code>/delid &lt;ID&gt;</code>"
+                "</blockquote>"
             )
         else:
             body = (
-                f"➖ <b>XOÁ ID NGƯỜI DÙNG KHỎI BOT</b>\n"
-                f"────────────────────{notice_str}\n"
-                f"🔒 Hiện tại <b>chỉ có duy nhất Admin gốc (<code>{ROOT_ADMIN_ID}</code>)</b> có quyền sử dụng Bot (chưa có ID phụ nào)."
+                f"{tg_anim('minus', '➖')} <b>XOÁ QUYỀN SÀI BOT CỦA NGƯỜI DÙNG</b>\n\n"
+                f"<blockquote>{notice_str}"
+                f"🔒 Hiện tại <b>chỉ có duy nhất Admin chính (<code>{ROOT_ADMIN_ID}</code>)</b> có quyền sử dụng Bot (chưa có ID phụ nào)."
+                "</blockquote>"
             )
         self.edit_menu_message(chat_id, msg_id, body, reply_markup={"inline_keyboard": rows})
 
-    def _render_accounts_and_files_menu(self, chat_id, msg_id, notice=""):
-        accs = []
-        try:
-            conn = _open_db()
-            accs = conn.execute(
-                "SELECT id, name, platform, uid, imei, chat_cmd_enabled FROM accounts ORDER BY id DESC"
-            ).fetchall()
-            conn.close()
-        except Exception:
-            pass
+    def _render_accounts_and_files_menu(self, chat_id, msg_id, user_id=ROOT_ADMIN_ID, notice=""):
+        is_admin = is_root_admin(user_id)
+        vis_accs = get_user_visible_accounts(user_id, enabled_only=False)
         files = self._get_available_txt_files()
         rows = [
             [
-                {"text": "📲 Quét QR Thêm Acc", "callback_data": "cmd_qr_sg"},
-                {"text": "🍪 Nhập Cookie + IMEI", "callback_data": "mgmt_input_ck_im"},
+                tg_btn("Quét QR Thêm Acc", "cmd_qr_sg", emoji_key="qr"),
+                tg_btn("Nhập Cookie + IMEI", "mgmt_input_ck_im", emoji_key="cookie"),
             ]
         ]
         acc_lines = []
-        for a in accs[:10]:
-            aid, aname, aplat, auid, aimei, cmd_on = a
-            cmd_flag = (cmd_on is None) or bool(int(cmd_on))
-            cmd_badge = "💬Lệnh:ON" if cmd_flag else "🔇Lệnh:OFF"
+        for a in vis_accs[:10]:
+            aid = a["id"]
+            aname = a["name"]
+            aplat = a["platform"]
+            auid = a["uid"]
+            cmd_flag = bool(a.get("chat_cmd_enabled", 1))
+            owner_id = a.get("owner_tg_id") or ROOT_ADMIN_ID
+            cmd_badge = "💬32 Lệnh:ON" if cmd_flag else "🔇Lệnh:OFF"
+            owner_tag = f" | Owner:<code>{owner_id}</code>" if is_admin else ""
             acc_lines.append(
-                f"• 🟢 <b>#{aid} [{str(aplat).upper()}] {aname}</b> (UID: <code>{auid or '-'}</code> | {cmd_badge})"
+                f"• 🟢 <b>#{aid} [{str(aplat).upper()}] {aname}</b> (<code>{auid or '-'}</code> | {cmd_badge}{owner_tag})"
             )
             rows.append([
-                {"text": f"🔑 Token #{aid} ({aname[:10]})", "callback_data": f"export_acc_token:{aid}"},
-                {"text": f"{'💬 Bật' if cmd_flag else '🔇 Tắt'} Lệnh #{aid}", "callback_data": f"toggle_acc_cmd:{aid}"},
-                {"text": f"🗑️ Xoá #{aid}", "callback_data": f"del_acc_now:{aid}"},
+                tg_btn(f"Cookie #{aid} ({aname[:8]})", f"export_acc_token:{aid}", emoji_key="key"),
+                tg_btn(f"{'Bật' if cmd_flag else 'Tắt'} Lệnh #{aid}", f"toggle_acc_cmd:{aid}", emoji_key="chat"),
+                tg_btn(f"Xoá #{aid}", f"del_acc_now:{aid}", emoji_key="trash"),
             ])
         rows.append([
-            {"text": "🔍 Check & Cứu Toàn Bộ Acc", "callback_data": "cmd_checkzalo"},
-            {"text": "🔙 Quay lại Quản Lý", "callback_data": "tab_mgmt"},
+            tg_btn("Check Toàn Bộ Cookie" if is_admin else "Check Cookie Của Tôi", "cmd_checkzalo", emoji_key="search"),
+            tg_btn("Quay lại Quản Lý", "tab_mgmt", emoji_key="back"),
         ])
         f_names = ", ".join(f"<code>{x['filename']}</code>" for x in files[:10]) or "Chưa có file"
         notice_s = f"\n{notice}\n" if notice else ""
-        acc_summary = "\n".join(acc_lines) if acc_lines else "• <i>Chưa có tài khoản nào. Hãy bấm Quét QR hoặc Nhập Cookie + IMEI!</i>"
+        acc_summary = "\n".join(acc_lines) if acc_lines else "• <i>Bạn chưa có Cookie/Acc nào. Hãy bấm Quét QR hoặc Nhập Cookie + IMEI!</i>"
+        scope_hdr = f"TẤT CẢ COOKIE HỆ THỐNG ({len(vis_accs)} Acc - Admin)" if is_admin else f"COOKIE & ACC CỦA BẠN ({len(vis_accs)} Acc)"
         cap = (
-            f"🗂️ <b>QUẢN LÝ ĐA ACC ZALO ({len(accs)} Acc) & KHO FILE ({len(files)} File)</b>\n"
-            f"────────────────────{notice_s}\n"
-            f"{acc_summary}\n\n"
+            f"{tg_anim('cat', '🗂️')} <b>{scope_hdr} & KHO FILE ({len(files)} File)</b>\n\n"
+            f"<blockquote>{notice_s}"
+            f"{acc_summary}"
+            f"</blockquote>\n\n"
             f"📄 <b>Kho file .txt:</b> {f_names}\n"
-            f"💡 <i>Mẹo: Bấm <b>🔑 Token #id</b> để lấy Token/Cookie+IMEI, <b>💬 Bật Lệnh</b> để bật/tắt gõ lệnh .menu trên Acc đó, hoặc gửi file .txt vào chat để thêm kịch bản!</i>"
+            f"🔒 <i>{'Quyền Admin Chính: Xem & quản lý toàn bộ Cookie của mọi thành viên.' if is_admin else 'Bảo mật: Bạn chỉ xem & sử dụng được các Cookie do chính bạn quét/nạp.'}</i>"
         )
         self.edit_menu_message(chat_id, msg_id, cap, reply_markup={"inline_keyboard": rows})
 
-    def send_status_report(self, chat_id, reply_to=None):
-        try:
-            conn = _open_db()
-            accs = conn.execute("SELECT id, name, platform, uid, enabled FROM accounts").fetchall()
-            conn.close()
-        except Exception:
-            accs = []
-
-        acc_cnt, running_cnt, color_label, delay_val = self._get_live_runtime_summary()
+    def send_status_report(self, chat_id, user_id=ROOT_ADMIN_ID, reply_to=None):
+        is_admin = is_root_admin(user_id)
+        vis_accs = get_user_visible_accounts(user_id, enabled_only=False)
+        acc_cnt, running_cnt, color_label, delay_val = self._get_live_runtime_summary(user_id=user_id)
         perms = list_telegram_permissions()
+        scope_lbl = "Tất cả Acc toàn hệ thống (Admin)" if is_admin else "Acc riêng của bạn"
         lines = [
-            "<tg-emoji emoji-id='5397782960512444700'>📡</tg-emoji> <b>TRẠNG THÁI HỆ THỐNG BOT TREO 4APP 🇻🇳</b>",
-            "────────────────────",
-            f"👑 Admin Gốc: <code>{ROOT_ADMIN_ID}</code>",
-            f"🔐 Số ID được phép dùng Bot: <b>{len(perms)} ID</b> (Chặn 100% người lạ)",
-            f"📡 Tài khoản đang kết nối: <b>{len(accs)} Acc</b>",
+            f"{tg_anim('radar', '📡')} <b>TRẠNG THÁI HỆ THỐNG BOT TREO 4APP 🇻🇳</b>\n",
+            "<blockquote>",
+            f"👑 Admin Chính: <code>{ROOT_ADMIN_ID}</code>",
+            f"🔐 Số ID được phép dùng Bot: <b>{len(perms)} ID</b>" if is_admin else "🔐 Quyền hạn: <b>Thành Viên VIP (Kho Cookie độc lập)</b>",
+            f"📡 {scope_lbl}: <b>{len(vis_accs)} Acc</b> ({acc_cnt} Acc bật)",
             f"🚀 Chiến dịch đang chạy: <b>{running_cnt} luồng</b>",
-            f"🎨 Chế độ màu chữ: <b>{color_label} (0% Chữ Trắng)</b> • Delay: <b>{delay_val}s</b>",
-            "🛡️ Anti Cấm Chat Box Zalo: <b>ĐANG BẬT (Typing Pulse + Box Pacing)</b>",
-            "",
+            f"🎨 Chế độ màu chữ: <b>{color_label}</b> • Delay: <b>{delay_val}s</b> (Poll: <b>0.0s</b>)",
+            "🛡️ Anti Cấm Chat Box Zalo: <b>ĐANG BẬT (Zero-Lag Multi-Acc)</b>",
+            "</blockquote>",
         ]
-        if accs:
-            lines.append("<b>Danh sách Tài khoản:</b>")
-            for a in accs[:15]:
-                st = "🟢" if a[4] else "⚪"
-                lines.append(f"• {st} <b>#{a[0]} [{str(a[2]).upper()}] {a[1]}</b> (<code>{a[3] or '-'}</code>)")
+        if vis_accs:
+            lines.append("<b>Danh sách Tài khoản hiển thị cho bạn:</b>")
+            for a in vis_accs[:15]:
+                st = "🟢" if a.get("enabled", 1) else "⚪"
+                owner_info = f" [Owner: <code>{a.get('owner_tg_id') or ROOT_ADMIN_ID}</code>]" if is_admin else ""
+                lines.append(f"• {st} <b>#{a['id']} [{str(a['platform']).upper()}] {a['name']}</b> (<code>{a['uid'] or '-'}</code>){owner_info}")
         else:
             lines.append("• <i>Chưa có tài khoản nào. Gõ /qr để quét mã QR Zalo PC!</i>")
         self.send_text(chat_id, "\n".join(lines), reply_to=reply_to)
@@ -2578,7 +2865,7 @@ class DirectTelegramBotRunner:
         if mode == "add_user_id":
             self.user_states.pop(user_id, None)
             if not is_root_admin(user_id):
-                self.send_text(chat_id, "⛔ Chỉ Admin gốc mới có quyền thêm ID!", reply_to=msg_id)
+                self.send_text(chat_id, "⛔ Chỉ Admin chính (8827605973) mới có quyền thêm ID sài Bot!", reply_to=msg_id)
                 return True
             added_list = []
             for ln in text.splitlines():
@@ -2593,7 +2880,8 @@ class DirectTelegramBotRunner:
             if added_list:
                 self.send_text(
                     chat_id,
-                    f"✅ <b>ĐÃ THÊM QUYỀN SỬ DỤNG BOT CHO {len(added_list)} ID:</b>\n• " + "\n• ".join(added_list),
+                    f"✅ <b>ĐÃ CẤP QUYỀN SỬ DỤNG BOT CHO {len(added_list)} ID:</b>\n• " + "\n• ".join(added_list)
+                    + "\n\n🔒 <i>Người được thêm chỉ xem được Cookie họ tự quét, không xem được tất cả Cookie của hệ thống!</i>",
                     reply_to=msg_id,
                 )
             else:
@@ -2616,7 +2904,7 @@ class DirectTelegramBotRunner:
             fn_id = st.get("fn_id") or "fn_treo_nhay"
             wiz = self.wizard_selections.setdefault(user_id, {})
             wiz["custom_text"] = text.strip()
-            self.send_text(chat_id, "✅ Đã lưu nội dung tự chọn! Bấm <b>🚀 BẮT ĐẦU CHẠY</b> trên bảng điều khiển để phang ngay.", reply_to=msg_id)
+            self.send_text(chat_id, "✅ Đã lưu nội dung tự chọn! Bấm <b>BẮT ĐẦU CHẠY</b> trên bảng điều khiển để phang ngay.", reply_to=msg_id)
             if st.get("menu_msg_id"):
                 self.render_function_wizard(chat_id, st["menu_msg_id"], user_id, fn_id)
             return True
@@ -2653,14 +2941,14 @@ class DirectTelegramBotRunner:
                 res = DiscordTokenGetter().login_discord(parts[0], parts[1], parts[2] if len(parts) > 2 else "")
                 if res.get("status") == "SUCCESS":
                     tok = res["token"]
-                    sync_and_keepalive_tokens_to_db(tok)
-                    self.send_text(chat_id, f"✅ <b>Lấy Token Discord thành công & đã nạp vào Bot:</b>\n<pre>{tok}</pre>", reply_to=msg_id)
+                    sync_and_keepalive_tokens_to_db(tok, owner_tg_id=str(user_id))
+                    self.send_text(chat_id, f"✅ <b>Lấy Token Discord thành công & đã nạp vào kho riêng của bạn:</b>\n<pre>{tok}</pre>", reply_to=msg_id)
                 else:
                     self.send_text(chat_id, f"❌ {res.get('message')}", reply_to=msg_id)
             else:
-                saved = sync_and_keepalive_tokens_to_db(text)
+                saved = sync_and_keepalive_tokens_to_db(text, owner_tg_id=str(user_id))
                 if saved:
-                    self.send_text(chat_id, f"✅ Đã nạp <b>{len(saved)} Token Discord</b> vào hệ thống!", reply_to=msg_id)
+                    self.send_text(chat_id, f"✅ Đã nạp <b>{len(saved)} Token Discord</b> vào kho riêng của bạn!", reply_to=msg_id)
                 else:
                     self.send_text(chat_id, "⚠️ Không tìm thấy Token hợp lệ!", reply_to=msg_id)
             return True
@@ -2677,7 +2965,7 @@ class DirectTelegramBotRunner:
                 self.send_text(
                     chat_id,
                     "🍪 <b>Đã nhận Cookie Zalo hợp lệ!</b>\n"
-                    "👉 Bây giờ hãy gửi tiếp mã <b>IMEI (z_uuid)</b> của tài khoản này để hoàn tất kích hoạt sài lệnh trong Acc:",
+                    "👉 Bây giờ hãy gửi tiếp mã <b>IMEI (z_uuid)</b> của tài khoản này để hoàn tất kích hoạt 32 lệnh trong Acc:",
                     reply_to=msg_id,
                 )
                 return True
@@ -2694,7 +2982,7 @@ class DirectTelegramBotRunner:
                 self.user_states.pop(user_id, None)
                 self.send_text(
                     chat_id,
-                    "⚠️ Không tìm thấy Cookie Zalo (<code>zpw_sek</code> / <code>zpsid</code>) hoặc IMEI hợp lệ! Hãy bấm <b>🍪 Nhập Cookie + IMEI Zalo</b> để thử lại.",
+                    "⚠️ Không tìm thấy Cookie Zalo (<code>zpw_sek</code> / <code>zpsid</code>) hoặc IMEI hợp lệ! Hãy bấm <b>Nhập Cookie + IMEI</b> để thử lại.",
                     reply_to=msg_id,
                 )
                 return True
@@ -2733,13 +3021,13 @@ class DirectTelegramBotRunner:
         if mode == "getcookie":
             self.user_states.pop(user_id, None)
             if "c_user=" in text and "xs=" in text:
-                saved = sync_and_keepalive_tokens_to_db(text)
-                self.send_text(chat_id, f"✅ Đã lưu Cookie Messenger/FB ({len(saved)} Acc) vào hệ thống!", reply_to=msg_id)
+                saved = sync_and_keepalive_tokens_to_db(text, owner_tg_id=str(user_id))
+                self.send_text(chat_id, f"✅ Đã lưu Cookie Messenger/FB ({len(saved)} Acc) vào kho của bạn!", reply_to=msg_id)
             elif "|" in text:
                 parts = [p.strip() for p in text.split("|")]
                 res = FacebookCookieGetter().login_facebook(parts[0], parts[1], parts[2] if len(parts) > 2 else "")
                 if res.get("status") == "SUCCESS":
-                    sync_and_keepalive_tokens_to_db(res["cookies"])
+                    sync_and_keepalive_tokens_to_db(res["cookies"], owner_tg_id=str(user_id))
                     self.send_text(chat_id, f"✅ <b>Lấy Cookie FB thành công:</b>\n<pre>{res['cookies']}</pre>", reply_to=msg_id)
                 else:
                     self.send_text(chat_id, f"❌ {res.get('message')}", reply_to=msg_id)
@@ -2798,13 +3086,13 @@ class DirectTelegramBotRunner:
         if not chat_id:
             return
 
-        # KIỂM TRA QUYỀN TRUY CẬP NGHIÊM NGẶT (CHỈ ADMIN 8827605973 VÀ CÁC ID ĐƯỢC THÊM MỚI SÀI ĐƯỢC BOT)
+        # KIỂM TRA QUYỀN TRUY CẬP NGHIÊM NGẶT (CHỈ ADMIN 8827605973 VÀ CÁC ID ĐƯỢC ADMIN THÊM MỚI SÀI ĐƯỢC BOT)
         if not is_telegram_user_authorized(user_id, first_name):
             self.send_text(
                 chat_id,
                 f"⛔ <b>Bạn không có quyền sử dụng bot này.</b>\n"
                 f"🆔 ID của bạn: <code>{user_id}</code>\n"
-                f"👤 Liên hệ Admin: <a href=\"tg://user?id={ROOT_ADMIN_ID}\">Bấm vào đây ↗️</a>",
+                f"👤 Liên hệ Admin chính: <a href=\"tg://user?id={ROOT_ADMIN_ID}\">Bấm vào đây ↗️</a>",
                 reply_to=msg_id,
             )
             return
@@ -2830,13 +3118,13 @@ class DirectTelegramBotRunner:
                     self.send_text(
                         chat_id,
                         "🍪 <b>Đã nhận diện Cookie Zalo!</b>\n"
-                        "👉 Hãy gửi tiếp mã <b>IMEI (z_uuid)</b> của tài khoản này để Bot đăng nhập thẳng vào Acc và bật sài lệnh (<code>.menu</code>, <code>.n</code>, <code>.g</code>):",
+                        "👉 Hãy gửi tiếp mã <b>IMEI (z_uuid)</b> của tài khoản này để Bot đăng nhập thẳng vào Acc và bật 32 lệnh (<code>.menu</code>, <code>.treodo</code>, <code>.nhaypoll</code>, <code>.n</code>, <code>.g</code>):",
                         reply_to=msg_id,
                     )
                 return
-            saved_dc = sync_and_keepalive_tokens_to_db(text)
+            saved_dc = sync_and_keepalive_tokens_to_db(text, owner_tg_id=str(user_id))
             if saved_dc:
-                self.send_text(chat_id, f"✅ Đã tự động nạp <b>{len(saved_dc)} tài khoản</b> vào Bot!", reply_to=msg_id)
+                self.send_text(chat_id, f"✅ Đã tự động nạp <b>{len(saved_dc)} tài khoản</b> vào kho riêng của bạn!", reply_to=msg_id)
                 return
 
         parts = text.split(None, 1)
@@ -2846,7 +3134,7 @@ class DirectTelegramBotRunner:
         if cmd_raw in ("/start", "/menu", "/help", "/bot"):
             self.user_states.pop(user_id, None)
             cap = self.build_tabbed_caption(first_name, user_id, active_tab="func", page=1)
-            kb = self.build_tabbed_keyboard(active_tab="func", page=1)
+            kb = self.build_tabbed_keyboard(active_tab="func", page=1, user_id=user_id)
             self.send_welcome_video_menu(chat_id, cap, reply_to=msg_id, reply_markup=kb)
             return
 
@@ -2867,22 +3155,23 @@ class DirectTelegramBotRunner:
             self.user_states[user_id] = {"mode": "input_zalo_ck_im"}
             self.send_text(
                 chat_id,
-                "🍪 <b>NHẬP COOKIE + IMEI ZALO (SÀI LỆNH TRỰC TIẾP TRÊN ACC)</b>\n"
-                "────────────────────\n"
+                f"{tg_anim('cookie', '🍪')} <b>NHẬP COOKIE + IMEI ZALO (SÀI 32 LỆNH TRỰC TIẾP TRÊN ACC)</b>\n\n"
+                "<blockquote>"
                 "• Hãy dán <code>IMEI | Cookie</code> (hoặc dán <b>Cookie</b> trước, sau đó dán <b>IMEI</b>):\n"
-                "• Sau khi nạp, tài khoản sẽ sống 24/7 trong Acc và gõ được mọi lệnh <code>.menu</code>, <code>.n</code>, <code>.g</code>, <code>.t</code> trên Zalo!",
+                "• Sau khi nạp, tài khoản sẽ sống 24/7 trong Acc và gõ được mọi lệnh <code>.menu</code>, <code>.treodo</code>, <code>.nhaypoll</code>, <code>.n</code>, <code>.g</code>, <code>.t</code> trên Zalo!"
+                "</blockquote>",
                 reply_to=msg_id,
             )
             return
 
         if cmd_raw in ("/addid", "/cp", "/them"):
             if not is_root_admin(user_id):
-                self.send_text(chat_id, "⛔ Chỉ Admin chính (8827605973) mới có quyền thêm ID người dùng!", reply_to=msg_id)
+                self.send_text(chat_id, "⛔ Quyền Admin là cao nhất! Chỉ Admin chính (8827605973) mới được thêm người dùng sử dụng Bot!", reply_to=msg_id)
                 return
             if not arg_str:
                 self.send_text(
                     chat_id,
-                    "➕ <b>Cú pháp thêm ID người dùng:</b>\n<code>/addid &lt;ID_Người_Dùng&gt; [Tên]</code>\nVí dụ: <code>/addid 123456789 Anh Ba</code>",
+                    "➕ <b>Cú pháp thêm ID người dùng (Chỉ Admin chính):</b>\n<code>/addid &lt;ID_Người_Dùng&gt; [Tên]</code>\nVí dụ: <code>/addid 123456789 Anh Ba</code>",
                     reply_to=msg_id,
                 )
                 return
@@ -2892,18 +3181,19 @@ class DirectTelegramBotRunner:
             grant_telegram_permission(t_uid, t_name)
             self.send_text(
                 chat_id,
-                f"✅ <b>Đã thêm quyền sử dụng Bot cho ID:</b> <code>{t_uid}</code> (<b>{t_name}</b>)!",
+                f"✅ <b>Đã cấp quyền sử dụng Bot cho ID:</b> <code>{t_uid}</code> (<b>{t_name}</b>)!\n"
+                "🔒 <i>Thành viên này chỉ xem và sử dụng được Cookie do chính họ quét/nạp.</i>",
                 reply_to=msg_id,
             )
             return
 
         if cmd_raw in ("/delid", "/xq", "/xoa", "/xoaid"):
             if not is_root_admin(user_id):
-                self.send_text(chat_id, "⛔ Chỉ Admin chính (8827605973) mới có quyền xoá ID người dùng!", reply_to=msg_id)
+                self.send_text(chat_id, "⛔ Chỉ Admin chính (8827605973) mới có quyền xoá quyền sử dụng Bot!", reply_to=msg_id)
                 return
             if not arg_str:
                 cap = self.build_tabbed_caption(first_name, user_id, active_tab="mgmt")
-                msg_sent = self.send_welcome_video_menu(chat_id, cap, reply_to=msg_id, reply_markup=self.build_tabbed_keyboard("mgmt"))
+                msg_sent = self.send_welcome_video_menu(chat_id, cap, reply_to=msg_id, reply_markup=self.build_tabbed_keyboard("mgmt", user_id=user_id))
                 mid_new = (msg_sent.get("result") or {}).get("message_id")
                 if mid_new:
                     self._render_delete_user_id_menu(chat_id, mid_new)
@@ -2922,20 +3212,24 @@ class DirectTelegramBotRunner:
             return
 
         if cmd_raw in ("/listid", "/dsq"):
+            if not is_root_admin(user_id):
+                self.send_text(chat_id, "⛔ Chỉ Admin chính (8827605973) mới được xem danh sách ID toàn hệ thống!", reply_to=msg_id)
+                return
             perms = list_telegram_permissions()
-            lines = ["📋 <b>DANH SÁCH ID ĐƯỢC PHÉP SỬ DỤNG BOT:</b>\n────────────────────"]
+            lines = [f"{tg_anim('list', '📋')} <b>DANH SÁCH ID ĐƯỢC PHÉP SỬ DỤNG BOT:</b>\n<blockquote>"]
             for i, p in enumerate(perms, 1):
-                role_b = "👑 Admin Gốc" if p.get("is_root") else "🥷 Thành Viên VIP"
+                role_b = "👑 Admin Chính" if p.get("is_root") else "🥷 Thành Viên VIP (Kho riêng)"
                 lines.append(f"{i}. {role_b}: <b>{p['name']}</b> — <code>{p['uid']}</code>")
+            lines.append("</blockquote>")
             self.send_text(chat_id, "\n".join(lines), reply_to=msg_id)
             return
 
         if cmd_raw in ("/checkzalo", "/check"):
-            self.executor.submit(self.handle_check_all_stored_zalo_cookies, chat_id, msg_id)
+            self.executor.submit(self.handle_check_all_stored_zalo_cookies, chat_id, user_id, msg_id)
             return
 
         if cmd_raw in ("/status", "/ping"):
-            self.send_status_report(chat_id, reply_to=msg_id)
+            self.send_status_report(chat_id, user_id=user_id, reply_to=msg_id)
             return
 
         if cmd_raw in ("/stopall", "/ta", "/stop"):
@@ -2944,12 +3238,12 @@ class DirectTelegramBotRunner:
                 stopped = _main_app.stop_tasks_for_thread(None)
             except Exception:
                 stopped = 0
-            self.send_text(chat_id, f"<tg-emoji emoji-id='5210952531676504517'>🛑</tg-emoji> <b>Đã dừng khẩn cấp toàn bộ ({stopped} chiến dịch)!</b>", reply_to=msg_id)
+            self.send_text(chat_id, f"{tg_anim('stop', '🛑')} <b>Đã dừng khẩn cấp toàn bộ ({stopped} chiến dịch)!</b>", reply_to=msg_id)
             return
 
         # Mặc định hiển thị bảng điều khiển Video
         cap = self.build_tabbed_caption(first_name, user_id, active_tab="func", page=1)
-        kb = self.build_tabbed_keyboard(active_tab="func", page=1)
+        kb = self.build_tabbed_keyboard(active_tab="func", page=1, user_id=user_id)
         self.send_welcome_video_menu(chat_id, cap, reply_to=msg_id, reply_markup=kb)
 
     def _safe_process_update(self, upd):
@@ -2973,7 +3267,7 @@ class DirectTelegramBotRunner:
                         "timeout": 15,
                         "allowed_updates": ["message", "edited_message", "callback_query"],
                     },
-                    timeout=(6.0, 21.0),
+                    timeout=(5.0, 20.0),
                     use_poll_session=True,
                 )
                 self.last_poll_ok_ts = time.time()
@@ -2989,7 +3283,7 @@ class DirectTelegramBotRunner:
                     desc_err = str(res.get("description") or "").lower()
                     if "conflict" in desc_err or "webhook" in desc_err:
                         try:
-                            self.api_call("deleteWebhook", {"drop_pending_updates": False}, timeout=8, use_poll_session=True)
+                            self.api_call("deleteWebhook", {"drop_pending_updates": False}, timeout=6, use_poll_session=True)
                         except Exception:
                             pass
                     if fail_streak >= 3:
@@ -2999,7 +3293,7 @@ class DirectTelegramBotRunner:
                             pass
                         self.poll_session = self._create_isolated_session()
                         fail_streak = 0
-                    time.sleep(1.2)
+                    time.sleep(0.5)
             except Exception as e:
                 self.last_error = str(e)
                 fail_streak += 1
@@ -3008,7 +3302,7 @@ class DirectTelegramBotRunner:
                 except Exception:
                     pass
                 self.poll_session = self._create_isolated_session()
-                time.sleep(1.5)
+                time.sleep(0.8)
 
 
 _BOT_INSTANCE = None
@@ -3023,18 +3317,18 @@ def _ensure_internal_bot_watchdog():
     _BOT_WATCHDOG_STARTED = True
 
     def _watchdog():
-        time.sleep(10.0)
+        time.sleep(8.0)
         while True:
             try:
                 inst = _BOT_INSTANCE
                 if inst is not None and inst.running:
                     age = time.time() - float(getattr(inst, "last_poll_ok_ts", time.time()))
                     pt = getattr(inst, "poll_thread", None)
-                    if age > 42.0 or (pt is not None and not pt.is_alive()):
+                    if age > 35.0 or (pt is not None and not pt.is_alive()):
                         start_background_telegram_bot(inst.token, force_restart=True)
             except Exception:
                 pass
-            time.sleep(10.0)
+            time.sleep(8.0)
 
     threading.Thread(target=_watchdog, daemon=True, name="TelegramBotWatchdog").start()
 
@@ -3046,7 +3340,7 @@ def start_background_telegram_bot(token=TELEGRAM_BOT_TOKEN, force_restart=False)
         if _BOT_INSTANCE is not None and _BOT_INSTANCE.running and not force_restart:
             pt = getattr(_BOT_INSTANCE, "poll_thread", None)
             age = time.time() - float(getattr(_BOT_INSTANCE, "last_poll_ok_ts", time.time()))
-            if (pt is None or pt.is_alive()) and age <= 42.0:
+            if (pt is None or pt.is_alive()) and age <= 35.0:
                 return _BOT_INSTANCE
         if _BOT_INSTANCE is not None:
             _BOT_INSTANCE.running = False
