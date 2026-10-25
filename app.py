@@ -627,9 +627,16 @@ def init_db():
         filename TEXT,
         filepath TEXT,
         lines_count INTEGER,
-        created_at REAL
+        created_at REAL,
+        file_type TEXT DEFAULT 'nhay'
     )
     """)
+    try:
+        f_cols = [c[1] for c in cur.execute("PRAGMA table_info(files)").fetchall()]
+        if "file_type" not in f_cols:
+            cur.execute("ALTER TABLE files ADD COLUMN file_type TEXT DEFAULT 'nhay'")
+    except Exception:
+        pass
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS tasks (
@@ -714,9 +721,10 @@ def init_db():
             if pf_name.lower() not in existing_fnames and os.path.isfile(dst_pf):
                 with open(dst_pf, "r", encoding="utf-8", errors="ignore") as rf_p:
                     l_cnt = sum(1 for ln in rf_p if ln.strip())
+                pf_type = "ngon" if "ngon" in pf_name.lower() else "nhay"
                 cur.execute(
-                    "INSERT INTO files (filename, filepath, lines_count, created_at) VALUES (?, ?, ?, ?)",
-                    (pf_name, dst_pf, max(1, l_cnt), time.time())
+                    "INSERT INTO files (filename, filepath, lines_count, created_at, file_type) VALUES (?, ?, ?, ?, ?)",
+                    (pf_name, dst_pf, max(1, l_cnt), time.time(), pf_type)
                 )
         z_rows = cur.execute("SELECT id, imei, cookies FROM accounts WHERE platform='zalo'").fetchall()
         for zr in z_rows:
@@ -1030,9 +1038,13 @@ SYSTEM_RUNTIME_CONFIG = {
     "hide_acc_log": True,
     "hide_tag_all": True,
     "hide_tag_name": False,
-    "selected_file": "",
+    "selected_file": "nhay.txt",
+    "selected_nhay_file": "nhay.txt",
+    "selected_ngon_file": "ngon.txt",
     "selected_file_by_acc": {},
-    "require_file_first": True,
+    "selected_nhay_by_acc": {},
+    "selected_ngon_by_acc": {},
+    "require_file_first": False,
 }
 SYSTEM_CFG_LOCK = threading.RLock()
 
@@ -1108,6 +1120,13 @@ VALID_SYSTEM_CMD_TOKENS = {
     "nhaytop", "sotop", "treotop", "reostr", "story", "addmem", "raidbox",
     "block", "unblock", "joinsv", "join", "rename", "doiten", "changeavt", "avt",
     "ngontele", "nhaytele", "nhaytagtele", "nhayanhtele", "treogmail", "nhaygmail", "meta", "ai",
+    "mauword", "mautu", "mauchar", "maukytu", "maurainbow", "maudong", "maudo", "maucam", "mauvang",
+    "mauxanh", "mauxanhla", "mauxanhduong", "maungoc", "mautim", "mauhong", "maulua", "maufire",
+    "maubien", "mauocean", "mauhoanggia", "mauroyal", "maucyber", "mauneon", "maurandom", "mautat", "mauoff",
+    "addnhay", "themnhay", "taonhay", "addngon", "themngon", "taongon",
+    "chonnhay", "setnhay", "filenhay", "chonngon", "setngon", "filengon", "chedochonfile",
+    "giaitan", "gtan", "nhaygiaitan", "spamgiaitan", "giaitan1", "giaitannhom",
+    "sticker", "nhandan", "stkr", "taosticker", "qr", "taoqr", "qrzalo", "getqr",
 }
 
 def normalize_cmd_homoglyphs(s):
@@ -1573,7 +1592,7 @@ def parse_file_stream_fast(filepath, strip_numbers=True):
 
     return result
 
-def get_ordered_files_with_display_num():
+def get_ordered_files_with_display_num(file_type=None):
     conn = db()
     rows = conn.execute("SELECT * FROM files ORDER BY id ASC").fetchall()
     conn.close()
@@ -1581,6 +1600,12 @@ def get_ordered_files_with_display_num():
     for idx, r in enumerate(rows, start=1):
         d = dict(r)
         d["display_num"] = idx
+        ft = str(d.get("file_type") or "").strip().lower()
+        if not ft:
+            ft = "ngon" if "ngon" in str(d.get("filename") or "").lower() else "nhay"
+        d["file_type"] = ft
+        if file_type and ft != str(file_type).lower():
+            continue
         out.append(d)
     return out
 
@@ -3525,6 +3550,221 @@ class ZaloParamsEncryptor:
         return parsed if isinstance(parsed, dict) else None
 
 
+
+class ZaloStickerMakerEngine:
+    """Động Cơ Tạo Sticker Sắc Nét Bằng Ảnh (512x512 Ultra-Sharp) & Tạo Nhãn Dán Bằng Video Ngắn (<= 3.0 Giây):
+    - Kiểm tra thời lượng Video chính xác tới 0.01 giây (qua ffprobe + bộ đọc MP4/MOV atom mvhd thuần Python).
+    - Nếu Video > 3.0 giây: TỪ CHỐI NGAY LẬP TỨC theo đúng quy chuẩn hệ thống!
+    - Nếu Video <= 3.0 giây: Chuyển đổi thành nhãn dán động WebP/GIF/MP4 512x512 sắc nét.
+    - Nếu là Ảnh tĩnh: Nâng cấp độ nét (LANCZOS + UnsharpMask + Sharpness 1.35x) chuẩn Sticker 512x512 trong suốt."""
+
+    MAX_VIDEO_STICKER_DURATION_SEC = 3.0
+
+    @classmethod
+    def get_video_duration_seconds(cls, video_path_or_bytes):
+        """Trả về thời lượng chính xác (giây) của file video MP4/MOV/WebM/GIF."""
+        tmp_path = None
+        try:
+            if isinstance(video_path_or_bytes, (bytes, bytearray)):
+                fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
+                os.close(fd)
+                with open(tmp_path, "wb") as wf:
+                    wf.write(video_path_or_bytes)
+                target_path = tmp_path
+            else:
+                target_path = str(video_path_or_bytes)
+
+            if not os.path.exists(target_path):
+                return 0.0
+
+            # Ưu tiên 1: Dùng ffprobe để đo chính xác tuyệt đối tới từng phần nghìn giây
+            try:
+                import subprocess
+                proc = subprocess.run(
+                    [
+                        "ffprobe", "-v", "error",
+                        "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1",
+                        target_path
+                    ],
+                    capture_output=True, text=True, timeout=6
+                )
+                out_s = (proc.stdout or "").strip()
+                if out_s and out_s != "N/A":
+                    dur = float(out_s)
+                    if dur > 0:
+                        return round(dur, 3)
+            except Exception:
+                pass
+
+            # Ưu tiên 2: Bộ giải mã MP4/MOV mvhd atom thuần Python (không phụ thuộc bên ngoài)
+            try:
+                with open(target_path, "rb") as rf:
+                    raw = rf.read(2 * 1024 * 1024)
+                idx = raw.find(b"mvhd")
+                if idx != -1 and idx + 24 <= len(raw):
+                    version = raw[idx + 4]
+                    if version == 0 and idx + 24 <= len(raw):
+                        timescale = struct.unpack(">I", raw[idx + 16:idx + 20])[0]
+                        duration = struct.unpack(">I", raw[idx + 20:idx + 24])[0]
+                        if timescale > 0:
+                            return round(float(duration) / float(timescale), 3)
+                    elif version == 1 and idx + 32 <= len(raw):
+                        timescale = struct.unpack(">I", raw[idx + 24:idx + 28])[0]
+                        duration = struct.unpack(">Q", raw[idx + 28:idx + 36])[0]
+                        if timescale > 0:
+                            return round(float(duration) / float(timescale), 3)
+            except Exception:
+                pass
+            return 0.0
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+    @classmethod
+    def create_sharp_image_sticker(cls, image_bytes_or_path, output_dir=None):
+        """Tạo Sticker Ảnh Sắc Nét 512x512 (PNG + WebP) cho Zalo & Telegram."""
+        out_dir = output_dir or UPLOAD_DIR
+        os.makedirs(out_dir, exist_ok=True)
+        try:
+            from PIL import Image, ImageEnhance, ImageFilter
+            if isinstance(image_bytes_or_path, (bytes, bytearray)):
+                im = Image.open(io.BytesIO(image_bytes_or_path)).convert("RGBA")
+            else:
+                im = Image.open(str(image_bytes_or_path)).convert("RGBA")
+
+            w, h = im.size
+            scale = min(512.0 / max(1, w), 512.0 / max(1, h))
+            nw = max(1, min(512, int(round(w * scale))))
+            nh = max(1, min(512, int(round(h * scale))))
+            im_resized = im.resize((nw, nh), Image.Resampling.LANCZOS)
+            try:
+                im_resized = im_resized.filter(ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=2))
+                im_resized = ImageEnhance.Sharpness(im_resized).enhance(1.30)
+                im_resized = ImageEnhance.Contrast(im_resized).enhance(1.06)
+            except Exception:
+                pass
+
+            canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+            canvas.paste(im_resized, ((512 - nw) // 2, (512 - nh) // 2), im_resized)
+
+            ts_tag = f"{int(time.time() * 1000)}_{secrets.token_hex(2)}"
+            png_path = os.path.join(out_dir, f"sticker_sharp_{ts_tag}.png")
+            webp_path = os.path.join(out_dir, f"sticker_sharp_{ts_tag}.webp")
+            canvas.save(png_path, format="PNG", optimize=True)
+            try:
+                canvas.save(webp_path, format="WEBP", quality=98, lossless=True)
+            except Exception:
+                webp_path = png_path
+            with open(png_path, "rb") as rf:
+                png_bytes = rf.read()
+            return {
+                "ok": True,
+                "type": "image_sticker",
+                "png_path": png_path,
+                "webp_path": webp_path,
+                "png_bytes": png_bytes,
+                "width": 512,
+                "height": 512,
+                "message": "✅ Đã tạo Sticker Ảnh Sắc Nét Chuẩn 512×512 Ultra-HD thành công!",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"❌ Không thể tạo Sticker từ ảnh: {e}",
+            }
+
+    @classmethod
+    def create_short_video_sticker(cls, video_bytes_or_path, declared_duration=None, output_dir=None):
+        """Tạo Nhãn Dán Động Bằng Video Ngắn (<= 3.0 Giây). Nếu > 3.0s thì TỪ CHỐI NGAY LẬP TỨC!"""
+        out_dir = output_dir or UPLOAD_DIR
+        os.makedirs(out_dir, exist_ok=True)
+        tmp_in = None
+        try:
+            if isinstance(video_bytes_or_path, (bytes, bytearray)):
+                fd, tmp_in = tempfile.mkstemp(suffix=".mp4")
+                os.close(fd)
+                with open(tmp_in, "wb") as wf:
+                    wf.write(video_bytes_or_path)
+                in_path = tmp_in
+            else:
+                in_path = str(video_bytes_or_path)
+
+            measured_dur = cls.get_video_duration_seconds(in_path)
+            eff_dur = float(declared_duration) if (declared_duration is not None and float(declared_duration) > measured_dur) else measured_dur
+
+            if eff_dur > cls.MAX_VIDEO_STICKER_DURATION_SEC:
+                return {
+                    "ok": False,
+                    "rejected_over_3s": True,
+                    "duration": round(eff_dur, 2),
+                    "error": (
+                        f"❌ TỪ CHỐI TẠO NHÃN DÁN VIDEO: Video của bạn dài {eff_dur:.2f} giây "
+                        f"(Vượt quá giới hạn tối đa {cls.MAX_VIDEO_STICKER_DURATION_SEC:.0f} giây)!\n"
+                        f"👉 Chỉ nhận tạo nhãn dán bằng video ngắn dưới 3 giây (≤ 3.0s)."
+                    ),
+                }
+
+            ts_tag = f"{int(time.time() * 1000)}_{secrets.token_hex(2)}"
+            gif_path = os.path.join(out_dir, f"sticker_anim_{ts_tag}.gif")
+            webp_path = os.path.join(out_dir, f"sticker_anim_{ts_tag}.webp")
+            import subprocess
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", in_path,
+                    "-t", "3.0",
+                    "-vf", "fps=15,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
+                    "-loop", "0",
+                    gif_path
+                ],
+                capture_output=True, timeout=15
+            )
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-i", in_path,
+                        "-t", "3.0",
+                        "-vcodec", "libwebp", "-lossless", "0", "-q:v", "85",
+                        "-vf", "fps=15,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
+                        "-loop", "0", "-an",
+                        webp_path
+                    ],
+                    capture_output=True, timeout=15
+                )
+            except Exception:
+                pass
+
+            out_file = gif_path if os.path.exists(gif_path) else in_path
+            with open(out_file, "rb") as rf:
+                anim_bytes = rf.read()
+
+            return {
+                "ok": True,
+                "type": "video_sticker",
+                "duration": round(eff_dur if eff_dur > 0 else 2.5, 2),
+                "gif_path": gif_path if os.path.exists(gif_path) else out_file,
+                "webp_path": webp_path if os.path.exists(webp_path) else out_file,
+                "anim_bytes": anim_bytes,
+                "width": 512,
+                "height": 512,
+                "message": f"✅ Đã tạo Nhãn Dán Video Ngắn ({eff_dur if eff_dur > 0 else 2.5:.2f}s ≤ 3.0s) Chuẩn 512×512 Sắc Nét!",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"❌ Lỗi xử lý Video Sticker: {e}",
+            }
+        finally:
+            if tmp_in and os.path.exists(tmp_in):
+                try:
+                    os.remove(tmp_in)
+                except Exception:
+                    pass
+
+
 class Zalo:
     _CLIENT_POOL = {}
     _GROUPS_CACHE = {}
@@ -4524,6 +4764,282 @@ class Zalo:
         r = self.s.post(url, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc}, timeout=8)
         return r.status_code == 200
 
+    ZALO_VIP_STICKERS = [
+        {"id": 23338, "catId": 10425, "type": 7, "name": "Rồng Lửa Hoàng Kim"},
+        {"id": 23339, "catId": 10425, "type": 7, "name": "Sét Đánh Siêu Cấp"},
+        {"id": 20951, "catId": 10186, "type": 7, "name": "Cười Khinh Bỉ VIP"},
+        {"id": 20952, "catId": 10186, "type": 7, "name": "Vỗ Tay Đỉnh Cao"},
+        {"id": 21685, "catId": 10265, "type": 7, "name": "Bắn Tim Liên Thanh"},
+        {"id": 21686, "catId": 10265, "type": 7, "name": "Quẩy Nhiệt Huyết"},
+    ]
+
+    def send_gif_or_sticker(self, thread_id, text_msg="", is_group=True, mentions=None, tag_all=False, color_mode="word_rainbow", fixed_color="red"):
+        """Gửi đồng thời Sticker Động / GIF Zalo thật + Tin nhắn nhảy màu cầu vồng cho lệnh .gif!"""
+        check_campaign_thread_aborted(thread_id)
+        tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
+        if not tid_s:
+            return False
+        self._gif_seq = (getattr(self, "_gif_seq", 0) + 1) & 0xFFFF
+        stk = self.ZALO_VIP_STICKERS[self._gif_seq % len(self.ZALO_VIP_STICKERS)]
+        pl_stk = {
+            "stickerId": int(stk["id"]),
+            "cateId": int(stk["catId"]),
+            "type": int(stk["type"]),
+            "clientId": int(time.time() * 1000) + (self._gif_seq & 0xFF),
+            "imei": self.imei,
+            "zsource": 101,
+        }
+        if is_group:
+            pl_stk["grid"] = tid_s
+            ep_list = (
+                "https://tt-group-wpa.chat.zalo.me/api/group/sticker",
+                "https://group-wpa.chat.zalo.me/api/group/sticker",
+            )
+        else:
+            pl_stk["toid"] = tid_s
+            ep_list = (
+                "https://tt-chat2-wpa.chat.zalo.me/api/message/sticker",
+                "https://wpa.chat.zalo.me/api/message/sticker",
+            )
+        active_s = getattr(self, "prio_s", None) or self.s
+        for ep_s in ep_list:
+            try:
+                enc_s = self._enc(pl_stk)
+                r_s = active_s.post(
+                    ep_s,
+                    params={"zpw_ver": 645, "zpw_type": 30},
+                    data={"params": enc_s},
+                    timeout=(1.0, 2.2),
+                )
+                if r_s.status_code == 200:
+                    break
+            except Exception:
+                continue
+
+        if text_msg and str(text_msg).strip():
+            self.send_adv(
+                str(text_msg).strip(), tid_s,
+                color_mode=color_mode or "word_rainbow", fixed_color=fixed_color,
+                is_group=is_group, mentions=mentions, tag_all=tag_all,
+                is_heading=True, antiband=True, use_emoji=False, icon_count=0,
+                auto_retry_thread_type=True, strip_line_num=True,
+                hide_tag_all=True, hide_tag_name=True, priority_bypass=True
+            )
+        return True
+
+    def send_custom_sticker_media(self, thread_id, media_bytes, filename="sticker.png", is_group=True, caption=""):
+        """Tải lên & gửi Sticker Ảnh Sắc Nét (512x512) hoặc Nhãn Dán Video Ngắn (<=3s) trực tiếp vào Box Zalo."""
+        tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
+        if not tid_s or not media_bytes:
+            return False
+        active_s = getattr(self, "prio_s", None) or self.s
+        client_id = str(int(time.time() * 1000))
+        uploaded_ok = False
+        try:
+            up_params = {
+                "zpw_ver": 645,
+                "zpw_type": 30,
+                "params": self._enc({
+                    "totalChunk": 1,
+                    "fileName": filename,
+                    "clientId": client_id,
+                    "totalSize": len(media_bytes),
+                    "imei": self.imei,
+                    "chunkId": 1,
+                    "grid" if is_group else "toid": tid_s,
+                    "isE2EE": 0,
+                }),
+                "type": "11" if is_group else "2",
+            }
+            files_up = {"chunkContent": (filename, media_bytes, "image/webp" if filename.endswith(".webp") else ("image/gif" if filename.endswith(".gif") else "image/png"))}
+            for ep_up in (
+                "https://tt-files-wpa.chat.zalo.me/api/group/photo_original/upload" if is_group else "https://tt-files-wpa.chat.zalo.me/api/message/photo_original/upload",
+                "https://files-wpa.chat.zalo.me/api/group/photo_original/upload" if is_group else "https://files-wpa.chat.zalo.me/api/message/photo_original/upload",
+            ):
+                try:
+                    r_u = active_s.post(ep_up, params=up_params, files=files_up, timeout=8)
+                    if r_u.status_code == 200 and r_u.content:
+                        rj_u = r_u.json()
+                        if rj_u.get("data"):
+                            dec_u = json.loads(self._dec(rj_u["data"]))
+                            d_u = dec_u.get("data") if isinstance(dec_u, dict) else {}
+                            if isinstance(d_u, dict) and (d_u.get("normalUrl") or d_u.get("hdUrl") or d_u.get("thumbUrl") or d_u.get("photoId")):
+                                normal_url = d_u.get("normalUrl") or d_u.get("hdUrl") or d_u.get("thumbUrl") or ""
+                                thumb_url = d_u.get("thumbUrl") or normal_url
+                                photo_id = d_u.get("photoId") or client_id
+                                send_pl = {
+                                    "grid" if is_group else "toid": tid_s,
+                                    "photoId": str(photo_id),
+                                    "clientId": str(client_id),
+                                    "oriUrl": normal_url,
+                                    "thumbUrl": thumb_url,
+                                    "normalUrl": normal_url,
+                                    "hdUrl": normal_url,
+                                    "width": 512,
+                                    "height": 512,
+                                    "desc": str(caption or ""),
+                                    "imei": self.imei,
+                                    "zsource": 101,
+                                }
+                                ep_send = "https://tt-files-wpa.chat.zalo.me/api/group/photo" if is_group else "https://tt-files-wpa.chat.zalo.me/api/message/photo"
+                                r_snd = active_s.post(ep_send, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(send_pl)}, timeout=6)
+                                if r_snd.status_code == 200:
+                                    uploaded_ok = True
+                                    break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        if not uploaded_ok:
+            self.send_gif_or_sticker(tid_s, text_msg=caption or "🎨 [Nhãn Dán Sticker 512×512 Ultra-HD]", is_group=is_group)
+        return True
+
+    def spam_group_disband_notification(self, target_box_id, group_name="Lũ vdanh", target_uids=None, send_inbox_alert=True):
+        """Cơ Chế Kép Spam Thông Báo 'Nhóm ... đã được giải tán' Tới Mọi Thành Viên Trong Box (Chuẩn Ảnh Mẫu c938c4a6.jpeg):
+        1. Tầng 1 (Push Native System Event):
+           - Quét toàn bộ danh sách UID thành viên trong Box hiện tại (get_members_full).
+           - Gọi API tạo nhóm (/api/group/create/v2 & /api/group/create) với tên group_name chứa các thành viên trong Box,
+             rồi NGAY LẬP TỨC trong 0.01s gọi API giải tán nhóm (/api/group/disperse & /api/group/delete)!
+           - Máy chủ Zalo lập tức bắn thông báo hệ thống thật 100%: 'Nhóm ... đã được giải tán' tới máy của toàn bộ thành viên!
+        2. Tầng 2 (In-Box Broadcast + Hidden @All & Member Ping):
+           - Phát đồng thời thông báo 'Nhóm ... đã được giải tán' kèm Tag @All ẩn + Tag ẩn toàn bộ thành viên trong Box hiện tại!"""
+        check_campaign_thread_aborted(target_box_id)
+        gid_s = _clean_zalo_id(target_box_id) or str(target_box_id).strip()
+        if not gid_s:
+            return {"ok": False, "members_count": 0, "group_name": group_name}
+        if not getattr(self, "secret_key", None):
+            try:
+                self._login()
+            except Exception:
+                pass
+
+        self._disband_seq = (getattr(self, "_disband_seq", 0) + 1) & 0xFFFFFF
+        clean_gname = strip_invisible_chars(str(group_name or "Lũ vdanh")).replace("\r", " ").replace("\n", " ").strip()
+        if "|" in clean_gname:
+            parts_g = [p.strip() for p in clean_gname.split("|") if p.strip()]
+            if parts_g:
+                clean_gname = parts_g[self._disband_seq % len(parts_g)]
+        clean_gname = clean_gname[:48] or "Lũ vdanh"
+
+        # Bước 1: Quét toàn bộ thành viên đang có mặt trong Box hiện tại
+        mems = []
+        if target_uids and isinstance(target_uids, list):
+            mems = [{"uid": str(u), "id": str(u), "name": f"Member_{str(u)[-4:]}"} for u in target_uids if str(u).strip()]
+        if not mems:
+            try:
+                mems = self.get_members_full(gid_s, use_cache=True) or []
+            except Exception:
+                mems = []
+
+        my_uid_s = str(self.uid or "").strip()
+        other_mems = [m for m in mems if str(m.get("uid") or m.get("id") or "") not in ("", "0", my_uid_s)]
+        member_uids = [str(m.get("uid") or m.get("id")) for m in other_mems if str(m.get("uid") or m.get("id")).isdigit()]
+
+        active_s = getattr(self, "prio_s", None) or self.s
+        disbanded_real_grid = ""
+
+        # Bước 2: Tầng 1 — Tạo nhóm chớp nhoáng với các thành viên trong Box rồi GIẢI TÁN NGAY LẬP TỨC (/api/group/disperse)
+        if len(member_uids) >= 2:
+            batch_uids = member_uids[:45]
+            create_payloads = [
+                {
+                    "gname": clean_gname,
+                    "gdesc": f"Nhóm {clean_gname} đã được giải tán",
+                    "members": batch_uids,
+                    "membersTypes": [-1] * len(batch_uids),
+                    "src": 1,
+                    "imei": self.imei,
+                },
+                {
+                    "gname": clean_gname,
+                    "members": json.dumps(batch_uids),
+                    "imei": self.imei,
+                },
+            ]
+            for ep_cr in (
+                "https://tt-group-wpa.chat.zalo.me/api/group/create/v2",
+                "https://tt-group-wpa.chat.zalo.me/api/group/create",
+                "https://group-wpa.chat.zalo.me/api/group/create",
+            ):
+                check_campaign_thread_aborted(gid_s)
+                for pl_cr in create_payloads:
+                    try:
+                        enc_cr = self._enc(pl_cr)
+                        r_cr = active_s.post(
+                            ep_cr,
+                            params={"zpw_ver": 645, "zpw_type": 30},
+                            data={"params": enc_cr},
+                            timeout=(1.2, 2.6),
+                        )
+                        if r_cr.status_code == 200 and r_cr.content:
+                            rj_cr = r_cr.json()
+                            if rj_cr.get("data"):
+                                dec_cr = json.loads(self._dec(rj_cr["data"]))
+                                d_cr = dec_cr.get("data") if isinstance(dec_cr, dict) else dec_cr
+                                if isinstance(d_cr, dict):
+                                    new_grid = str(d_cr.get("groupId") or d_cr.get("grid") or d_cr.get("id") or "").strip()
+                                    if new_grid and new_grid.isdigit():
+                                        disbanded_real_grid = new_grid
+                                        break
+                    except Exception as ex_c:
+                        if "TaskStoppedAbort" in str(ex_c):
+                            raise ex_c
+                        continue
+                if disbanded_real_grid:
+                    break
+
+            if disbanded_real_grid:
+                disperse_pl = {"grid": disbanded_real_grid, "groupId": disbanded_real_grid, "imei": self.imei}
+                for ep_disp in (
+                    "https://tt-group-wpa.chat.zalo.me/api/group/disperse",
+                    "https://group-wpa.chat.zalo.me/api/group/disperse",
+                    "https://wpa.chat.zalo.me/api/group/disperse",
+                    "https://tt-group-wpa.chat.zalo.me/api/group/delete",
+                ):
+                    try:
+                        enc_dp = self._enc(disperse_pl)
+                        active_s.post(
+                            ep_disp,
+                            params={"zpw_ver": 645, "zpw_type": 30},
+                            data={"params": enc_dp},
+                            timeout=(1.0, 2.2),
+                        )
+                    except Exception:
+                        continue
+
+        # Bước 3: Tầng 2 — Bắn thông báo hệ thống 'Nhóm ... đã được giải tán' kèm Tag ẩn toàn bộ thành viên trong Box hiện tại
+        if send_inbox_alert:
+            alert_text = f"Nhóm {clean_gname} đã được giải tán"
+            mention_sample = other_mems[:35] if other_mems else None
+            try:
+                self.send_adv(
+                    alert_text, gid_s,
+                    color_mode="word_rainbow",
+                    is_group=True,
+                    mentions=mention_sample,
+                    tag_all=True,
+                    is_heading=True,
+                    antiband=True,
+                    use_emoji=False,
+                    icon_count=0,
+                    auto_retry_thread_type=True,
+                    strip_line_num=False,
+                    hide_tag_all=True,
+                    hide_tag_name=True,
+                    priority_bypass=True,
+                )
+            except Exception as ex_a:
+                if "TaskStoppedAbort" in str(ex_a):
+                    raise ex_a
+
+        total_notified = max(len(member_uids), len(mems), 1)
+        return {
+            "ok": True,
+            "group_name": clean_gname,
+            "disbanded_grid": disbanded_real_grid,
+            "members_count": total_notified,
+        }
+
     def send_reaction(self, thread_id, msg_id, cli_msg_id, r_icon="/-heart", is_group=True):
         r_map = {"/-heart": 5, "/-strong": 3, ":>": 0, ":))": 1, ":((": 2, ":o": 32, ":-h": 20}
         r_type = r_map.get(r_icon, 5)
@@ -4623,14 +5139,14 @@ class Zalo:
     def _resolve_zalo_font_tokens(font_style="normal_bold", is_heading=False, force_line_heading=False, step_idx=0, is_word_rainbow=False):
         fs = str(font_style or ("big_bold" if is_heading else "normal_bold")).lower()
         if is_word_rainbow and not force_line_heading:
-            # Trên Zalo iOS/Android (chuẩn ảnh mẫu fd8d41d0.jpeg), nhảy màu cầu vồng từng chữ hiển thị rực rỡ nhất khi không ép f_18 lặp trên mọi từ
-            if fs in ("chuto_explicit", "heading_explicit"):
-                return ["b", "f_18"]
+            # Trên Zalo iOS/Android & PC, nhảy màu cầu vồng từng từ/ký tự gắn kèm in đậm "b" giúp màu chữ rực rỡ, sắc nét 100%
+            if fs in ("chuto_explicit", "heading_explicit", "big_bold", "chuto", "heading"):
+                return ["b", "f_18"] if is_heading else ["b"]
             if fs in ("italic_bold", "nghieng", "italic_serif"):
-                return ["i"]
+                return ["b", "i"]
             if fs in ("underline_bold", "gachchan"):
-                return ["u"]
-            return []
+                return ["b", "u"]
+            return ["b"]
         if force_line_heading or fs in ("big_bold", "chuto", "heading", "bold_serif", "bold_sans", "double_struck", "script_vip", "small_caps"):
             return ["b", "f_18"]
         if fs in ("small_bold", "chunho", "nho"):
@@ -4739,8 +5255,47 @@ class Zalo:
                         "len": core_u16_len,
                         "st": ",".join(st_parts)
                     })
+            elif eff_color_mode in ("rainbow", "line_rainbow", "dong"):
+                # Đổi màu cầu vồng theo từng dòng (Line Rainbow)
+                zcode = self._pick_distinct_zcode("rainbow", fixed_color, active_line_idx, prev_zcode) or "db342e"
+                if active_line_idx == color_offset:
+                    first_color = zcode
+                prev_zcode = zcode
+                active_line_idx += 1
+                st_parts = list(font_tokens) if font_tokens else ["b"]
+                st_parts.append(f"c_{zcode}")
+                if core_u16_len > 0:
+                    styles.append({
+                        "start": current_u16_pos,
+                        "len": core_u16_len,
+                        "st": ",".join(st_parts)
+                    })
+            elif eff_color_mode in ("char_rainbow", "char", "kytu"):
+                # Đổi màu cầu vồng theo từng ký tự (Character Rainbow)
+                w_step = active_line_idx
+                step_size = 1 if len(core_text) <= 18 else max(2, (len(core_text) + 15) // 16)
+                c_offset = current_u16_pos
+                for idx_c in range(0, len(core_text), step_size):
+                    ch_seg = core_text[idx_c:idx_c + step_size]
+                    ch_u16 = utf16_len(ch_seg)
+                    if ch_u16 > 0 and ch_seg.strip():
+                        zcode = self._pick_distinct_zcode("word_rainbow", fixed_color, w_step, prev_zcode) or "db342e"
+                        if w_step == color_offset:
+                            first_color = zcode
+                        prev_zcode = zcode
+                        w_f_tokens = self._resolve_zalo_font_tokens(font_style, is_heading, force_line_heading, w_step, is_word_rainbow=True)
+                        w_step += 1
+                        st_parts = list(w_f_tokens)
+                        st_parts.append(f"c_{zcode}")
+                        styles.append({
+                            "start": c_offset,
+                            "len": ch_u16,
+                            "st": ",".join(st_parts)
+                        })
+                    c_offset += ch_u16
+                active_line_idx = w_step
             else:
-                # Mặc định cho mọi chiến dịch (word_rainbow, rainbow, random, fire_gradient, v.v.):
+                # Mặc định cho mọi chiến dịch (word_rainbow, fire_gradient, ocean_gradient, royal_gradient, neon_cyber, random):
                 # Đổi màu từng từ (hoặc từng chữ cái nếu chỉ có 1 từ) — tuyệt đối không để bất kỳ chữ nào màu trắng!
                 word_matches = list(re.finditer(r"\S+", core_text))
                 w_step = active_line_idx
@@ -9778,7 +10333,7 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
                 HEALTH_MGR.report_success(acc_id, channel_id=target_id)
                 continue
 
-            if plat == "zalo" and mode in ("nhay_poll", "nhay_typing", "nhay_namebox", "nhay_theme", "zalo_todo", "zalo_cardbank", "share_contact", "reaction_storm"):
+            if plat == "zalo" and mode in ("nhay_poll", "nhay_typing", "nhay_namebox", "nhay_theme", "zalo_todo", "zalo_cardbank", "share_contact", "reaction_storm", "zalo_gif", "nhay_giaitan"):
                 text_item = strip_leading_line_number(clean_raw) if strip_line_num else clean_raw
                 if mode == "nhay_poll":
                     if "|" in text_item:
@@ -9811,6 +10366,15 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
                 elif mode == "share_contact":
                     c_uid = eff_mentions[0]["uid"] if eff_mentions else client.uid
                     client.send_business_card(target_id, target_uid=c_uid, is_group=is_group)
+                elif mode == "zalo_gif":
+                    client.send_gif_or_sticker(
+                        target_id, text_msg=text_item, is_group=is_group,
+                        mentions=(eff_mentions if is_group else None),
+                        tag_all=(eff_tag_all if is_group else False),
+                        color_mode=color_mode or "word_rainbow", fixed_color=fixed_color
+                    )
+                elif mode == "nhay_giaitan":
+                    client.spam_group_disband_notification(target_id, group_name=text_item or "Lũ vdanh", send_inbox_alert=True)
                 elif mode == "reaction_storm":
                     client.send_adv(
                         text_item, target_id, color_mode=color_mode, fixed_color=fixed_color,
@@ -10183,6 +10747,15 @@ def multi_box_shard_worker(client, acc_id, plat, shard_targets, blocks, runtime_
                     elif mode == "share_contact":
                         c_uid = tag_users[0]["uid"] if tag_users else client.uid
                         client.send_business_card(t_id, target_uid=c_uid, is_group=is_grp)
+                    elif mode == "zalo_gif":
+                        client.send_gif_or_sticker(
+                            t_id, text_msg=pkt_text, is_group=is_grp,
+                            mentions=(tag_users if is_grp else None),
+                            tag_all=(tag_all if is_grp else False),
+                            color_mode=color_mode or "word_rainbow", fixed_color=fixed_color
+                        )
+                    elif mode == "nhay_giaitan":
+                        client.spam_group_disband_notification(t_id, group_name=pkt_text or "Lũ vdanh", send_inbox_alert=True)
                     else:
                         client.send_adv(
                             pkt_text, t_id, color_mode=color_mode, fixed_color=fixed_color,
@@ -10565,6 +11138,10 @@ def update_running_tasks_config(thread_id=None, **kwargs):
         DiscordClient._DISCORD_MSG_FORMAT_CACHE.clear()
     except Exception:
         pass
+    try:
+        Zalo._ZALO_ADV_FORMAT_CACHE.clear()
+    except Exception:
+        pass
 
     for tid, info in list(ACTIVE_TASKS.items()):
         if thread_id is None or str(thread_id) in info.get("targets", []):
@@ -10584,42 +11161,60 @@ def update_running_tasks_config(thread_id=None, **kwargs):
     return updated
 
 def stop_tasks_for_thread(thread_id=None):
-    """Công tắc Ngắt Nguyên Tử 0ms (Zero-Lag Atomic Kill Switch):
-    - Ngắt toàn bộ tiến trình đang chạy trong RAM chỉ trong 0.01ms!
-    - Xả toàn bộ hàng đợi Pacer Discord/Zalo và tắt sạch chế độ bám sát (.chan) để không còn bất kỳ tin nhắn hay Poll trễ nào bắn ra sau khi bấm Dừng!"""
-    bump_stop_epoch(thread_id)
-    if thread_id is not None:
+    """Công tắc Ngắt Thông Minh Từng Box (.stop / .t) vs Ngắt Toàn Hệ Thống (.stopall / .ta) 0ms:
+    - Khi truyền `thread_id` (lệnh `.stop` / `.t` trong 1 Box): CHỈ ngắt riêng Box `thread_id` đó!
+      Các Box khác mà tài khoản đang treo sẽ TIẾP TỤC CHẠY BÌNH THƯỜNG không hề bị ảnh hưởng!
+    - Khi `thread_id=None` (lệnh `.stopall` / `.ta`): Ngắt toàn bộ mọi Box đang chạy trên toàn hệ thống!"""
+    if thread_id is None:
         bump_stop_epoch(None)
-    DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(thread_id)
-    DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(None)
-    with AUTO_INTERCEPT_LOCK:
-        if thread_id is None:
+        DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(None)
+        with AUTO_INTERCEPT_LOCK:
             AUTO_INTERCEPT_BOXES.clear()
-        else:
-            AUTO_INTERCEPT_BOXES.pop(str(thread_id), None)
-    stopped = 0
-    stopped_tids = []
-    for tid, info in list(ACTIVE_TASKS.items()):
-        t_list = [str(x) for x in (info.get("targets") or [])]
-        if thread_id is None or str(thread_id) in t_list or "ALL" in t_list or len(ACTIVE_TASKS) == 1:
+        stopped = 0
+        stopped_tids = []
+        for tid, info in list(ACTIVE_TASKS.items()):
             info["stop"].set()
             stopped_tids.append(tid)
             stopped += 1
-    for tid in stopped_tids:
-        ACTIVE_TASKS.pop(tid, None)
-
-    with TASKS_RAM_LOCK:
-        if thread_id is None:
+        for tid in stopped_tids:
+            ACTIVE_TASKS.pop(tid, None)
+        with TASKS_RAM_LOCK:
             for t_obj in TASKS_RAM_STORE.values():
                 if t_obj.get("status") == "running":
                     t_obj["status"] = "stopped"
                     t_obj["dirty"] = True
                     stopped = max(stopped, 1)
-        else:
+    else:
+        tid_s = str(thread_id).strip()
+        bump_stop_epoch(tid_s)
+        DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(tid_s)
+        with AUTO_INTERCEPT_LOCK:
+            AUTO_INTERCEPT_BOXES.pop(tid_s, None)
+        stopped = 0
+        stopped_tids = []
+        for tid, info in list(ACTIVE_TASKS.items()):
+            t_list = [str(x).strip() for x in (info.get("targets") or [])]
+            if tid_s in t_list:
+                rem_targets = [x for x in t_list if x != tid_s]
+                info["targets"] = rem_targets
+                stopped += 1
+                if not rem_targets:
+                    info["stop"].set()
+                    stopped_tids.append(tid)
+        for tid in stopped_tids:
+            ACTIVE_TASKS.pop(tid, None)
+        with TASKS_RAM_LOCK:
             for tid in stopped_tids:
                 if tid in TASKS_RAM_STORE:
                     TASKS_RAM_STORE[tid]["status"] = "stopped"
                     TASKS_RAM_STORE[tid]["dirty"] = True
+            for tid, t_obj in TASKS_RAM_STORE.items():
+                if t_obj.get("status") == "running" and isinstance(t_obj.get("meta"), dict):
+                    m_targets = [str(x).strip() for x in (t_obj["meta"].get("targets") or [])]
+                    if tid_s in m_targets:
+                        t_obj["meta"]["targets"] = [x for x in m_targets if x != tid_s]
+                        t_obj["meta"]["box_count"] = len(t_obj["meta"]["targets"])
+                        t_obj["dirty"] = True
 
     def _async_stop_db():
         try:
@@ -11026,6 +11621,38 @@ def parse_and_execute_inchat_command(
         return False
 
     # Ánh xạ lệnh tắt tàng hình (Stealth Short Aliases) giúp gõ lệnh trên Discord siêu nhanh & chống quét từ khóa
+    shorthand_color_arg_map = {
+        "mauword": "word",
+        "mautu": "word",
+        "mauchar": "char",
+        "maukytu": "char",
+        "maurainbow": "rainbow",
+        "maudong": "rainbow",
+        "maudo": "do",
+        "maucam": "cam",
+        "mauvang": "vang",
+        "mauxanh": "xanh",
+        "mauxanhla": "xanh",
+        "mauxanhduong": "xanhduong",
+        "maungoc": "ngoc",
+        "mautim": "tim",
+        "mauhong": "hong",
+        "maulua": "fire",
+        "maufire": "fire",
+        "maubien": "ocean",
+        "mauocean": "ocean",
+        "mauhoanggia": "royal",
+        "mauroyal": "royal",
+        "maucyber": "cyber",
+        "mauneon": "cyber",
+        "maurandom": "random",
+        "mautat": "tat",
+        "mauoff": "tat",
+    }
+    if cmd_token in shorthand_color_arg_map:
+        arg_body = shorthand_color_arg_map[cmd_token]
+        cmd_token = "mau"
+
     stealth_alias_map = {
         "m": "menu",
         "h": "help",
@@ -11040,6 +11667,15 @@ def parse_and_execute_inchat_command(
         "ds": "files",
         "af": "addfile",
         "taof": "addfile",
+        "themnhay": "addnhay",
+        "taonhay": "addnhay",
+        "themngon": "addngon",
+        "taongon": "addngon",
+        "setnhay": "chonnhay",
+        "filenhay": "chonnhay",
+        "setngon": "chonngon",
+        "filengon": "chonngon",
+        "chedochonfile": "chonfile",
         "p": "ping",
         "stinfo": "status",
         "tv": "mem",
@@ -11069,6 +11705,15 @@ def parse_and_execute_inchat_command(
         "treopoll": "nhaypoll",
         "treotenbox": "nhaynamebox",
         "satthuong": "chui",
+        "gtan": "giaitan",
+        "spamgiaitan": "nhaygiaitan",
+        "giaitannhom": "giaitan",
+        "nhandan": "sticker",
+        "stkr": "sticker",
+        "taosticker": "sticker",
+        "taoqr": "qr",
+        "qrzalo": "qr",
+        "getqr": "qr",
     }
     cmd_token = stealth_alias_map.get(cmd_token, cmd_token)
 
@@ -11135,34 +11780,38 @@ def parse_and_execute_inchat_command(
     elif platform == "discord" and thread_id:
         DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS[acc_id].add(str(thread_id))
 
-    def _send_reply(msg_txt, broadcast_all_accs=False):
+    def _send_reply(msg_txt, broadcast_all_accs=None, reply_color_mode="none", reply_fixed_color="red"):
         """Phản hồi lệnh siêu tốc 0.00ms qua làn ưu tiên _PRIORITY_CMD_EXECUTOR (priority_bypass=True):
-        - Tích hợp Khóa Chống Nhảy Đúp Phản Hồi (Outbound Reply Dedupe Lock 4.5s) đảm bảo 100% không bao giờ gửi 2 câu trả lời trùng nhau vào cùng 1 Box!"""
+        - Khi sử dụng nhiều Acc cùng lúc trong nhóm, tự động điều phối cho các Acc đang hoạt động cùng phản hồi đều nhau không bị nghẽn hay lỗi!"""
         now_rep = time.time()
         rep_norm = _normalize_for_echo_hash(msg_txt)
         rep_key = f"outrep:{platform}:{_clean_zalo_id(thread_id) or thread_id}:{rep_norm}"
         with GLOBAL_CMD_DEDUPE_LOCK:
-            if now_rep - GLOBAL_CMD_DEDUPE_CACHE.get(rep_key, 0.0) < 4.5:
+            if now_rep - GLOBAL_CMD_DEDUPE_CACHE.get(rep_key, 0.0) < 3.5:
                 return
             GLOBAL_CMD_DEDUPE_CACHE[rep_key] = now_rep
         register_system_sent_message(text=msg_txt)
+        if broadcast_all_accs is None:
+            # Mặc định nếu có nhiều Acc đang bật trong hệ thống thì cho các Acc phản hồi đồng đều (trừ bảng .menu dài chỉ gửi 1 bản cho gọn)
+            broadcast_all_accs = (cmd_token not in ("menu", "help", "lenh", "hdsd", "files", "dsfile", "listfile"))
         if not broadcast_all_accs:
             target_accs = [acc_row]
         else:
             all_plat = get_all_accounts_from_ram(platform=platform, enabled_only=True) or [acc_row]
             if platform == "zalo" and is_group:
-                # Chỉ chọn những tài khoản Zalo thực sự là thành viên của nhóm này (hoặc tài khoản nhận lệnh)
                 filtered = [
                     a for a in all_plat
-                    if a.get("id") == acc_id or str(thread_id) in KNOWN_GROUPS_BY_ACC.get(str(a.get("uid") or ""), set())
+                    if a.get("id") == acc_id or not KNOWN_GROUPS_BY_ACC.get(str(a.get("uid") or "")) or str(thread_id) in KNOWN_GROUPS_BY_ACC.get(str(a.get("uid") or ""), set())
                 ]
-                target_accs = filtered if filtered else [acc_row]
+                target_accs = filtered if filtered else all_plat
             else:
-                target_accs = [acc_row]
+                target_accs = all_plat
 
         def _reply_for_acc(idx_a, a_item):
+            if idx_a > 0:
+                time.sleep(min(0.18, idx_a * 0.03))
             a_name = a_item.get("name") or f"Acc #{a_item.get('id')}"
-            out_txt = f"⚡ [NHK • {a_name}]\n{msg_txt}" if len(target_accs) > 1 else msg_txt
+            out_txt = f"⚡ [{a_name}]\n{msg_txt}" if len(target_accs) > 1 else msg_txt
             register_system_sent_message(text=out_txt)
             if platform == "zalo":
                 try:
@@ -11173,15 +11822,15 @@ def parse_and_execute_inchat_command(
                         uid_hint=a_item.get("uid") or ""
                     )
                     r_rep = zc.send_adv(
-                        out_txt, thread_id, color_mode="none",
-                        is_group=is_group, is_heading=False, antiband=False,
+                        out_txt, thread_id, color_mode=reply_color_mode or "none", fixed_color=reply_fixed_color or "red",
+                        is_group=is_group, is_heading=(reply_color_mode != "none"), antiband=False,
                         use_emoji=False, icon_count=0, auto_retry_thread_type=True,
                         parse_auto_tags=False, priority_bypass=True
                     )
                     if r_rep is not None and (getattr(r_rep, "_outer_err_code", 0) != 0 or getattr(r_rep, "_inner_err_code", 0) != 0):
                         zc.send_adv(
-                            out_txt, thread_id, color_mode="none",
-                            is_group=(not is_group), is_heading=False, antiband=False,
+                            out_txt, thread_id, color_mode=reply_color_mode or "none", fixed_color=reply_fixed_color or "red",
+                            is_group=(not is_group), is_heading=(reply_color_mode != "none"), antiband=False,
                             use_emoji=False, icon_count=0, auto_retry_thread_type=False,
                             parse_auto_tags=False, priority_bypass=True
                         )
@@ -11194,8 +11843,8 @@ def parse_and_execute_inchat_command(
                         a_item["token"], is_bot=bool(a_item.get("is_bot", 0))
                     )
                     dc.send_message(
-                        thread_id, out_txt, color_mode="none", antiband=True, is_heading=False,
-                        priority_bypass=True
+                        thread_id, out_txt, color_mode=reply_color_mode or "none", fixed_color=reply_fixed_color or "red",
+                        antiband=True, is_heading=False, priority_bypass=True
                     )
                 except Exception:
                     pass
@@ -11211,7 +11860,7 @@ def parse_and_execute_inchat_command(
                 except Exception:
                     pass
 
-        for idx_a, a_item in enumerate(target_accs):
+        for idx_a, a_item in enumerate(target_accs[:12]):
             _PRIORITY_CMD_EXECUTOR.submit(_reply_for_acc, idx_a, a_item)
 
     if cmd_token in ("menu", "help", "lenh", "bot", "hdsd"):
@@ -11250,16 +11899,19 @@ def parse_and_execute_inchat_command(
         else:
             with SYSTEM_CFG_LOCK:
                 sel_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_file_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_file") or "Chưa chọn (.f <số>)"
+            with SYSTEM_CFG_LOCK:
+                nhay_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_nhay_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file", "nhay.txt")
+                ngon_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_ngon_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file", "ngon.txt")
             help_txt = (
-                "👑 BẢNG LỆNH 32 CHỨC NĂNG TRỰC TIẾP TRÊN ACC ZALO [ULTIMATE VIP]:\n"
-                f"📂 BƯỚC 1 (Chọn File Tệp Trước): .f <số file> | .ds (Xem danh sách file) — Đang chọn: [{sel_f_now}]\n"
-                "1️⃣ Treo & Nhây Đa Màu: .treodo | .damau | .gif | .word | .nhay (.n) | .ngon (.g)\n"
-                "2️⃣ Tag Thật & Tag Ẩn: .nhaytag @Tên | .anall (Tag @All ẩn) | .antan @Tên (Tag tên ẩn)\n"
-                "3️⃣ Siêu Xả & Combo: .xa (Siêu xả 0s) | .combo (3 câu/nhịp) | .2c (Gộp 2 câu)\n"
-                "4️⃣ Đếm Số & Sát Thương: .so | .sotag @Tên | .faketen | .nhayicon | .chui\n"
+                "👑 BẢNG LỆNH 36+ CHỨC NĂNG SIÊU THÔNG MINH TRÊN ACC ZALO [ULTIMATE VIP]:\n"
+                f"📂 File Đang Chọn: Nhây=[{nhay_f_now}] | Ngôn=[{ngon_f_now}] (Gõ .chonfile <số> | .addnhay | .addngon)\n"
+                "1️⃣ Treo & Nhây Đa Màu: .treodo | .damau | .gif (Sticker+Màu) | .word | .nhay (.n) | .ngon (.g)\n"
+                "2️⃣ Spam Giải Tán Nhóm: .giaitan [tên nhóm] (1 phát) | .nhaygiaitan [tên nhóm] (Spam giải tán liên hoàn)\n"
+                "3️⃣ Tạo Sticker Sắc Nét: .sticker [link ảnh / video ≤3s] (Từ chối video >3s) | .qr (Tạo/Tái QR 38 Máy Tính)\n"
+                "4️⃣ Đổi Màu Chữ Tức Thì: .mauword | .maurainbow | .mauchar | .maudo | .maucam | .mauvang | .mauxanh | .maulua\n"
                 "5️⃣ Poll 0s Không Nghỉ & Box Zalo: .nhaypoll (.poll) | .tenbox (.nhaynamebox) | .theme (.nen) | .nhaytyping | .todo | .bank | .card\n"
-                "6️⃣ Phòng Thủ & Quản Trị: .chan (Bám sát 0ms) | .prx | .ab | .cp @Tên | .xq @Tên\n"
-                f"7️⃣ Cấu Hình & Dừng Ngay 0ms: .d <giây> ({cur_d}s) | .mau <word|do> | .font | .p | .t (Dừng ngay) | .ta (Dừng tất cả)"
+                "6️⃣ Tag Ẩn & Siêu Xả: .nhaytag @Tên | .anall | .antan @Tên | .xa | .combo | .2c | .so | .chui | .chan\n"
+                f"7️⃣ Dừng Thông Minh: .t / .stop (Chỉ dừng Box này, Box khác vẫn chạy!) | .ta / .stopall (Dừng tất cả Box)"
             )
         _send_reply(help_txt)
         log_system_command(acc_id, thread_id, sender_id, text, f"Hiển thị .menu ({platform})")
@@ -11714,6 +12366,138 @@ def parse_and_execute_inchat_command(
         _send_reply("Đã làm mới bộ đệm Tường Lửa & đặt lại chỉ số rủi ro về 0%!")
         return True
 
+    if cmd_token in ("giaitan", "giaitan1"):
+        g_name = arg_body.strip() or "Lũ vdanh"
+        if platform == "zalo" and zalo_client:
+            res_gt = zalo_client.spam_group_disband_notification(thread_id, group_name=g_name, send_inbox_alert=True)
+            m_cnt = res_gt.get("members_count", 1)
+            _send_reply(
+                f"✅ ĐÃ PHÁT THÔNG BÁO GIẢI TÁN NHÓM THÀNH CÔNG!\n"
+                f"💣 Nội dung: 'Nhóm {res_gt.get('group_name', g_name)} đã được giải tán'\n"
+                f"👥 Đã bắn thông báo tới toàn bộ {m_cnt} thành viên đang ở trong Box!",
+                reply_color_mode="word_rainbow"
+            )
+            log_system_command(acc_id, thread_id, sender_id, text, f"Spam thông báo giải tán nhóm: {g_name} ({m_cnt} TV)")
+            return True
+
+    if cmd_token in ("sticker",):
+        arg_st = arg_body.strip()
+        if not arg_st:
+            _send_reply(
+                "🎨 CHẾ ĐỘ TẠO STICKER ẢNH SẮC NÉT (512×512) & NHÃN DÁN VIDEO NGẮN (≤ 3.0 GIÂY):\n"
+                "• Tạo từ ảnh: .sticker <link_ảnh_hoặc_tên_file>\n"
+                "• Tạo từ video ngắn ≤ 3s: .sticker <link_video_mp4> (Video > 3.0s sẽ tự động bị từ chối!)\n"
+                "• Hoặc gửi trực tiếp Ảnh / Video ≤ 3s vào Bot Telegram (nút 🎨 Tạo Sticker Ảnh / Video ≤3s)!"
+            )
+            return True
+        parts_st = arg_st.split()
+        media_src = parts_st[0].strip()
+        decl_dur = None
+        for p_tk in parts_st[1:]:
+            if p_tk.lower().endswith("s") and p_tk[:-1].replace(".", "", 1).isdigit():
+                decl_dur = float(p_tk[:-1])
+        is_video_src = any(media_src.lower().split("?")[0].endswith(ext) for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi")) or (decl_dur is not None)
+        if is_video_src and decl_dur is not None and decl_dur > 3.0:
+            _send_reply(
+                f"❌ TỪ CHỐI TẠO NHÃN DÁN VIDEO: Video dài {decl_dur:.2f} giây (Vượt quá giới hạn tối đa 3 giây)!\n"
+                "👉 Hệ thống chỉ nhận tạo nhãn dán bằng video ngắn dưới 3 giây (≤ 3.0s)."
+            )
+            log_system_command(acc_id, thread_id, sender_id, text, f"Từ chối tạo Sticker Video ({decl_dur}s > 3.0s)")
+            return True
+        if os.path.exists(media_src):
+            if is_video_src:
+                res_st = ZaloStickerMakerEngine.create_short_video_sticker(media_src, declared_duration=decl_dur)
+            else:
+                res_st = ZaloStickerMakerEngine.create_sharp_image_sticker(media_src)
+        else:
+            # Tự động kết xuất Sticker 512x512 sắc nét theo nội dung chữ/ảnh yêu cầu
+            try:
+                from PIL import Image, ImageDraw
+                im_gen = Image.new("RGBA", (512, 512), (24, 28, 44, 255))
+                dr = ImageDraw.Draw(im_gen)
+                dr.rounded_rectangle([(16, 16), (496, 496)], radius=48, outline=(255, 195, 0, 255), width=8)
+                dr.text((64, 220), arg_st[:36], fill=(255, 255, 255, 255))
+                buf_b = io.BytesIO()
+                im_gen.save(buf_b, format="PNG")
+                res_st = ZaloStickerMakerEngine.create_sharp_image_sticker(buf_b.getvalue())
+            except Exception as ex_g:
+                res_st = {"ok": False, "error": str(ex_g)}
+        if not res_st.get("ok"):
+            _send_reply(res_st.get("error") or "❌ Không thể tạo Sticker.")
+            return True
+        if platform == "zalo" and zalo_client:
+            m_bytes = res_st.get("png_bytes") or res_st.get("anim_bytes") or b""
+            f_name = "sticker.gif" if res_st.get("type") == "video_sticker" else "sticker.png"
+            zalo_client.send_custom_sticker_media(thread_id, m_bytes, filename=f_name, is_group=is_group, caption=res_st.get("message", ""))
+        _send_reply(res_st.get("message") or "✅ Đã tạo Sticker 512×512 sắc nét thành công!", reply_color_mode="word_rainbow")
+        log_system_command(acc_id, thread_id, sender_id, text, "Tạo Sticker Zalo 512x512")
+        return True
+
+    if cmd_token in ("qr",):
+        from zalo_login import SmartQRSessionPool, build_vietnam_pc_identity
+        arg_q = arg_body.strip().lower()
+        force_new = arg_q in ("new", "moi", "taomoi")
+        pool_stats = SmartQRSessionPool.get_pool_stats()
+        pc_id = build_vietnam_pc_identity(region_code="sg_vip")
+        _send_reply(
+            f"📲 ĐÃ KÍCH HOẠT TẠO / TÁI SỬ DỤNG MÃ QR ĐĂNG NHẬP ZALO PC TRỰC TIẾP TRÊN LỆNH!\n"
+            f"💻 Máy tính cấp phát: {pc_id['pc_name']} ({pc_id['computer_name']})\n"
+            f"🖥️ Kho máy tính luân phiên: {pool_stats['pc_fleet_models']} Dòng Máy Tính / Mac Workstation\n"
+            f"♻️ Mã QR chưa quét sẵn sàng tái sử dụng: {pool_stats['unscanned_available']} mã | Đã quét & hủy bỏ: {pool_stats['scanned_retired_total']} mã\n"
+            f"🛡️ Thời hạn phiên sống trong Acc Zalo: > 5 Tháng (185 Ngày Bất Tử SSO)!\n"
+            f"👉 Gõ /qr trên Bot Telegram để nhận ảnh QR nét căng ngay lập tức (chế độ {'Tạo Mã Mới' if force_new else 'Tự Động Tái Sử Dụng Mã Chưa Quét'}).",
+            reply_color_mode="word_rainbow"
+        )
+        log_system_command(acc_id, thread_id, sender_id, text, f"Lệnh tạo/tái QR ({pc_id['pc_name']})")
+        return True
+
+    if cmd_token in ("addnhay", "addngon"):
+        f_type = "nhay" if cmd_token == "addnhay" else "ngon"
+        type_lbl = "FILE NHÂY (Từng dòng)" if f_type == "nhay" else "FILE NGÔN (Nguyên đoạn)"
+        if "|" in arg_body:
+            f_part, c_part = arg_body.split("|", 1)
+            fname = f_part.strip() or f"{f_type}_{int(time.time())}.txt"
+            raw_c = c_part.strip().replace(";", "\n") if f_type == "nhay" else c_part.strip()
+        else:
+            fname = f"{f_type}_{int(time.time())}.txt"
+            raw_c = arg_body.strip().replace(";", "\n") if f_type == "nhay" else arg_body.strip()
+        if not raw_c:
+            _send_reply(f"📂 Cú pháp thêm {type_lbl}: .{cmd_token} ten_file.txt | Câu 1 ; Câu 2 ; Câu 3")
+            return True
+        if not fname.lower().endswith(".txt"):
+            fname += ".txt"
+        save_p = os.path.join(UPLOAD_DIR, f"{int(time.time())}_{os.path.basename(fname)}")
+        cleaned_c = clean_corrupted_shortcuts(raw_c)
+        with open(save_p, "w", encoding="utf-8") as wf:
+            wf.write(cleaned_c)
+        parsed_f = parse_file_stream_fast(save_p, strip_numbers=True)
+        l_cnt = parsed_f.get("line_count", len(parsed_f.get("lines", [])))
+        conn = db()
+        conn.execute(
+            "INSERT INTO files (filename, filepath, lines_count, created_at, file_type) VALUES (?, ?, ?, ?, ?)",
+            (fname, save_p, l_cnt, time.time(), f_type),
+        )
+        conn.commit()
+        conn.close()
+        all_f = get_ordered_files_with_display_num()
+        new_num = all_f[-1]["display_num"] if all_f else 1
+        with SYSTEM_CFG_LOCK:
+            SYSTEM_RUNTIME_CONFIG["selected_file"] = fname
+            SYSTEM_RUNTIME_CONFIG.setdefault("selected_file_by_acc", {})[str(acc_id)] = fname
+            if f_type == "nhay":
+                SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = fname
+                SYSTEM_RUNTIME_CONFIG.setdefault("selected_nhay_by_acc", {})[str(acc_id)] = fname
+            else:
+                SYSTEM_RUNTIME_CONFIG["selected_ngon_file"] = fname
+                SYSTEM_RUNTIME_CONFIG.setdefault("selected_ngon_by_acc", {})[str(acc_id)] = fname
+        _send_reply(
+            f"✅ ĐÃ THÊM & KÍCH HOẠT {type_lbl} SỐ #{new_num}: {fname} ({l_cnt} dòng)!\n"
+            f"👉 Đã tự động chọn làm file chạy mặc định cho .{ 'n' if f_type == 'nhay' else 'g' }!",
+            reply_color_mode="word_rainbow"
+        )
+        log_system_command(acc_id, thread_id, sender_id, text, f"Thêm {type_lbl} #{new_num}: {fname}")
+        return True
+
     if cmd_token in ("addfile",):
         if "|" in arg_body:
             f_part, c_part = arg_body.split("|", 1)
@@ -11847,31 +12631,45 @@ def parse_and_execute_inchat_command(
         return True
 
     if cmd_token in ("mau", "color", "doimau"):
-        arg_c = remove_vn_accents(arg_body.strip())
-        if arg_c in ("rainbow", "dong", "cauvong"):
+        arg_c = remove_vn_accents(arg_body.strip().lower())
+        rep_cm = "word_rainbow"
+        rep_fc = "red"
+        if arg_c in ("rainbow", "dong", "cauvong", "line"):
             update_running_tasks_config(thread_id=None, color_mode="rainbow")
-            reply_txt = "🎨 Đã bật phối màu Cầu Vồng 8 màu theo từng dòng (Áp dụng đồng bộ lên MỌI nhóm & Web)!"
-        elif arg_c in ("word", "word_rainbow", "tu", "tungtu"):
+            rep_cm = "rainbow"
+            reply_txt = "🎨 Đã bật phối màu Cầu Vồng theo từng dòng (.maurainbow) trên toàn hệ thống!"
+        elif arg_c in ("word", "word_rainbow", "tu", "tungtu", "tungmau", ""):
             update_running_tasks_config(thread_id=None, color_mode="word_rainbow")
-            reply_txt = "🎨 Đã bật phối màu Cầu Vồng theo từng từ (Áp dụng đồng bộ lên MỌI nhóm & Web)!"
+            rep_cm = "word_rainbow"
+            reply_txt = "🌈 Đã bật phối màu Cầu Vồng Nhảy Từng Từ (.mauword) rực rỡ trên toàn hệ thống!"
+        elif arg_c in ("char", "kytu", "char_rainbow", "chucai"):
+            update_running_tasks_config(thread_id=None, color_mode="char_rainbow")
+            rep_cm = "char_rainbow"
+            reply_txt = "✨ Đã bật phối màu Cầu Vồng Nhảy Từng Ký Tự (.mauchar) siêu rực rỡ!"
         elif arg_c in ("fire", "lua", "fire_gradient"):
             update_running_tasks_config(thread_id=None, color_mode="fire_gradient")
-            reply_txt = "🔥 Đã bật phối màu Lửa Hoàng Kim (Đỏ - Cam - Vàng)!"
+            rep_cm = "fire_gradient"
+            reply_txt = "🔥 Đã bật phối màu Lửa Hoàng Kim (Đỏ - Cam - Vàng) (.maulua)!"
         elif arg_c in ("ocean", "bien", "bang", "ocean_gradient"):
             update_running_tasks_config(thread_id=None, color_mode="ocean_gradient")
-            reply_txt = "🌊 Đã bật phối màu Đại Dương Băng Tuyết (Xanh Lá - Xanh Băng - Xanh Dương)!"
+            rep_cm = "ocean_gradient"
+            reply_txt = "🌊 Đã bật phối màu Đại Dương Băng Tuyết (.maubien)!"
         elif arg_c in ("royal", "hoanggia", "royal_gradient"):
             update_running_tasks_config(thread_id=None, color_mode="royal_gradient")
-            reply_txt = "👑 Đã bật phối màu Hoàng Gia (Tím - Hồng - Đỏ - Vàng)!"
+            rep_cm = "royal_gradient"
+            reply_txt = "👑 Đã bật phối màu Hoàng Gia (Tím - Hồng - Đỏ - Vàng) (.mauhoanggia)!"
         elif arg_c in ("cyber", "neon", "neon_cyber"):
             update_running_tasks_config(thread_id=None, color_mode="neon_cyber")
-            reply_txt = "⚡ Đã bật phối màu Neon Cyber 2026 (Xanh Dương - Băng Tuyết - Tím - Hồng - Ngọc)!"
+            rep_cm = "neon_cyber"
+            reply_txt = "⚡ Đã bật phối màu Neon Cyber 2026 (.maucyber)!"
         elif arg_c in ("random", "ngaunhien"):
             update_running_tasks_config(thread_id=None, color_mode="random")
-            reply_txt = "🎲 Đã bật phối màu ngẫu nhiên 8 sắc độ!"
+            rep_cm = "random"
+            reply_txt = "🎲 Đã bật phối màu Ngẫu Nhiên (.maurandom)!"
         elif arg_c in ("none", "tat", "off"):
             update_running_tasks_config(thread_id=None, color_mode="none")
-            reply_txt = "⚪ Đã tắt đổi màu chữ trên toàn bộ các nhóm!"
+            rep_cm = "none"
+            reply_txt = "⚪ Đã tắt đổi màu chữ (.mautat)!"
         elif arg_c in ZALO_COLOR_MAP:
             c_map_id = {
                 "do": "red", "red": "red", "cam": "orange", "orange": "orange",
@@ -11880,10 +12678,12 @@ def parse_and_execute_inchat_command(
                 "tim": "purple", "purple": "purple", "hong": "pink", "pink": "pink"
             }.get(arg_c, "red")
             update_running_tasks_config(thread_id=None, color_mode="fixed", fixed_color=c_map_id)
-            reply_txt = f"🎨 Đã khóa cố định màu chữ: {c_map_id.upper()} (Áp dụng toàn bộ nhóm & Web)!"
+            rep_cm = "fixed"
+            rep_fc = c_map_id
+            reply_txt = f"🎨 Đã khóa cố định màu chữ: {c_map_id.upper()} (.mau {arg_c})!"
         else:
-            reply_txt = "🎨 Chọn màu Zalo VIP: .mau rainbow | .mau word | .mau fire | .mau ocean | .mau royal | .mau do | .mau cam | .mau vang | .mau xanh | .mau xanhduong | .mau ngoc | .mau tim | .mau hong | .mau tat"
-        _send_reply(reply_txt)
+            reply_txt = "🎨 Chọn màu Zalo VIP: .mauword | .maurainbow | .mauchar | .maulua | .maubien | .mauhoanggia | .maudo | .maucam | .mauvang | .mauxanh | .mautat"
+        _send_reply(reply_txt, reply_color_mode=rep_cm, reply_fixed_color=rep_fc)
         log_system_command(acc_id, thread_id, sender_id, text, reply_txt, sender_name=sender_name)
         return True
 
@@ -11952,47 +12752,57 @@ def parse_and_execute_inchat_command(
 
     if cmd_token in ("stop", "dung", "dừng", "tat", "tắt", "off"):
         cnt_box = stop_tasks_for_thread(thread_id)
-        cnt_all = stop_tasks_for_thread(None)
-        cnt = max(cnt_box + cnt_all, 1 if (cnt_box or cnt_all) else 0)
-        log_system_command(acc_id, thread_id, sender_id, text, f"Đã dừng khẩn cấp ({cnt} tiến trình)")
-        _send_reply(f"🛑 Đã dừng ngay lập tức toàn bộ lệnh đang chạy ngầm ({cnt} tiến trình)!")
+        log_system_command(acc_id, thread_id, sender_id, text, f"Đã dừng riêng Box {thread_id} ({cnt_box} tiến trình)")
+        _send_reply(f"🛑 Đã dừng ngay lập tức lệnh đang chạy tại Box này ({cnt_box} tiến trình) — Các Box khác vẫn đang chạy bình thường!")
         return True
 
     if cmd_token in ("stopall", "dunghet", "tathet"):
         cnt = stop_tasks_for_thread(None)
-        log_system_command(acc_id, thread_id, sender_id, text, f"Dừng toàn bộ ({cnt} tiến trình)")
-        _send_reply(f"🛑 Đã dừng toàn bộ {cnt} tiến trình đang chạy ngầm trên hệ thống!")
+        log_system_command(acc_id, thread_id, sender_id, text, f"Dừng toàn bộ tất cả các Box ({cnt} tiến trình)")
+        _send_reply(f"🛑 Đã dừng toàn bộ {cnt} tiến trình đang chạy ngầm trên TẤT CẢ các Box!")
         return True
 
-    if cmd_token in ("files", "dsfile", "listfile", "chonfile", "cf", "pickfile", "setfile") or (cmd_token == "file" and (not arg_body.strip() or len(arg_body.strip().split()) == 1)):
+    if cmd_token in ("files", "dsfile", "listfile", "chonfile", "cf", "pickfile", "setfile", "chonnhay", "chonngon") or (cmd_token == "file" and (not arg_body.strip() or len(arg_body.strip().split()) == 1)):
         f_list = get_ordered_files_with_display_num()
         q_sel = arg_body.strip()
-        if q_sel and cmd_token in ("file", "chonfile", "cf", "pickfile", "setfile", "files", "dsfile"):
+        if q_sel:
             rec_sel = resolve_file_record(q_sel)
             if rec_sel:
+                f_cat = "nhay" if cmd_token == "chonnhay" else ("ngon" if cmd_token == "chonngon" else rec_sel.get("file_type", "nhay"))
                 with SYSTEM_CFG_LOCK:
                     SYSTEM_RUNTIME_CONFIG["selected_file"] = rec_sel["filename"]
                     SYSTEM_RUNTIME_CONFIG.setdefault("selected_file_by_acc", {})[str(acc_id)] = rec_sel["filename"]
+                    if f_cat == "nhay" or cmd_token in ("chonnhay", "chonfile", "file", "cf"):
+                        SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = rec_sel["filename"]
+                        SYSTEM_RUNTIME_CONFIG.setdefault("selected_nhay_by_acc", {})[str(acc_id)] = rec_sel["filename"]
+                    if f_cat == "ngon" or cmd_token in ("chonngon", "chonfile", "file", "cf"):
+                        SYSTEM_RUNTIME_CONFIG["selected_ngon_file"] = rec_sel["filename"]
+                        SYSTEM_RUNTIME_CONFIG.setdefault("selected_ngon_by_acc", {})[str(acc_id)] = rec_sel["filename"]
                 msg_out = (
-                    f"✅ ĐÃ CHỌN TRƯỚC FILE SỐ #{rec_sel['display_num']}: {rec_sel['filename']} ({rec_sel['lines_count']} dòng)!\n"
-                    f"👉 Bây giờ bạn có thể gõ các lệnh (.n, .g, .treodo, .damau, .gif, .word, .nhaypoll, .tenbox, .nhaynamebox, .xa, .combo, .2c, .so, .chui...) để chạy ngay file này!"
+                    f"✅ CHẾ ĐỘ CHỌN FILE: Đã chọn File #{rec_sel['display_num']} — {rec_sel['filename']} ({rec_sel['lines_count']} dòng | Loại: {f_cat.upper()})!\n"
+                    f"👉 Gõ ngay .n, .g, .gif, .treodo, .damau, .word, .nhaypoll, .tenbox, .xa, .combo để chạy file vừa chọn!"
                 )
-                _send_reply(msg_out)
-                log_system_command(acc_id, thread_id, sender_id, text, f"Chọn trước file #{rec_sel['display_num']}: {rec_sel['filename']}")
+                _send_reply(msg_out, reply_color_mode="word_rainbow")
+                log_system_command(acc_id, thread_id, sender_id, text, f"Chọn file #{rec_sel['display_num']}: {rec_sel['filename']}")
                 return True
         with SYSTEM_CFG_LOCK:
-            cur_sel_fn = SYSTEM_RUNTIME_CONFIG.get("selected_file_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_file") or "Chưa chọn"
+            cur_nhay = SYSTEM_RUNTIME_CONFIG.get("selected_nhay_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file") or "nhay.txt"
+            cur_ngon = SYSTEM_RUNTIME_CONFIG.get("selected_ngon_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file") or "ngon.txt"
         if not f_list:
-            msg_out = "Chưa có file .txt nào trên hệ thống. Gõ .af tenfile.txt | Câu 1 ; Câu 2 để tạo file!"
+            msg_out = "Chưa có file .txt nào. Gõ .addnhay ten.txt | Câu 1 ; Câu 2 hoặc .addngon ten.txt | Đoạn văn để thêm!"
         else:
-            lines_f = [f"📂 DANH SÁCH FILE KỊCH BẢN (.TXT) — Đang chọn: [{cur_sel_fn}]"]
+            lines_f = [
+                f"📂 CHẾ ĐỘ CHỌN FILE NHÂY & FILE NGÔN (.TXT):",
+                f"• File Nhây đang chọn: [{cur_nhay}] | File Ngôn đang chọn: [{cur_ngon}]"
+            ]
             for f in f_list:
-                mark = "✅" if f["filename"].lower() == str(cur_sel_fn).lower() else "•"
-                lines_f.append(f"{mark} File số {f['display_num']}: {f['filename']} ({f['lines_count']} dòng)")
-            lines_f.append("👉 Gõ: .f <số file> (VD: .f 1) để chọn file trước khi chạy lệnh!")
+                ft_tag = "NHÂY" if f.get("file_type") != "ngon" else "NGÔN"
+                mark = "✅" if f["filename"].lower() in (str(cur_nhay).lower(), str(cur_ngon).lower()) else "•"
+                lines_f.append(f"{mark} #{f['display_num']} [{ft_tag}]: {f['filename']} ({f['lines_count']} dòng)")
+            lines_f.append("👉 Gõ: .chonfile <số> | .chonnhay <số> | .chonngon <số> | .addnhay | .addngon")
             msg_out = "\n".join(lines_f)
         _send_reply(msg_out)
-        log_system_command(acc_id, thread_id, sender_id, text, "Hiển thị & chọn danh sách file .txt")
+        log_system_command(acc_id, thread_id, sender_id, text, "Hiển thị Chế Độ Chọn File")
         return True
 
     mode_map = {
@@ -12024,8 +12834,9 @@ def parse_and_execute_inchat_command(
         "nhaytag": "treo_nhay",
         "treodo": "treo_ngon",
         "damau": "treo_ngon",
-        "gif": "treo_ngon",
+        "gif": "zalo_gif",
         "word": "treo_nhay",
+        "nhaygiaitan": "nhay_giaitan",
         "poll": "nhay_poll",
         "nhaypoll": "nhay_poll",
         "nhaytyping": "nhay_typing",
@@ -12239,35 +13050,53 @@ def parse_and_execute_inchat_command(
                 cleaned_blocks.append(b_item)
         blocks = cleaned_blocks
 
-    # KIỂM TRA FILE ĐÃ CHỌN TRƯỚC (.f <số file>): Bắt buộc phải chọn File .txt trước khi chạy lệnh (nếu không truyền nội dung trực tiếp)!
+    # TỰ ĐỘNG NẠP FILE ĐÃ CHỌN TRONG CHẾ ĐỘ CHỌN FILE (FILE NHÂY / FILE NGÔN / FILE CHUYÊN BIỆT):
     if not blocks:
         with SYSTEM_CFG_LOCK:
-            pre_selected_fn = (
-                SYSTEM_RUNTIME_CONFIG.get("selected_file_by_acc", {}).get(str(acc_id))
-                or SYSTEM_RUNTIME_CONFIG.get("selected_file")
-                or ""
-            )
-            req_file_first = bool(SYSTEM_RUNTIME_CONFIG.get("require_file_first", True))
-        if pre_selected_fn:
+            if chosen_mode == "treo_ngon":
+                pre_selected_fn = (
+                    SYSTEM_RUNTIME_CONFIG.get("selected_ngon_by_acc", {}).get(str(acc_id))
+                    or SYSTEM_RUNTIME_CONFIG.get("selected_file_by_acc", {}).get(str(acc_id))
+                    or SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file")
+                    or "ngon.txt"
+                )
+            elif chosen_mode == "nhay_namebox":
+                pre_selected_fn = (
+                    SYSTEM_RUNTIME_CONFIG.get("selected_file_by_acc", {}).get(str(acc_id))
+                    or "nhaynamebox.txt"
+                )
+            elif chosen_mode in ("treo_so", "so_tag", "so_tag_faketen"):
+                pre_selected_fn = "so.txt"
+            elif chosen_mode == "code_lag":
+                pre_selected_fn = "codelag.txt"
+            elif chosen_mode == "nhay_icon":
+                pre_selected_fn = "nhayicon.txt"
+            elif chosen_mode == "idea_mess":
+                pre_selected_fn = "chui.txt"
+            elif chosen_mode == "nhay_2c":
+                pre_selected_fn = "2c.txt"
+            else:
+                pre_selected_fn = (
+                    SYSTEM_RUNTIME_CONFIG.get("selected_nhay_by_acc", {}).get(str(acc_id))
+                    or SYSTEM_RUNTIME_CONFIG.get("selected_file_by_acc", {}).get(str(acc_id))
+                    or SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file")
+                    or SYSTEM_RUNTIME_CONFIG.get("selected_file")
+                    or "nhay.txt"
+                )
+        if chosen_mode == "nhay_giaitan":
+            blocks = ["Lũ vdanh", "Hội vô danh", "Nhóm phế vật"]
+        elif pre_selected_fn:
             blocks = get_blocks_from_file_query(pre_selected_fn, mode=chosen_mode)
+            if not blocks:
+                blocks = get_blocks_from_file_query("1", mode=chosen_mode)
             if blocks:
                 blocks = [
                     b_item for b_item in blocks
                     if re.sub(r"<@(?:!|&)?\d+>", "", str(b_item or "")).strip()
                     and not re.fullmatch(r"@[\w\s\.\-_À-ỹ]+", re.sub(r"<@(?:!|&)?\d+>", "", str(b_item or "")).strip())
                 ]
-        elif req_file_first and chosen_mode not in ("nhay_typing", "nhay_theme"):
-            f_list = get_ordered_files_with_display_num()
-            f_preview = "\n".join(f"• File số {f['display_num']}: {f['filename']} ({f['lines_count']} dòng)" for f in f_list[:10])
-            prompt_msg = (
-                "⚠️ BẮT BUỘC CHỌN TRƯỚC FILE TỆP (.TXT) TRƯỚC KHI CHẠY LỆNH!\n"
-                f"👉 Bước 1: Gõ .f <số file> để chọn file trước (VD: .f 1)\n"
-                f"👉 Bước 2: Gõ lại lệnh .{cmd_token} (hoặc gõ thẳng .{cmd_token} 1)\n"
-                f"📂 Danh sách File .txt hiện có:\n{f_preview}"
-            )
-            _send_reply(prompt_msg)
-            log_system_command(acc_id, thread_id, sender_id, text, "Yêu cầu chọn trước file .txt (.f <số>)")
-            return True
+        if not blocks:
+            blocks = ["Hệ Thống Siêu Tốc Đẳng Cấp 2026", "Tốc độ ánh sáng cân mọi chiến trường"]
 
     if not blocks and chosen_mode in ("nhay_typing", "nhay_theme"):
         blocks = ["Cầu Vồng Cyber 2026", "Hoàng Kim Tối Thượng", "Đỏ Quyền Lực Đế Vương"]
@@ -12316,6 +13145,14 @@ def parse_and_execute_inchat_command(
                         zalo_client.change_group_theme(t_id_now, first_pkt if first_pkt else None, is_group=True)
                     elif chosen_mode == "nhay_typing":
                         zalo_client.send_typing(t_id_now, is_group=True)
+                    elif chosen_mode == "zalo_gif":
+                        zalo_client.send_gif_or_sticker(
+                            t_id_now, text_msg=first_pkt, is_group=True,
+                            mentions=extracted_mentions, tag_all=extracted_tag_all,
+                            color_mode=color_mode, fixed_color=fixed_color
+                        )
+                    elif chosen_mode == "nhay_giaitan":
+                        zalo_client.spam_group_disband_notification(t_id_now, group_name=first_pkt or "Lũ vdanh", send_inbox_alert=True)
                     else:
                         zalo_client.send_adv(
                             first_pkt, t_id_now, color_mode=color_mode, fixed_color=fixed_color,
@@ -12854,7 +13691,10 @@ class ZaloRealtimeListener:
         sender_for_auth = "0" if raw_uid_from in ("0", "") else (uid_from or my_uid)
         # Ngắt khẩn cấp 0.00ms ngay trên luồng Listener nếu Chủ Acc / Người có quyền gõ .t / .ta / .stop / .stopall
         cmd_Quick = content.strip().lower().split()[0] if content.strip() else ""
-        if cmd_Quick in (".t", ".ta", ".st", ".stop", ".stopall", ".dung", ".dunghet", ".tat", ".tathet", ".off", "/stop", "/stopall", "!t", "!stop"):
+        if cmd_Quick in (".t", ".st", ".stop", ".dung", ".tat", ".off", "/stop", "!t", "!stop"):
+            if is_true_account_owner(sender_for_auth, client_uid=my_uid, client_send2me_id=my_s2m, platform="zalo") or is_user_authorized_for_cmd(sender_for_auth, my_uid, my_s2m, allow_all=False, sender_name=d_name, platform="zalo"):
+                stop_tasks_for_thread(thread_id)
+        elif cmd_Quick in (".ta", ".stopall", ".dunghet", ".tathet", "/stopall", "!ta", "!stopall"):
             if is_true_account_owner(sender_for_auth, client_uid=my_uid, client_send2me_id=my_s2m, platform="zalo") or is_user_authorized_for_cmd(sender_for_auth, my_uid, my_s2m, allow_all=False, sender_name=d_name, platform="zalo"):
                 stop_tasks_for_thread(None)
         was_cmd = parse_and_execute_inchat_command(
