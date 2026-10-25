@@ -28,6 +28,9 @@ from zalo_login import (
     login_qr_with_unique_imei,
     LoginQRCallbackEventType,
     ZaloPCSessionKeeper,
+    SmartQRSessionPool,
+    build_vietnam_pc_identity,
+    SINGAPORE_ALL_FLEET,
     check_zalo_cookie_imei_live,
     parse_cookies_input_flexible,
     extract_imei_and_metadata_flexible,
@@ -153,7 +156,7 @@ FUNCTION_ITEMS_32 = [
     # Trang 1/4
     {"id": "fn_treo_do",       "label": "❤️‍🔥 Treo Ngôn Đỏ",      "mode": "treo_ngon",   "color_mode": "fixed",        "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo ngôn chữ Đỏ Rực (db342e) toàn tập", "emoji_id": "5465665476971471368"},
     {"id": "fn_treo_damau",    "label": "🌈 Treo Đa Màu",        "mode": "treo_ngon",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo ngôn đổi màu rực rỡ từng chữ", "emoji_id": "5359785904535774578"},
-    {"id": "fn_treo_gif",      "label": "⚡ Treo Ngôn GIF",      "mode": "treo_ngon",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo ngôn kèm hiệu ứng chuyển động VIP", "emoji_id": "5431449001532594346"},
+    {"id": "fn_treo_gif",      "label": "⚡ Treo Ngôn GIF",      "mode": "zalo_gif",    "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo Sticker Động GIF Zalo + Chữ Đổi Màu Cầu Vồng (.gif)", "emoji_id": "5431449001532594346"},
     {"id": "fn_word_rainbow",  "label": "✨ Chữ Đổi Từng Màu",   "mode": "treo_nhay",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Mỗi từ/chữ đổi 1 màu (Đỏ-Cam-Vàng-Xanh), 0% chữ trắng", "emoji_id": "5368324170671202286"},
     {"id": "fn_treo_nhay",     "label": "🔥 Treo Nhây VIP",      "mode": "treo_nhay",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Nhây từng dòng liên hoàn đổi màu từng chữ", "emoji_id": "5424972470023104089"},
     {"id": "fn_nhay_tag",      "label": "🎯 Nhây Tag Tên",       "mode": "treo_nhay",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Nhây kèm Tag nhắc tên mục tiêu thật 100%", "hide_tag_name": False, "emoji_id": "5350351256923673521"},
@@ -189,6 +192,7 @@ FUNCTION_ITEMS_32 = [
     {"id": "fn_colormode",     "label": "🎨 Chế Độ Màu Chữ",     "mode": "special_color","color_mode": "word_rainbow","fixed_color": "red",    "file_hint": "",                "desc": "Chọn chế độ Đổi Màu Từng Chữ hoặc Màu Cố Định (.mau)", "emoji_id": "5359785904535774578"},
     {"id": "fn_fontstyle",     "label": "🔤 Cỡ & Kiểu Chữ",      "mode": "special_font","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "",                "desc": "Chọn cỡ chữ To Đậm (f_18), Vừa Đậm (f_15), Xen Kẽ (.font)", "emoji_id": "5368324170671202286"},
     {"id": "fn_stop_all",      "label": "🛑 Dừng Tất Cả (.ta)",  "mode": "special_stop","color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "",                "desc": "Dừng khẩn cấp toàn bộ các chiến dịch đang chạy (.ta)", "emoji_id": "5210952531676504517"},
+    {"id": "fn_nhay_giaitan",  "label": "💣 Spam Nhóm Đã Giải Tán", "mode": "nhay_giaitan", "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhaynamebox.txt", "desc": "Spam thông báo 'Nhóm ... đã được giải tán' tới mọi thành viên trong Box (.giaitan)", "emoji_id": "5424972470023104089"},
 ]
 
 FUNCTION_MAP_BY_ID = {item["id"]: item for item in FUNCTION_ITEMS_32}
@@ -1419,8 +1423,16 @@ class DirectTelegramBotRunner:
 
         elif active_tab == "mgmt":
             rows.append([
-                tg_btn("Quét QR Lấy Token", "cmd_qr_sg", emoji_key="qr"),
+                tg_btn("Quét/Tái QR (38 Máy Tính)", "cmd_qr_sg", emoji_key="qr"),
                 tg_btn("Nhập Cookie + IMEI", "mgmt_input_ck_im", emoji_key="cookie"),
+            ])
+            rows.append([
+                tg_btn("➕ Thêm File Nhây", "mgmt_add_file_nhay", emoji_key="plus"),
+                tg_btn("➕ Thêm File Ngôn", "mgmt_add_file_ngon", emoji_key="plus"),
+            ])
+            rows.append([
+                tg_btn("📂 Chế Độ Chọn File", "mgmt_file_selector", emoji_key="folder"),
+                tg_btn("💣 Spam Nhóm Giải Tán", "pickfn:fn_nhay_giaitan", emoji_key="fire"),
             ])
             # CHỈ ADMIN CHÍNH (8827605973) MỚI ĐƯỢC THÊM / XOÁ / XEM DANH SÁCH ID SÀI BOT
             if is_admin:
@@ -1452,7 +1464,14 @@ class DirectTelegramBotRunner:
                     tg_btn("Lấy Cookie FB", "prompt_getcookie", emoji_key="cookie"),
                 ],
                 [
+                    tg_btn("🎨 Tạo Sticker Ảnh/Video ≤3s", "prompt_sticker_maker", emoji_key="magic"),
+                    tg_btn("💣 Spam Nhóm Đã Giải Tán", "pickfn:fn_nhay_giaitan", emoji_key="fire"),
+                ],
+                [
+                    tg_btn("📂 Chế Độ Chọn File", "mgmt_file_selector", emoji_key="folder"),
                     tg_btn("Đổi Font Chữ VIP", "pickfn:fn_fontstyle", emoji_key="sparkle"),
+                ],
+                [
                     tg_btn("Trạng Thái Hệ Thống", "cmd_status", emoji_key="chart"),
                 ],
             ])
@@ -2148,7 +2167,7 @@ class DirectTelegramBotRunner:
         self.send_text(chat_id, "\n".join(lines), reply_to=reply_to)
 
     # QUÉT QR ZALO PC TRỰC TIẾP TRÊN TELEGRAM (GẮN OWNER_TG_ID RIÊNG CHO NGƯỜI QUÉT)
-    def handle_zalo_qr_command(self, chat_id, user_id, msg_id=None, region_code="sg_vip", custom_pc_name=""):
+    def handle_zalo_qr_command(self, chat_id, user_id, msg_id=None, region_code="sg_vip", custom_pc_name="", reuse_unscanned=True):
         prev_stop = self.active_qr_stop_events.get(user_id)
         if prev_stop is not None:
             try:
@@ -2190,12 +2209,17 @@ class DirectTelegramBotRunner:
                             self.delete_msg(chat_id, wait_msg_id)
                             wait_msg_id = None
 
+                        reused_flag = bool(data.get("reused_unscanned"))
+                        pc_lbl = data.get("pc_name") or "Workstation SG"
+                        code_id_s = data.get("code") or ""
+                        reuse_badge = "♻️ TÁI SỬ DỤNG MÃ CHƯA QUÉT (Còn hạn)" if reused_flag else "🆕 MÃ QR MỚI KHỞI TẠO"
                         caption = (
-                            f"{tg_anim('qr', '📲')} <b>MÃ QR ĐĂNG NHẬP ZALO PC (LẤY TOKEN & SỐNG ĐA ACC)</b>\n\n"
+                            f"{tg_anim('qr', '📲')} <b>MÃ QR ĐĂNG NHẬP ZALO PC ({reuse_badge})</b>\n\n"
                             f"<blockquote>"
-                            f"{tg_anim('sparkle', '1️⃣')} Mở ứng dụng <b>Zalo</b> trên điện thoại.\n"
-                            f"{tg_anim('target', '2️⃣')} Quét mã QR bên trên và bấm <b>Đăng nhập</b>.\n"
-                            f"{tg_anim('shield', '🛡️')} Cookie quét được sẽ thuộc <b>kho riêng của bạn</b> và tự động bật 32 lệnh in-chat!"
+                            f"💻 Máy tính cấp phát: <b>{pc_lbl}</b> (Kho {len(SINGAPORE_ALL_FLEET)} Máy Tính)\n"
+                            f"🔑 Mã phiên QR: <code>{code_id_s[:16]}</code> (Chưa quét ➡️ Có thể tái lại | Đã quét ➡️ Tự động hủy bỏ)\n"
+                            f"⏳ Tuổi thọ phiên máy tính: <b>&gt; 5 Tháng (185 Ngày Bất Tử SSO)</b>\n"
+                            f"🛡️ Quét xong tự động sống thẳng trong Acc &amp; bật 36+ lệnh in-chat!"
                             f"</blockquote>"
                         )
                         p_res = self.send_photo_bytes(chat_id, bordered_png, caption=caption, reply_to=msg_id)
@@ -2230,7 +2254,11 @@ class DirectTelegramBotRunner:
                             reply_to=msg_id,
                         )
 
-                result = login_qr_with_unique_imei(callback=qr_callback, stop_ev=my_stop_ev)
+                result = login_qr_with_unique_imei(
+                    callback=qr_callback, stop_ev=my_stop_ev,
+                    region_code=region_code, custom_pc_name=custom_pc_name,
+                    reuse_unscanned=reuse_unscanned, owner_key=str(user_id)
+                )
 
                 if not result or my_stop_ev.is_set():
                     if wait_msg_id:
@@ -2670,6 +2698,67 @@ class DirectTelegramBotRunner:
             )
             return
 
+        if data == "mgmt_file_selector":
+            self.answer_callback(cb_id, "Mở Chế Độ Chọn File Nhây & File Ngôn")
+            self._render_file_selector_menu(chat_id, msg_id, user_id=user_id)
+            return
+
+        if data in ("mgmt_add_file_nhay", "mgmt_add_file_ngon"):
+            f_type = "nhay" if data == "mgmt_add_file_nhay" else "ngon"
+            lbl = "FILE NHÂY (Mỗi dòng 1 câu)" if f_type == "nhay" else "FILE NGÔN (Nguyên đoạn văn)"
+            self.user_states[user_id] = {"mode": f"add_file_{f_type}", "menu_msg_id": msg_id}
+            self.answer_callback(cb_id, f"Thêm {lbl}")
+            self.send_text(
+                chat_id,
+                f"{tg_anim('plus', '➕')} <b>THÊM {lbl} VÀO HỆ THỐNG</b>\n\n"
+                "<blockquote>"
+                f"• <b>Cách 1:</b> Gửi trực tiếp file <code>.txt</code> vào khung chat này.\n"
+                f"• <b>Cách 2:</b> Nhập theo cú pháp: <code>ten_file.txt | Nội dung dòng 1 ; Nội dung dòng 2</code>\n"
+                f"✨ File sau khi thêm sẽ tự động được kích hoạt làm {lbl} mặc định!"
+                "</blockquote>",
+                reply_to=msg_id,
+            )
+            return
+
+        if data.startswith("pick_nhay_file:") or data.startswith("pick_ngon_file:"):
+            is_nhay = data.startswith("pick_nhay_file:")
+            fn_chosen = data.split(":", 1)[1].strip()
+            try:
+                import app as _main_app
+                with _main_app.SYSTEM_CFG_LOCK:
+                    _main_app.SYSTEM_RUNTIME_CONFIG["selected_file"] = fn_chosen
+                    if is_nhay:
+                        _main_app.SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = fn_chosen
+                    else:
+                        _main_app.SYSTEM_RUNTIME_CONFIG["selected_ngon_file"] = fn_chosen
+            except Exception:
+                pass
+            wiz = self.wizard_selections.setdefault(user_id, {})
+            wiz["file_name"] = fn_chosen
+            wiz["file_selected"] = True
+            t_lbl = "File Nhây" if is_nhay else "File Ngôn"
+            self.answer_callback(cb_id, f"✅ Đã chọn {t_lbl}: {fn_chosen}!", show_alert=True)
+            self._render_file_selector_menu(
+                chat_id, msg_id, user_id=user_id,
+                notice=f"✅ Đã chọn <b>{t_lbl}</b>: <code>{fn_chosen}</code>!"
+            )
+            return
+
+        if data == "prompt_sticker_maker":
+            self.user_states[user_id] = {"mode": "make_sticker", "menu_msg_id": msg_id}
+            self.answer_callback(cb_id, "Chế độ Tạo Sticker Ảnh / Video ≤3s")
+            self.send_text(
+                chat_id,
+                f"{tg_anim('magic', '🎨')} <b>TẠO STICKER ẢNH SẮC NÉT (512×512) &amp; NHÃN DÁN VIDEO NGẮN (≤ 3.0 GIÂY)</b>\n\n"
+                "<blockquote>"
+                "1️⃣ <b>Tạo Sticker Bằng Ảnh:</b> Gửi bất kỳ bức ảnh nào vào đây ➡️ Bot tự động nâng cấp độ nét Ultra-HD 512×512 và xuất Sticker!\n"
+                "2️⃣ <b>Tạo Nhãn Dán Bằng Video Ngắn:</b> Gửi video ngắn <b>dưới 3 giây (≤ 3.0s)</b> vào đây ➡️ Bot tự động chuyển thành nhãn dán động sắc nét!\n"
+                "⚠️ <b>Lưu ý:</b> Video dài <b>trên 3 giây (&gt; 3.0s)</b> sẽ bị hệ thống <b>TỪ CHỐI NGAY LẬP TỨC</b>!"
+                "</blockquote>",
+                reply_to=msg_id,
+            )
+            return
+
         if data == "mgmt_acc_files":
             self.answer_callback(cb_id, "Mở quản lý Cookie & Kho File")
             self._render_accounts_and_files_menu(chat_id, msg_id, user_id=user_id)
@@ -2871,6 +2960,100 @@ class DirectTelegramBotRunner:
             )
         self.edit_menu_message(chat_id, msg_id, body, reply_markup={"inline_keyboard": rows})
 
+    def _render_file_selector_menu(self, chat_id, msg_id, user_id=ROOT_ADMIN_ID, notice=""):
+        files = self._get_available_txt_files()
+        try:
+            import app as _main_app
+            with _main_app.SYSTEM_CFG_LOCK:
+                cur_nhay = _main_app.SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file", "nhay.txt")
+                cur_ngon = _main_app.SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file", "ngon.txt")
+        except Exception:
+            cur_nhay = "nhay.txt"
+            cur_ngon = "ngon.txt"
+
+        rows = [
+            [
+                tg_btn("➕ Thêm File Nhây (.txt)", "mgmt_add_file_nhay", emoji_key="plus"),
+                tg_btn("➕ Thêm File Ngôn (.txt)", "mgmt_add_file_ngon", emoji_key="plus"),
+            ]
+        ]
+        file_lines = []
+        for idx, f in enumerate(files[:12], 1):
+            fn = f["filename"]
+            l_cnt = f.get("lines_count") or 1
+            f_type = f.get("file_type") or ("ngon" if "ngon" in fn.lower() else "nhay")
+            is_nhay_sel = (fn.lower() == str(cur_nhay).lower())
+            is_ngon_sel = (fn.lower() == str(cur_ngon).lower())
+            badge = "✅[ĐANG CHỌN NHÂY]" if is_nhay_sel else ("✅[ĐANG CHỌN NGÔN]" if is_ngon_sel else f"[{f_type.upper()}]")
+            file_lines.append(f"• #{idx} {badge} <code>{fn}</code> ({l_cnt} dòng)")
+            rows.append([
+                tg_btn(f"{'✅ ' if is_nhay_sel else ''}Chọn Nhây: {fn[:14]}", f"pick_nhay_file:{fn}", emoji_key="fire"),
+                tg_btn(f"{'✅ ' if is_ngon_sel else ''}Chọn Ngôn: {fn[:14]}", f"pick_ngon_file:{fn}", emoji_key="sparkle"),
+            ])
+        rows.append([tg_btn("Quay lại Quản Lý", "tab_mgmt", emoji_key="back")])
+        notice_block = f"{notice}\n\n" if notice else ""
+        cap = (
+            f"{tg_anim('folder', '📂')} <b>CHẾ ĐỘ CHỌN FILE NHÂY &amp; FILE NGÔN (.TXT)</b>\n\n"
+            f"<blockquote>{notice_block}"
+            f"🔥 <b>File Nhây đang chọn (.n / .word / .xa):</b> <code>{cur_nhay}</code>\n"
+            f"🌈 <b>File Ngôn đang chọn (.g / .treodo / .damau / .gif):</b> <code>{cur_ngon}</code>"
+            f"</blockquote>\n\n"
+            + "\n".join(file_lines[:12])
+            + "\n\n👉 <i>Bấm trực tiếp vào nút bên dưới để đổi File Nhây hoặc File Ngôn mặc định cho toàn bộ lệnh!</i>"
+        )
+        self.edit_menu_message(chat_id, msg_id, cap, reply_markup={"inline_keyboard": rows})
+
+    def _handle_sticker_media_message(self, chat_id, user_id, msg, msg_id):
+        """Xử lý tạo Sticker Ảnh Sắc Nét 512x512 hoặc Nhãn Dán Video Ngắn <= 3.0s trên Telegram & Zalo."""
+        try:
+            import app as _main_app
+            if "video" in msg or "animation" in msg or ("document" in msg and str((msg["document"].get("mime_type") or "")).startswith("video/")):
+                v_obj = msg.get("video") or msg.get("animation") or msg.get("document") or {}
+                dur_decl = float(v_obj.get("duration") or 0.0)
+                if dur_decl > 3.0:
+                    self.send_text(
+                        chat_id,
+                        f"{tg_anim('cross', '❌')} <b>TỪ CHỐI TẠO NHÃN DÁN VIDEO!</b>\n\n"
+                        f"<blockquote>"
+                        f"⏱️ Thời lượng video của bạn: <b>{dur_decl:.1f} giây</b> (Vượt quá giới hạn <b>3.0 giây</b>).\n"
+                        f"👉 Hệ thống chỉ nhận tạo nhãn dán bằng video ngắn <b>dưới 3 giây (≤ 3.0s)</b>!"
+                        f"</blockquote>",
+                        reply_to=msg_id,
+                    )
+                    return True
+                fid = v_obj.get("file_id")
+                f_info = self.api_call("getFile", {"file_id": fid}, timeout=10)
+                fpath = (f_info.get("result") or {}).get("file_path")
+                raw_bytes = self.session.get(f"https://api.telegram.org/file/bot{self.token}/{fpath}", timeout=20).content
+                res_st = _main_app.ZaloStickerMakerEngine.create_short_video_sticker(raw_bytes, declared_duration=dur_decl if dur_decl > 0 else None)
+                if not res_st.get("ok"):
+                    self.send_text(chat_id, res_st.get("error") or "❌ Từ chối video > 3 giây!", reply_to=msg_id)
+                    return True
+                anim_b = res_st.get("anim_bytes") or raw_bytes
+                self.send_doc_bytes(chat_id, anim_b, "sticker_video_512x512.gif", caption=res_st.get("message", "✅ Đã tạo nhãn dán video ngắn ≤ 3s!"), reply_to=msg_id)
+                return True
+
+            if "photo" in msg or ("document" in msg and str((msg["document"].get("mime_type") or "")).startswith("image/")):
+                if "photo" in msg and isinstance(msg["photo"], list) and msg["photo"]:
+                    fid = msg["photo"][-1].get("file_id")
+                else:
+                    fid = msg["document"].get("file_id")
+                f_info = self.api_call("getFile", {"file_id": fid}, timeout=10)
+                fpath = (f_info.get("result") or {}).get("file_path")
+                raw_bytes = self.session.get(f"https://api.telegram.org/file/bot{self.token}/{fpath}", timeout=20).content
+                res_st = _main_app.ZaloStickerMakerEngine.create_sharp_image_sticker(raw_bytes)
+                if not res_st.get("ok"):
+                    self.send_text(chat_id, res_st.get("error") or "❌ Không thể tạo Sticker từ ảnh!", reply_to=msg_id)
+                    return True
+                png_b = res_st.get("png_bytes") or raw_bytes
+                self.send_photo_bytes(chat_id, png_b, caption=res_st.get("message", "✅ Đã tạo Sticker Ảnh Sắc Nét 512×512!"), reply_to=msg_id)
+                self.send_doc_bytes(chat_id, png_b, "sticker_512x512_sharp.png", caption="📎 File Sticker PNG 512×512 Độ Nét Cao", reply_to=msg_id)
+                return True
+        except Exception as e:
+            self.send_text(chat_id, f"❌ Lỗi tạo Sticker: <code>{e}</code>", reply_to=msg_id)
+            return True
+        return False
+
     def _render_accounts_and_files_menu(self, chat_id, msg_id, user_id=ROOT_ADMIN_ID, notice=""):
         is_admin = is_root_admin(user_id)
         vis_accs = get_user_visible_accounts(user_id, enabled_only=False)
@@ -2949,6 +3132,50 @@ class DirectTelegramBotRunner:
         if not st:
             return False
         mode = st.get("mode")
+
+        if mode in ("add_file_nhay", "add_file_ngon"):
+            self.user_states.pop(user_id, None)
+            f_type = "nhay" if mode == "add_file_nhay" else "ngon"
+            t_lbl = "FILE NHÂY" if f_type == "nhay" else "FILE NGÔN"
+            if "|" in text:
+                f_part, c_part = text.split("|", 1)
+                fname = f_part.strip() or f"{f_type}_{int(time.time())}.txt"
+                raw_c = c_part.strip().replace(";", "\n") if f_type == "nhay" else c_part.strip()
+            else:
+                fname = f"{f_type}_{int(time.time())}.txt"
+                raw_c = text.strip().replace(";", "\n") if f_type == "nhay" else text.strip()
+            if not fname.lower().endswith(".txt"):
+                fname += ".txt"
+            up_dir = os.path.join(BASE_DIR, "uploads")
+            os.makedirs(up_dir, exist_ok=True)
+            dest = os.path.join(up_dir, f"{int(time.time())}_{os.path.basename(fname)}")
+            with open(dest, "w", encoding="utf-8") as wf:
+                wf.write(raw_c)
+            lines_cnt = max(1, sum(1 for ln in raw_c.splitlines() if ln.strip()))
+            try:
+                conn = _open_db()
+                conn.execute(
+                    "INSERT INTO files (filename, filepath, lines_count, created_at, file_type) VALUES (?, ?, ?, ?, ?)",
+                    (fname, dest, lines_cnt, time.time(), f_type)
+                )
+                conn.commit()
+                conn.close()
+                import app as _main_app
+                with _main_app.SYSTEM_CFG_LOCK:
+                    _main_app.SYSTEM_RUNTIME_CONFIG["selected_file"] = fname
+                    if f_type == "nhay":
+                        _main_app.SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = fname
+                    else:
+                        _main_app.SYSTEM_RUNTIME_CONFIG["selected_ngon_file"] = fname
+            except Exception:
+                pass
+            self.send_text(
+                chat_id,
+                f"✅ <b>ĐÃ THÊM &amp; CHỌN {t_lbl}:</b> <code>{fname}</code> ({lines_cnt} dòng)!\n"
+                f"👉 Gõ <code>.{'n' if f_type == 'nhay' else 'g'}</code> trên Zalo hoặc mở <code>/menu</code> để chạy ngay!",
+                reply_to=msg_id,
+            )
+            return True
 
         if mode == "add_user_id":
             self.user_states.pop(user_id, None)
@@ -3206,7 +3433,18 @@ class DirectTelegramBotRunner:
             )
             return
 
+        st_cur = self.user_states.get(user_id) or {}
+        if st_cur.get("mode") == "make_sticker" or "video" in msg or "animation" in msg or "photo" in msg:
+            if self._handle_sticker_media_message(chat_id, user_id, msg, msg_id):
+                self.user_states.pop(user_id, None)
+                return
+
         if "document" in msg:
+            doc_mime = str((msg["document"].get("mime_type") or "")).lower()
+            if doc_mime.startswith(("image/", "video/")):
+                if self._handle_sticker_media_message(chat_id, user_id, msg, msg_id):
+                    self.user_states.pop(user_id, None)
+                    return
             self._handle_uploaded_document(chat_id, user_id, msg["document"], msg_id)
             return
 
@@ -3247,8 +3485,26 @@ class DirectTelegramBotRunner:
             self.send_welcome_video_menu(chat_id, cap, reply_to=msg_id, reply_markup=kb)
             return
 
-        if cmd_raw in ("/qr", "/zaloqr", "/scan"):
-            self.handle_zalo_qr_command(chat_id, user_id, msg_id=msg_id)
+        if cmd_raw in ("/qr", "/zaloqr", "/scan", "/taoqr"):
+            reuse_flag = (arg_str.lower() not in ("new", "moi", "taomoi"))
+            self.handle_zalo_qr_command(chat_id, user_id, msg_id=msg_id, reuse_unscanned=reuse_flag)
+            return
+
+        if cmd_raw in ("/sticker", "/nhandan"):
+            self.user_states[user_id] = {"mode": "make_sticker"}
+            self.send_text(
+                chat_id,
+                f"{tg_anim('magic', '🎨')} <b>CHẾ ĐỘ TẠO STICKER ẢNH SẮC NÉT &amp; VIDEO NGẮN ≤ 3 GIÂY</b>\n"
+                "👉 Hãy gửi <b>Ảnh</b> hoặc <b>Video ngắn ≤ 3.0s</b> vào đây (Video > 3s sẽ tự động bị từ chối)!",
+                reply_to=msg_id,
+            )
+            return
+
+        if cmd_raw in ("/chonfile", "/files"):
+            msg_s = self.send_text(chat_id, "📂 Đang mở Chế Độ Chọn File Nhây & File Ngôn...", reply_to=msg_id)
+            mid_s = (msg_s.get("result") or {}).get("message_id")
+            if mid_s:
+                self._render_file_selector_menu(chat_id, mid_s, user_id=user_id)
             return
 
         if cmd_raw in ("/addck", "/cookie", "/nhapck", "/ck"):
