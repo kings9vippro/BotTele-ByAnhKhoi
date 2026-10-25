@@ -558,9 +558,14 @@ def init_db():
         cookies_json TEXT DEFAULT '{}',
         zpw_enk TEXT DEFAULT '',
         user_agent TEXT DEFAULT '',
+        owner_tg_id TEXT DEFAULT '',
         updated_at REAL
     )
     """)
+    try:
+        cur.execute("ALTER TABLE zalo_cookie_vault ADD COLUMN owner_tg_id TEXT DEFAULT ''")
+    except Exception:
+        pass
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS messenger_cookie_vault (
@@ -607,6 +612,7 @@ def init_db():
         ("user_agent", "ALTER TABLE accounts ADD COLUMN user_agent TEXT DEFAULT ''"),
         ("zpw_enk", "ALTER TABLE accounts ADD COLUMN zpw_enk TEXT DEFAULT ''"),
         ("pc_name", "ALTER TABLE accounts ADD COLUMN pc_name TEXT DEFAULT ''"),
+        ("owner_tg_id", "ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''"),
     ]
     for col_name, sql_stmt in migrations:
         if col_name not in cols:
@@ -1029,9 +1035,11 @@ VALID_SYSTEM_CMD_TOKENS = {
     "dsquyen", "listuser", "quyen",
     "stop", "dung", "dừng", "tat", "tắt", "off", "t", "st", "stopall", "dunghet", "tathet", "ta",
     "ab", "cp", "xq", "dsq",
-    "vip", "sieuvip", "theme", "setnen", "nen", "poll", "nhaypoll",
-    "sharelink", "link", "sharecontact", "contact", "typing", "ty",
-    "tenbox", "nhaynamebox", "setname", "bd", "namechange",
+    "vip", "sieuvip", "theme", "setnen", "nen", "poll", "nhaypoll", "treopoll", "poll1",
+    "sharelink", "link", "sharecontact", "contact", "typing", "ty", "nhaytyping",
+    "tenbox", "nhaynamebox", "treotenbox", "setname", "bd", "namechange",
+    "treodo", "do", "damau", "treodamau", "gif", "treogif", "word", "tungmau", "nhaytag", "nt",
+    "combo3", "nhaytodo", "nhaybank", "satthuong",
     "treoso", "so", "sotag", "sotagfaketen", "codelag", "lag", "nhay2c", "2c",
     "ideamess", "chui", "nhayicon", "nhaytagfaketen", "faketen",
     "nhaytop", "sotop", "treotop", "reostr", "story", "addmem", "raidbox",
@@ -1130,6 +1138,7 @@ AUTHORIZED_USERS_RAM_CACHE = {}
 AUTHORIZED_USERS_LOCK = threading.RLock()
 _AUTHORIZED_USERS_LOADED = False
 _PRIORITY_CMD_EXECUTOR = ThreadPoolExecutor(max_workers=128)
+_TYPING_BG_POOL = ThreadPoolExecutor(max_workers=8)
 
 def _ensure_authorized_users_loaded():
     global _AUTHORIZED_USERS_LOADED
@@ -1613,7 +1622,7 @@ class ZaloSmartAntiBanEngine:
 
     @classmethod
     def pre_send_box_guard(cls, imei, thread_id, is_group=True, antiband=True, priority_bypass=False):
-        """Lá chắn bảo vệ Box trước khi gửi: chống spam dồn dập làm Zalo khóa chat trong nhóm."""
+        """Lá chắn bảo vệ Box siêu tốc: không gây trễ giả tạo khi chạy nhiều Acc, chỉ làm mát ngắn khi máy chủ Zalo báo mã giới hạn thực tế."""
         if priority_bypass or not antiband or not thread_id:
             return 0.0
         key = f"{imei}:{thread_id}"
@@ -1622,15 +1631,11 @@ class ZaloSmartAntiBanEngine:
         with cls._BOX_LOCK:
             cd_until = cls._BOX_COOLDOWN_UNTIL.get(key, 0.0)
             if cd_until > now:
-                sleep_needed = min(4.0, cd_until - now)
+                sleep_needed = min(0.35, cd_until - now)
             hist = cls._BOX_SEND_HISTORY[key]
-            while hist and (now - hist[0]) > 3.2:
+            while hist and (now - hist[0]) > 2.5:
                 hist.popleft()
-            if is_group and len(hist) >= 6:
-                # Nếu bắn quá 6 tin trong 3.2s vào cùng 1 Box bằng 1 Acc, chèn nhịp thở sinh học 0.14s-0.28s chống cấm chat
-                burst_excess = len(hist) - 5
-                sleep_needed = max(sleep_needed, min(0.65, 0.12 * burst_excess + random.uniform(0.04, 0.12)))
-            hist.append(now + sleep_needed)
+            hist.append(now)
         if sleep_needed > 0.005:
             time.sleep(sleep_needed)
         return sleep_needed
@@ -4038,14 +4043,30 @@ class Zalo:
         return out
 
     def create_poll(self, group_id, question, options):
-        gid_s = str(group_id).strip()
-        opts = [str(x).strip() for x in (options or []) if str(x).strip()]
-        if len(opts) < 2:
-            opts = ["Đồng ý 100%", "Chuẩn VIP Quản Trị Viên"]
+        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
+        if not gid_s:
+            return False
+        self._poll_seq = (getattr(self, "_poll_seq", 0) + 1) & 0xFFFF
+        raw_opts = [str(x).strip() for x in (options or []) if str(x).strip()]
+        if len(raw_opts) < 2:
+            q_short = str(question or "Bình chọn VIP").strip()[:22]
+            raw_opts = [f"{q_short} #{self._poll_seq}A", f"{q_short} #{self._poll_seq}B"]
+        else:
+            # Đảm bảo các phương án bình chọn không trùng nhau và biến thiên nhẹ để Zalo cho phép tạo liên hoàn 0.0s không nghỉ
+            seen_o = set()
+            dedup_opts = []
+            for idx_o, o_txt in enumerate(raw_opts[:10], 1):
+                cand_o = o_txt[:60]
+                if cand_o in seen_o:
+                    cand_o = f"{cand_o} #{idx_o}"
+                seen_o.add(cand_o)
+                dedup_opts.append(cand_o)
+            raw_opts = dedup_opts
+        q_str = str(question or "Bình chọn Quản Trị Viên").strip()[:180]
         pl = {
             "group_id": gid_s,
-            "question": str(question or "Bình chọn Quản Trị Viên"),
-            "options": opts[:10],
+            "question": q_str,
+            "options": raw_opts[:10],
             "expired_time": 0,
             "pin_act": False,
             "allow_multi_choices": True,
@@ -4057,11 +4078,12 @@ class Zalo:
             "imei": self.imei,
         }
         enc = self._enc(pl)
-        r = self.s.post(
+        active_s = getattr(self, "prio_s", None) or self.s
+        r = active_s.post(
             "https://tt-group-wpa.chat.zalo.me/api/poll/create",
             params={"zpw_ver": 645, "zpw_type": 30},
             data={"params": enc},
-            timeout=12,
+            timeout=(1.5, 3.2),
         )
         return r.status_code == 200
 
@@ -4662,7 +4684,7 @@ class Zalo:
             except Exception:
                 pass
         try:
-            _PRIORITY_CMD_EXECUTOR.submit(_bg_typing)
+            _TYPING_BG_POOL.submit(_bg_typing)
         except Exception:
             pass
 
@@ -5605,9 +5627,10 @@ class ZaloCookieVaultEngine:
     _LOCK = threading.RLock()
 
     @classmethod
-    def save_zalo_vault_record(cls, uid, display_name, imei, cookies_dict, zpw_enk="", user_agent=""):
+    def save_zalo_vault_record(cls, uid, display_name, imei, cookies_dict, zpw_enk="", user_agent="", owner_tg_id=""):
         uid_s = str(uid or "").strip()
         imei_s = str(imei or "").strip()
+        owner_s = str(owner_tg_id or "").strip()
         c_norm = normalize_zalo_cookies(cookies_dict)
         if not imei_s or not c_norm:
             return False
@@ -5624,18 +5647,31 @@ class ZaloCookieVaultEngine:
             "cookies_json": c_json,
             "zpw_enk": str(zpw_enk or ""),
             "user_agent": ua_s,
+            "owner_tg_id": owner_s,
             "updated_at": now,
         }
         with cls._LOCK:
             cls._MEM_VAULT[uid_s] = rec
         try:
             conn = db()
-            conn.execute(
-                """INSERT OR REPLACE INTO zalo_cookie_vault
-                   (uid, display_name, imei, cookies_json, zpw_enk, user_agent, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (uid_s, rec["display_name"], imei_s, c_json, rec["zpw_enk"], ua_s, now),
-            )
+            if owner_s:
+                conn.execute(
+                    """INSERT OR REPLACE INTO zalo_cookie_vault
+                       (uid, display_name, imei, cookies_json, zpw_enk, user_agent, owner_tg_id, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (uid_s, rec["display_name"], imei_s, c_json, rec["zpw_enk"], ua_s, owner_s, now),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO zalo_cookie_vault
+                       (uid, display_name, imei, cookies_json, zpw_enk, user_agent, owner_tg_id, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, '', ?)
+                       ON CONFLICT(uid) DO UPDATE SET
+                       display_name=excluded.display_name, imei=excluded.imei,
+                       cookies_json=excluded.cookies_json, zpw_enk=excluded.zpw_enk,
+                       user_agent=excluded.user_agent, updated_at=excluded.updated_at""",
+                    (uid_s, rec["display_name"], imei_s, c_json, rec["zpw_enk"], ua_s, now),
+                )
             conn.commit()
             conn.close()
         except Exception:
@@ -9366,7 +9402,23 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
         use_emoji = False
         icon_count = 0
         is_heading = bool(runtime_opts.get("is_heading", True))
-        mode = runtime_opts.get("mode", "fast")
+        raw_mode = runtime_opts.get("mode", "fast")
+        mode = {
+            "combo3": "combo_lien_thanh",
+            "nhay2c": "nhay_2c",
+            "faketen": "so_tag_faketen",
+            "nhayicon": "nhay_icon",
+            "chui": "idea_mess",
+            "typing_loop": "nhay_typing",
+            "nhay_tenbox": "nhay_namebox",
+            "zalo_bank": "zalo_cardbank",
+            "nen_mqtt": "nhay_theme",
+            "set_nickname": "mess_nickname",
+            "anall": "nhay_tag_all_an",
+            "antan": "nhay_tag_ten_an",
+        }.get(raw_mode, raw_mode)
+        if mode == "nhay_poll":
+            delay = 0.0
         color_mode = runtime_opts.get("color_mode", "word_rainbow")
         fixed_color = runtime_opts.get("fixed_color", "red")
         tag_users = runtime_opts.get("tag_users") or []
@@ -9661,6 +9713,9 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
             else:
                 HEALTH_MGR.report_error(acc_id, err_str, is_auth_error=False, channel_id=target_id)
 
+        if mode == "nhay_poll":
+            # Treo Poll 0.0s KHÔNG CÓ THỜI GIAN NGHỈ: bắn liên hoàn ngay lập tức!
+            continue
         actual_delay = HEALTH_MGR.get_adaptive_delay(
             acc_id, delay, antiband=antiband, platform=plat, text_len=len(clean_raw), active_box_count=active_box_count
         )
@@ -9723,7 +9778,23 @@ def multi_box_shard_worker(client, acc_id, plat, shard_targets, blocks, runtime_
         use_emoji = False
         icon_count = 0
         is_heading = bool(runtime_opts.get("is_heading", True))
-        mode = runtime_opts.get("mode", "fast")
+        raw_mode = runtime_opts.get("mode", "fast")
+        mode = {
+            "combo3": "combo_lien_thanh",
+            "nhay2c": "nhay_2c",
+            "faketen": "so_tag_faketen",
+            "nhayicon": "nhay_icon",
+            "chui": "idea_mess",
+            "typing_loop": "nhay_typing",
+            "nhay_tenbox": "nhay_namebox",
+            "zalo_bank": "zalo_cardbank",
+            "nen_mqtt": "nhay_theme",
+            "set_nickname": "mess_nickname",
+            "anall": "nhay_tag_all_an",
+            "antan": "nhay_tag_ten_an",
+        }.get(raw_mode, raw_mode)
+        if mode == "nhay_poll":
+            delay = 0.0
         color_mode = runtime_opts.get("color_mode", "word_rainbow")
         fixed_color = runtime_opts.get("fixed_color", "red")
         tag_users = runtime_opts.get("tag_users") or []
@@ -9798,17 +9869,42 @@ def multi_box_shard_worker(client, acc_id, plat, shard_targets, blocks, runtime_
             t0_s = time.perf_counter()
             try:
                 if plat == "zalo":
-                    client.send_adv(
-                        pkt_text, t_id, color_mode=color_mode, fixed_color=fixed_color,
-                        is_group=is_grp, mentions=(tag_users if is_grp else None),
-                        tag_all=(tag_all if is_grp else False), is_heading=is_heading,
-                        color_offset=color_counter, antiband=antiband,
-                        use_emoji=eff_em, icon_count=eff_ic,
-                        auto_retry_thread_type=True, strip_line_num=s_num_flag,
-                        hide_tag_all=bool(runtime_opts.get("hide_tag_all", True)),
-                        hide_tag_name=bool(runtime_opts.get("hide_tag_name", True)),
-                        font_style=f_style
-                    )
+                    if mode == "nhay_poll":
+                        if "|" in pkt_text:
+                            q_p, opt_p = pkt_text.split("|", 1)
+                            opts_l = [x.strip() for x in opt_p.replace(";", "|").split("|") if x.strip()]
+                        else:
+                            q_p = pkt_text
+                            opts_l = [f"{pkt_text[:25]} #1", f"{pkt_text[:25]} #2"]
+                        client.create_poll(t_id, q_p.strip(), opts_l)
+                    elif mode == "nhay_typing":
+                        client.send_typing(t_id, is_group=is_grp)
+                    elif mode == "nhay_namebox":
+                        client.change_group_name(t_id, pkt_text)
+                    elif mode == "zalo_todo":
+                        ass_uids = [m["uid"] for m in tag_users] if tag_users else [client.uid]
+                        client.send_todo(t_id, pkt_text, assignees=ass_uids)
+                    elif mode == "zalo_cardbank":
+                        parts_b = [p.strip() for p in pkt_text.split("|")]
+                        b_bin = int(parts_b[0]) if (parts_b and parts_b[0].isdigit()) else 970422
+                        b_num = parts_b[1] if len(parts_b) > 1 else "9999999999"
+                        b_name = parts_b[2] if len(parts_b) > 2 else "ACCOUNT VIP"
+                        client.send_card_bank(t_id, bin_bank=b_bin, num_acc=b_num, name_acc=b_name, is_group=is_grp)
+                    elif mode == "share_contact":
+                        c_uid = tag_users[0]["uid"] if tag_users else client.uid
+                        client.send_business_card(t_id, target_uid=c_uid, is_group=is_grp)
+                    else:
+                        client.send_adv(
+                            pkt_text, t_id, color_mode=color_mode, fixed_color=fixed_color,
+                            is_group=is_grp, mentions=(tag_users if is_grp else None),
+                            tag_all=(tag_all if is_grp else False), is_heading=is_heading,
+                            color_offset=color_counter, antiband=antiband,
+                            use_emoji=eff_em, icon_count=eff_ic,
+                            auto_retry_thread_type=True, strip_line_num=s_num_flag,
+                            hide_tag_all=bool(runtime_opts.get("hide_tag_all", True)),
+                            hide_tag_name=bool(runtime_opts.get("hide_tag_name", True)),
+                            font_style=f_style
+                        )
                 elif plat == "messenger":
                     client.send_message(
                         t_id, pkt_text, is_group=True, mentions=tag_users,
@@ -9945,15 +10041,9 @@ def single_acc_multi_box_dispatcher(acc_dict, targets, blocks, runtime_opts, sto
     cur_d_cfg = float(runtime_opts.get("delay", 0.0) or 0.0)
     stagger_base = 0.0
 
-    # Khi Delay == 0.0s (Siêu tốc không độ trễ): tự động nhân luồng song song cho từng Box
-    # để dù gửi 1 box hay 200 box đồng loạt vẫn bắn song song tức thì không bao giờ phải chờ RTT của box trước!
-    if cur_d_cfg <= 0.0:
-        if total_boxes <= 32:
-            expanded_targets = list(my_targets) * min(3, max(1, 32 // max(1, total_boxes)))
-        else:
-            expanded_targets = list(my_targets)
-    else:
-        expanded_targets = list(my_targets)
+    # Tối ưu Đa Acc Siêu Mượt Không Lag: Mỗi Acc phân bổ đúng 1 luồng độc lập cho mỗi Box mục tiêu
+    # (Loại bỏ việc nhân 3 luồng trùng lặp trên cùng 1 Box gây nghẽn GIL & làm lag khi treo nhiều Acc cùng lúc!)
+    expanded_targets = list(my_targets)
 
     max_shards_per_acc = (200 if len(expanded_targets) > 200 else len(expanded_targets)) if cur_d_cfg <= 0.0 else (96 if len(expanded_targets) > 96 else len(expanded_targets))
     rotated_targets = list(expanded_targets)
@@ -10672,6 +10762,14 @@ def parse_and_execute_inchat_command(
         "ngonall": "gall",
         "nll": "nall",
         "nhayall": "nall",
+        "do": "treodo",
+        "treodamau": "damau",
+        "treogif": "gif",
+        "tungmau": "word",
+        "nt": "nhaytag",
+        "treopoll": "nhaypoll",
+        "treotenbox": "nhaynamebox",
+        "satthuong": "chui",
     }
     cmd_token = stealth_alias_map.get(cmd_token, cmd_token)
 
@@ -10829,17 +10927,14 @@ def parse_and_execute_inchat_command(
             )
         else:
             help_txt = (
-                "⚡ HỆ THỐNG ZALO PC Đa Luồng:\n"
-                "• .nhay <nd / số file> [@Tên / @All] (.n) — Tag @All tự động ẨN chữ @All\n"
-                "• .anall <nd / số file> — Nhây Tag @All Ẩn (Chuông báo cả nhóm không hiện chữ @All)\n"
-                "• .antan <nd / số file> [@Tên] — Nhây Tag @Tên Ẩn & @All Ẩn (Tag thật 100% không hiện chữ @Tên)\n"
-                "• .ngon <nd / số file> [@Tên / @All] (.g) | .xa <số file> — Siêu xả 0s không lag\n"
-                "• .prx <add/list/test/on/off> — Quản lý Proxy truyền tin siêu tốc\n"
-                "• .combo <nd / số file> [@Tên] — Xả liên thanh 3 câu/nhịp\n"
-                "• .spam <nội dung> [@Tên / @All] (.s) | .raid (.r) | .auto (.a)\n"
-                "• .file <số file> | .files (.ds) | .addfile <tên> | <nd>\n"
-                f"• .delay <giây> ({cur_d}s) | .icon <0-10> ({cur_ic}) | .mau <rainbow|word>\n"
-                "• .ping (.p) | .status | .id | .mem | .stop (.t) | .stopall (.ta)"
+                "👑 BẢNG LỆNH 32 CHỨC NĂNG TRỰC TIẾP TRÊN ACC ZALO [ULTIMATE VIP]:\n"
+                "1️⃣ Treo & Nhây Đa Màu: .treodo | .damau | .gif | .word | .nhay (.n) | .ngon (.g)\n"
+                "2️⃣ Tag Thật & Tag Ẩn: .nhaytag @Tên | .anall (Tag @All ẩn) | .antan @Tên (Tag tên ẩn)\n"
+                "3️⃣ Siêu Xả & Combo: .xa (Siêu xả 0s) | .combo (3 câu/nhịp) | .2c (Gộp 2 câu)\n"
+                "4️⃣ Đếm Số & Sát Thương: .so | .sotag @Tên | .faketen | .nhayicon | .chui\n"
+                "5️⃣ Poll 0s Không Nghỉ & Tương Tác Box: .nhaypoll (.poll) | .nhaytyping | .tenbox | .todo | .bank | .card\n"
+                "6️⃣ Phòng Thủ & Quản Trị: .chan (Bám sát 0ms) | .prx | .ab | .cp @Tên | .xq @Tên\n"
+                f"7️⃣ Cấu Hình & Dừng: .d <giây> ({cur_d}s) | .mau <word|do> | .font | .ds | .p | .t (Dừng) | .ta (Dừng hết)"
             )
         _send_reply(help_txt)
         log_system_command(acc_id, thread_id, sender_id, text, f"Hiển thị .menu ({platform})")
@@ -11051,7 +11146,7 @@ def parse_and_execute_inchat_command(
         _send_reply(f"⚡ Đã đổi huy hiệu HypeSquad Discord (House #{h_id})!")
         return True
 
-    if platform == "discord" and discord_client and cmd_token in ("poll", "nhaypoll"):
+    if platform == "discord" and discord_client and cmd_token in ("poll1",):
         if "|" in arg_body:
             q_s, o_s = arg_body.split("|", 1)
             opts = [x.strip() for x in o_s.replace(";", "|").split("|") if x.strip()]
@@ -11065,7 +11160,7 @@ def parse_and_execute_inchat_command(
         discord_client.send_typing(thread_id)
         return True
 
-    if platform == "zalo" and zalo_client and cmd_token in ("poll", "nhaypoll"):
+    if platform == "zalo" and zalo_client and cmd_token in ("poll1",):
         if "|" in arg_body:
             q_s, o_s = arg_body.split("|", 1)
             opts = [x.strip() for x in o_s.replace(";", "|").split("|") if x.strip()]
@@ -11073,7 +11168,7 @@ def parse_and_execute_inchat_command(
             q_s = arg_body.strip() or "Bình chọn Quản Trị Viên"
             opts = ["Đồng ý 100% 🔥", "Chuẩn VIP 👑"]
         zalo_client.create_poll(thread_id, q_s.strip(), opts)
-        log_system_command(acc_id, thread_id, sender_id, text, f"Tạo Poll Zalo: {q_s[:25]}")
+        log_system_command(acc_id, thread_id, sender_id, text, f"Tạo Poll Zalo 1 lần: {q_s[:25]}")
         return True
 
     if platform == "zalo" and zalo_client and cmd_token in ("tenbox",):
@@ -11563,8 +11658,18 @@ def parse_and_execute_inchat_command(
         "tagan": "treo_nhay",
         "antag": "treo_nhay",
         "hientag": "treo_nhay",
+        "nhaytag": "treo_nhay",
+        "treodo": "treo_ngon",
+        "damau": "treo_ngon",
+        "gif": "treo_ngon",
+        "word": "treo_nhay",
+        "poll": "nhay_poll",
         "nhaypoll": "nhay_poll",
+        "nhaytyping": "nhay_typing",
         "nhaynamebox": "nhay_namebox",
+        "nhaytodo": "zalo_todo",
+        "nhaybank": "zalo_cardbank",
+        "combo3": "combo_lien_thanh",
         "xa": "sieu_xa_nhieu_nhom",
         "xaall": "sieu_xa_nhieu_nhom",
         "sieuxa": "sieu_xa_nhieu_nhom",
@@ -11648,6 +11753,14 @@ def parse_and_execute_inchat_command(
         )
 
     is_auto_shuffle = (chosen_mode == "auto_shuffle")
+    if cmd_token == "treodo":
+        color_mode = "fixed"
+        fixed_color = "red"
+    elif cmd_token in ("damau", "gif", "word"):
+        color_mode = "word_rainbow"
+    if chosen_mode == "nhay_poll":
+        # Treo Poll liên hoàn 0.0s không thời gian nghỉ!
+        delay_val = 0.0
     if chosen_mode in ("raid_mode", "sieu_xa_nhieu_nhom"):
         chosen_mode = "treo_nhay" if chosen_mode == "raid_mode" else "sieu_xa_nhieu_nhom"
         delay_val = 0.0
@@ -11796,10 +11909,10 @@ def parse_and_execute_inchat_command(
     else:
         stop_tasks_for_thread(thread_id)
 
-    hide_name_flag = False if cmd_token == "hientag" else bool(SYSTEM_RUNTIME_CONFIG.get("hide_tag_name", True) or cmd_token in ("antan", "tagan", "antag"))
+    hide_name_flag = False if cmd_token in ("hientag", "nhaytag") else bool(SYSTEM_RUNTIME_CONFIG.get("hide_tag_name", True) or cmd_token in ("antan", "tagan", "antag"))
 
     # Bắn ngay phát đầu tiên trong 0.001s trên làn ưu tiên (_PRIORITY_CMD_EXECUTOR + priority_bypass=True)
-    # để vừa gõ lệnh là tin nhắn nổ ra ngay lập tức không có bất kỳ độ trễ khởi động nào!
+    # để vừa gõ lệnh là tin nhắn / Poll nổ ra ngay lập tức không có bất kỳ độ trễ khởi động nào!
     if blocks and target_obj:
         first_pkt = str(blocks[0])
         if chosen_mode != "treo_ngon":
@@ -11811,14 +11924,23 @@ def parse_and_execute_inchat_command(
             t_id_now = str(t_item.get("id") or thread_id)
             try:
                 if platform == "zalo" and zalo_client:
-                    zalo_client.send_adv(
-                        first_pkt, t_id_now, color_mode=color_mode, fixed_color=fixed_color,
-                        is_group=True, mentions=extracted_mentions, tag_all=extracted_tag_all,
-                        is_heading=is_heading, antiband=antiband_flag, use_emoji=use_emoji,
-                        icon_count=icon_count, auto_retry_thread_type=True,
-                        strip_line_num=(chosen_mode != "treo_ngon"),
-                        hide_tag_all=True, hide_tag_name=hide_name_flag, priority_bypass=True
-                    )
+                    if chosen_mode == "nhay_poll":
+                        if "|" in first_pkt:
+                            q_0, o_0 = first_pkt.split("|", 1)
+                            opts_0 = [x.strip() for x in o_0.replace(";", "|").split("|") if x.strip()]
+                        else:
+                            q_0 = first_pkt
+                            opts_0 = [f"{first_pkt[:25]} #1", f"{first_pkt[:25]} #2"]
+                        zalo_client.create_poll(t_id_now, q_0.strip(), opts_0)
+                    else:
+                        zalo_client.send_adv(
+                            first_pkt, t_id_now, color_mode=color_mode, fixed_color=fixed_color,
+                            is_group=True, mentions=extracted_mentions, tag_all=extracted_tag_all,
+                            is_heading=is_heading, antiband=antiband_flag, use_emoji=use_emoji,
+                            icon_count=icon_count, auto_retry_thread_type=True,
+                            strip_line_num=(chosen_mode != "treo_ngon"),
+                            hide_tag_all=True, hide_tag_name=hide_name_flag, priority_bypass=True
+                        )
                 elif platform == "discord" and discord_client:
                     msg_ln0 = (first_pkt + " " + build_unique_zalo_icons(icon_count)) if (use_emoji and icon_count > 0) else first_pkt
                     discord_client.send_message(
@@ -12616,7 +12738,7 @@ class ZaloRealtimeListener:
         for c_gid in changed_gids[:6]:
             _SHARED_ZALO_POLLER_POOL.submit(self._poll_single_group, client, acc_now, c_gid)
 
-        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.65:
+        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.30:
             self._last_rot_group_poll_ts = now_t
             all_my_gids = sorted(
                 g for g in KNOWN_GROUPS_BY_ACC.get(client.uid, set())
@@ -12685,7 +12807,7 @@ class ZaloRealtimeListener:
                 if "Phiên đăng nhập" in str(e) or "zpw_enk" in str(e):
                     self.ws_status = "Cần cập nhật lại Cookie Zalo"
             active_z_cnt = max(1, len(ACTIVE_LISTENERS))
-            poll_sleep = 0.26 + min(0.28, max(0, active_z_cnt - 1) * 0.04)
+            poll_sleep = 0.12 + min(0.20, max(0, active_z_cnt - 1) * 0.025)
             self.stop_ev.wait(poll_sleep)
 
     def _run_ws_session(self, client, acc_row, ws_url):
