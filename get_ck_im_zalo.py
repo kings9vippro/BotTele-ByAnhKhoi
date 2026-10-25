@@ -49,17 +49,64 @@ DISCORD_TOKEN_RE = re.compile(
     r"((?:mfa\.[A-Za-z0-9_\-]{50,160})|(?:[A-Za-z0-9_\-]{18,44}\.[A-Za-z0-9_\-]{5,14}\.[A-Za-z0-9_\-]{20,140}))"
 )
 
+import sys
+
+# ==============================================================================
+# BỘ ICON ĐỘNG TELEGRAM PREMIUM (TELEGRAM ANIMATED CUSTOM EMOJI ENGINE <tg-emoji>)
+# Tự động hiển thị Icon Động 60fps Lottie trên Telegram iOS/Android/Desktop
+# kèm cơ chế Auto-Fallback 0ms trong api_call nếu Bot Token chưa bật Fragment
+# ==============================================================================
+TG_ANIM_EMOJI_MAP = {
+    "crown":   ("5219805704906270925", "👑"),
+    "fire":    ("5424972470023104089", "🔥"),
+    "bolt":    ("5431449001532594346", "⚡"),
+    "rocket":  ("5445284980978621387", "🚀"),
+    "sparkle": ("5368324170671202286", "✨"),
+    "diamond": ("5472164874886846699", "💎"),
+    "shield":  ("5373141891321699086", "🛡️"),
+    "star":    ("5438496463044752972", "🌟"),
+    "radar":   ("5397782960512444700", "📡"),
+    "check":   ("5206607081334906820", "✅"),
+    "cross":   ("5210952531676504517", "❌"),
+    "warn":    ("5447644880824181073", "⚠️"),
+    "gear":    ("5341715473882955310", "⚙️"),
+    "king":    ("5386367538735104399", "🥷"),
+    "target":  ("5350351256923673521", "🎯"),
+    "magic":   ("5359785904535774578", "🌈"),
+    "heart":   ("5465665476971471368", "❤️‍🔥"),
+    "qr":      ("5427009714745517609", "📲"),
+    "key":     ("5438496463044752972", "🔑"),
+    "bot":     ("5373141891321699086", "👾"),
+    "stop":    ("5210952531676504517", "🛑"),
+    "folder":  ("5472164874886846699", "🗂️"),
+}
+
+_TG_CUSTOM_EMOJI_RE = re.compile(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", re.DOTALL)
+
+
+def tg_anim(key: str, fallback: str = "") -> str:
+    """Trả về thẻ HTML <tg-emoji emoji-id="...">...</tg-emoji> chuẩn Telegram Animated Emoji."""
+    em_id, def_fb = TG_ANIM_EMOJI_MAP.get(key, ("5431449001532594346", fallback or "⚡"))
+    fb_use = fallback or def_fb
+    return f'<tg-emoji emoji-id="{em_id}">{fb_use}</tg-emoji>'
+
+
+def strip_tg_anim_tags(html_text: str) -> str:
+    if not html_text or "<tg-emoji" not in html_text:
+        return html_text
+    return _TG_CUSTOM_EMOJI_RE.sub(r"\1", html_text)
+
 # DANH SÁCH 32 CHỨC NĂNG VIP CHIA 4 TRANG (8 MỤC / TRANG, 2 CỘT / HÀNG GIỐNG Y HỆT ẢNH MẪU)
 FUNCTION_ITEMS_32 = [
     # Trang 1/4
-    {"id": "fn_treo_do",       "label": "🥀 Treo Ngôn Đỏ",       "mode": "treo_ngon",   "color_mode": "fixed",        "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo ngôn chữ Đỏ Rực (db342e) toàn tập"},
-    {"id": "fn_treo_damau",    "label": "🌈 Treo Đa Màu",        "mode": "treo_ngon",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo ngôn đổi màu rực rỡ từng chữ"},
-    {"id": "fn_treo_gif",      "label": "🎬 Treo Ngôn GIF",      "mode": "treo_ngon",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo ngôn kèm hiệu ứng chuyển động VIP"},
-    {"id": "fn_word_rainbow",  "label": "✨ Chữ Đổi Từng Màu",   "mode": "treo_nhay",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Mỗi từ/chữ đổi 1 màu (Đỏ-Cam-Vàng-Xanh), 0% chữ trắng"},
-    {"id": "fn_treo_nhay",     "label": "💬 Treo Nhây",          "mode": "treo_nhay",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Nhây từng dòng liên hoàn đổi màu từng chữ"},
-    {"id": "fn_nhay_tag",      "label": "🏷️ Nhây Tag Tên",      "mode": "treo_nhay",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Nhây kèm Tag nhắc tên mục tiêu thật 100%", "hide_tag_name": False},
-    {"id": "fn_anall",         "label": "📢 Nhây Tag All Ẩn",    "mode": "anall",       "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Báo chuông @All cả nhóm nhưng ẩn hoàn toàn chữ @All", "tag_all": True, "hide_tag_all": True},
-    {"id": "fn_antan",         "label": "👻 Nhây Tag Tên Ẩn",    "mode": "antan",       "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Tag tên thật báo chuông nhưng ẩn chữ @Tên trên khung chat", "hide_tag_name": True},
+    {"id": "fn_treo_do",       "label": "❤️‍🔥 Treo Ngôn Đỏ",      "mode": "treo_ngon",   "color_mode": "fixed",        "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo ngôn chữ Đỏ Rực (db342e) toàn tập", "emoji_id": "5465665476971471368"},
+    {"id": "fn_treo_damau",    "label": "🌈 Treo Đa Màu",        "mode": "treo_ngon",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo ngôn đổi màu rực rỡ từng chữ", "emoji_id": "5359785904535774578"},
+    {"id": "fn_treo_gif",      "label": "⚡ Treo Ngôn GIF",      "mode": "treo_ngon",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Treo ngôn kèm hiệu ứng chuyển động VIP", "emoji_id": "5431449001532594346"},
+    {"id": "fn_word_rainbow",  "label": "✨ Chữ Đổi Từng Màu",   "mode": "treo_nhay",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Mỗi từ/chữ đổi 1 màu (Đỏ-Cam-Vàng-Xanh), 0% chữ trắng", "emoji_id": "5368324170671202286"},
+    {"id": "fn_treo_nhay",     "label": "🔥 Treo Nhây VIP",      "mode": "treo_nhay",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Nhây từng dòng liên hoàn đổi màu từng chữ", "emoji_id": "5424972470023104089"},
+    {"id": "fn_nhay_tag",      "label": "🎯 Nhây Tag Tên",       "mode": "treo_nhay",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Nhây kèm Tag nhắc tên mục tiêu thật 100%", "hide_tag_name": False, "emoji_id": "5350351256923673521"},
+    {"id": "fn_anall",         "label": "🚀 Nhây Tag All Ẩn",    "mode": "anall",       "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Báo chuông @All cả nhóm nhưng ẩn hoàn toàn chữ @All", "tag_all": True, "hide_tag_all": True, "emoji_id": "5445284980978621387"},
+    {"id": "fn_antan",         "label": "💎 Nhây Tag Tên Ẩn",    "mode": "antan",       "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Tag tên thật báo chuông nhưng ẩn chữ @Tên trên khung chat", "hide_tag_name": True, "emoji_id": "5472164874886846699"},
 
     # Trang 2/4
     {"id": "fn_sieu_xa",       "label": "🚀 Siêu Xả Đa Box",     "mode": "fast",        "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Siêu xả đồng loạt đa nhóm tốc độ cao chống cấm chat"},
@@ -835,36 +882,76 @@ class FacebookCookieGetter:
 class DirectTelegramBotRunner:
     """Bộ điều khiển trung tâm BOT TREO 4APP 🇻🇳 qua Telegram (Giao diện Video + 3 Tab 32 Item + Phân quyền ID + Anti-Ban Box)."""
 
+    @staticmethod
+    def _create_isolated_session():
+        s = requests.Session()
+        adapter = HTTPAdapter(pool_connections=32, pool_maxsize=64, max_retries=1)
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        return s
+
     def __init__(self, token=TELEGRAM_BOT_TOKEN):
         self.token = (token or TELEGRAM_BOT_TOKEN).strip()
         self.api_base = f"https://api.telegram.org/bot{self.token}"
         self.running = False
         self.offset = 0
-        self.session = requests.Session()
-        adapter = HTTPAdapter(pool_connections=20, pool_maxsize=40)
-        self.session.mount("https://", adapter)
-        self.session.mount("http://", adapter)
+        self._tls = threading.local()
+        self.poll_session = self._create_isolated_session()
+        self.session = self._create_isolated_session()
         self.user_states = {}
         self.wizard_selections = {}
         self.active_qr_locks = set()
+        self.active_qr_stop_events = {}
         self.bot_username = ""
         self.bot_id = None
         self.last_error = ""
         self.started_at = time.time()
-        self.executor = ThreadPoolExecutor(max_workers=20)
+        self.last_poll_ok_ts = time.time()
+        self.poll_thread = None
+        self.executor = ThreadPoolExecutor(max_workers=24, thread_name_prefix="TgWorker")
         self._cached_welcome_file_id = _get_db_setting("tg_welcome_file_id", "")
         self._cached_welcome_kind = _get_db_setting("tg_welcome_kind", "animation")
 
-    def api_call(self, method, data=None, files=None, timeout=25):
+    def _get_worker_session(self):
+        sess = getattr(self._tls, "session", None)
+        if sess is None:
+            sess = self._create_isolated_session()
+            self._tls.session = sess
+        return sess
+
+    def api_call(self, method, data=None, files=None, timeout=20, use_poll_session=False):
         url = f"{self.api_base}/{method}"
+        sess = self.poll_session if use_poll_session else self._get_worker_session()
+        eff_timeout = (8.0, float(timeout)) if isinstance(timeout, (int, float)) else timeout
         try:
             if files:
-                r = self.session.post(url, data=data, files=files, timeout=timeout)
+                r = sess.post(url, data=data, files=files, timeout=eff_timeout)
             else:
-                r = self.session.post(url, json=data, timeout=timeout)
-            return r.json()
+                r = sess.post(url, json=data, timeout=eff_timeout)
+            res = r.json() if r.content else {"ok": False, "description": f"HTTP {r.status_code}"}
+            # Tự động fallback trong 0ms nếu nội dung chứa thẻ <tg-emoji> mà tài khoản Bot chưa bật Custom Emoji
+            if not res.get("ok") and isinstance(data, dict):
+                desc_up = str(res.get("description") or "").upper()
+                has_anim_tag = ("<tg-emoji" in str(data.get("text") or "")) or ("<tg-emoji" in str(data.get("caption") or ""))
+                if has_anim_tag and any(k in desc_up for k in ("EMOJI", "ENTITY", "ENTITIES", "PARSE", "DOCUMENT_INVALID")):
+                    fallback_data = dict(data)
+                    if "text" in fallback_data and isinstance(fallback_data["text"], str):
+                        fallback_data["text"] = strip_tg_anim_tags(fallback_data["text"])
+                    if "caption" in fallback_data and isinstance(fallback_data["caption"], str):
+                        fallback_data["caption"] = strip_tg_anim_tags(fallback_data["caption"])
+                    if files:
+                        r2 = sess.post(url, data=fallback_data, files=files, timeout=eff_timeout)
+                    else:
+                        r2 = sess.post(url, json=fallback_data, timeout=eff_timeout)
+                    return r2.json() if r2.content else res
+            return res
         except Exception as e:
             self.last_error = str(e)
+            if not use_poll_session:
+                try:
+                    self._tls.session = self._create_isolated_session()
+                except Exception:
+                    pass
             return {"ok": False, "description": str(e)}
 
     def clear_webhook_and_init(self):
@@ -1078,29 +1165,33 @@ class DirectTelegramBotRunner:
         name_clean = str(user_first_name or "Anh").replace("<", "").replace(">", "").strip() or "Anh"
 
         if active_tab == "func":
-            sec_title = f"CHỨC NĂNG – trang {page}/4"
+            sec_title = f"CHỨC NĂNG VIP – TRANG {page}/4"
         elif active_tab == "mgmt":
-            sec_title = "QUẢN LÝ HỆ THỐNG & PHÂN QUYỀN ID"
+            sec_title = "QUẢN LÝ ĐA ACC & PHÂN QUYỀN ID"
         else:
-            sec_title = "TIỆN ÍCH MỞ RỘNG VIP"
+            sec_title = "TIỆN ÍCH MỞ RỘNG SIÊU CẤP"
 
         acc_cnt, running_cnt, color_label, delay_val = cls._get_live_runtime_summary()
-        status_bar = f"\n📡 Acc: <b>{acc_cnt}</b> • Đang chạy: <b>{running_cnt}</b> • Màu: <b>{color_label}</b> ({delay_val}s)"
+        status_bar = (
+            f"\n{tg_anim('radar', '📡')} Acc sống: <b>{acc_cnt}</b> • "
+            f"{tg_anim('fire', '🔥')} Đang chạy: <b>{running_cnt}</b> • "
+            f"{tg_anim('magic', '🌈')} Màu: <b>{color_label}</b> ({delay_val}s)"
+        )
         notice_block = f"\n\n{extra_notice}" if extra_notice else ""
 
         return (
-            f"👋 Xin chào, {name_clean}!\n\n"
-            f"<b>BOT TREO 4APP 🇻🇳</b>\n"
-            f"👾 Chức năng: 32 item\n"
-            f"💼 Quản lý: 6 mục\n"
-            f"🔧 Tiện ích: 6 mục\n"
+            f"{tg_anim('bolt', '⚡')} <b>Xin chào, {name_clean}!</b>\n\n"
+            f"{tg_anim('crown', '👑')} <b>BOT TREO 4APP 🇻🇳 [ULTIMATE VIP]</b>\n"
+            f"{tg_anim('bot', '👾')} Chức năng: <b>32 chế độ VIP</b>\n"
+            f"{tg_anim('diamond', '💎')} Quản lý: <b>6 mục Đa Acc & Phân Quyền</b>\n"
+            f"{tg_anim('sparkle', '✨')} Tiện ích: <b>6 công cụ tự động</b>\n"
             f"────────────────────\n"
-            f"🕒 {time_str}\n"
-            f"🥷 Vai trò: {role_str}\n"
-            f"👤 Admin: <a href=\"tg://user?id={ROOT_ADMIN_ID}\">Bấm vào đây ↗️</a>"
+            f"{tg_anim('star', '🌟')} <b>{time_str}</b>\n"
+            f"{tg_anim('king', '🥷')} Vai trò: <b>{role_str}</b>\n"
+            f"{tg_anim('shield', '🛡️')} Admin: <a href=\"tg://user?id={ROOT_ADMIN_ID}\">Bấm vào đây ↗️</a>"
             f"{status_bar}"
             f"{notice_block}\n\n"
-            f"⚙️ <b>{sec_title}</b>"
+            f"{tg_anim('gear', '⚙️')} <b>{sec_title}</b>"
         )
 
     @classmethod
@@ -1108,15 +1199,15 @@ class DirectTelegramBotRunner:
         page = max(1, min(4, int(page or 1)))
         tab_row = [
             {
-                "text": f"{'🔘' if active_tab == 'func' else '⚪'} Chức Năng",
+                "text": f"{'🔥' if active_tab == 'func' else '❖'} Chức Năng",
                 "callback_data": "tab_func_1"
             },
             {
-                "text": f"{'🔘' if active_tab == 'mgmt' else '⚪'} Quản Lý",
+                "text": f"{'👑' if active_tab == 'mgmt' else '❖'} Quản Lý",
                 "callback_data": "tab_mgmt"
             },
             {
-                "text": f"{'🔘' if active_tab == 'util' else '⚪'} Tiện Ích",
+                "text": f"{'⚡' if active_tab == 'util' else '❖'} Tiện Ích",
                 "callback_data": "tab_util"
             },
         ]
@@ -1265,7 +1356,7 @@ class DirectTelegramBotRunner:
                 stopped = 0
             cap = self.build_tabbed_caption(
                 user_id=user_id, active_tab="func", page=4,
-                extra_notice=f"🛑 <b>ĐÃ DỪNG TẤT CẢ ({stopped} chiến dịch)!</b>"
+                extra_notice=f"<tg-emoji emoji-id='5210952531676504517'>🛑</tg-emoji> <b>ĐÃ DỪNG TẤT CẢ ({stopped} chiến dịch)!</b>"
             )
             self.edit_menu_message(chat_id, message_id, cap, reply_markup=self.build_tabbed_keyboard("func", 4))
             return
@@ -1289,7 +1380,7 @@ class DirectTelegramBotRunner:
                 ]
             }
             cap = (
-                "⏱️ <b>CHỈNH TỐC ĐỘ DELAY HỆ THỐNG</b>\n"
+                "<tg-emoji emoji-id='5431449001532594346'>⚡</tg-emoji> <b>CHỈNH TỐC ĐỘ DELAY HỆ THỐNG</b>\n"
                 "────────────────────\n"
                 "• Chọn tốc độ gửi tin bên dưới (áp dụng tức thì cho cả các chiến dịch đang chạy):\n"
                 "• <i>Khuyên dùng 0.3s - 0.5s kết hợp Anti Cấm Chat Box để treo bền xuyên đêm!</i>"
@@ -1313,7 +1404,7 @@ class DirectTelegramBotRunner:
                 ]
             }
             cap = (
-                "🎨 <b>CHẾ ĐỘ MÀU CHỮ ZALO VIP (0% CHỮ TRẮNG)</b>\n"
+                "<tg-emoji emoji-id='5359785904535774578'>🌈</tg-emoji> <b>CHẾ ĐỘ MÀU CHỮ ZALO VIP (0% CHỮ TRẮNG)</b>\n"
                 "────────────────────\n"
                 "• <b>Chữ Đổi Từng Màu</b>: Từng từ/chữ cái tự động đổi qua 4 mã màu gốc rực rỡ của Zalo (Đỏ - Cam - Vàng - Xanh Lá).\n"
                 "• Tuyệt đối không dùng màu trắng cho câu treo/nhây (chỉ để màu trắng cho tin nhắn chức năng hệ thống)."
@@ -1352,7 +1443,7 @@ class DirectTelegramBotRunner:
                 ]
             }
             cap = (
-                "🛡️ <b>LÁ CHẮN CHỐNG ZALO CẤM CHAT BOX (VIP ANTI-BAN)</b>\n"
+                "<tg-emoji emoji-id='5373141891321699086'>🛡️</tg-emoji> <b>LÁ CHẮN CHỐNG ZALO CẤM CHAT BOX (VIP ANTI-BAN)</b>\n"
                 "────────────────────\n"
                 "✅ <b>Sliding-Window Box Pacing</b>: Tự động điều tiết khi bắn dồn dập vào 1 Box, chặn đứng mã phạt <code>-112</code>, <code>-114</code>, <code>300</code>, <code>301</code>.\n"
                 "✅ <b>Typing Pulse Simulation</b>: Giả lập trạng thái đang gõ phím (<code>/api/group/typing</code>) định kỳ như người thật.\n"
@@ -1435,7 +1526,7 @@ class DirectTelegramBotRunner:
         tag_info = f"\n🏷️ Tag mục tiêu: <code>{wiz['tag_query']}</code>" if wiz.get("tag_query") else ""
 
         cap = (
-            f"⚙️ <b>CẤU HÌNH: {fn_meta['label'].upper()}</b>\n"
+            f"<tg-emoji emoji-id='5341715473882955310'>⚙️</tg-emoji> <b>CẤU HÌNH: {fn_meta['label'].upper()}</b>\n"
             f"<i>{fn_meta['desc']}</i>\n"
             f"────────────────────\n"
             f"👥 Tài khoản chạy: <b>{wiz['acc_name']}</b> (Tổng {acc_cnt} Acc)\n"
@@ -1479,7 +1570,7 @@ class DirectTelegramBotRunner:
             if not target_boxes:
                 self.send_text(
                     chat_id,
-                    "⚠️ <b>Chưa tìm thấy Box Zalo/Discord nào!</b>\n"
+                    "<tg-emoji emoji-id='5447644880824181073'>⚠️</tg-emoji> <b>Chưa tìm thấy Box Zalo/Discord nào!</b>\n"
                     "• Hãy quét QR Zalo PC hoặc nhập Cookie + IMEI trong tab <b>Quản Lý</b>, hoặc bấm <b>📦 Box</b> để nhập ID nhóm thủ công.",
                 )
                 return
@@ -1549,7 +1640,7 @@ class DirectTelegramBotRunner:
                 active_tab="func",
                 page=1,
                 extra_notice=(
-                    f"✅ <b>ĐÃ KHỞI CHẠY {fn_meta['label'].upper()}!</b>\n"
+                    f"<tg-emoji emoji-id='5445284980978621387'>🚀</tg-emoji> <b>ĐÃ KHỞI CHẠY {fn_meta['label'].upper()}!</b>\n"
                     f"• Mã Task: <code>#{tid}</code> • Chế độ: <b>{wiz.get('acc_name', 'Đa Acc')}</b>\n"
                     f"• Số Box: <b>{len(targets_payload)}</b> • Kịch bản: <code>{file_name if not custom_text else 'Tự nhập'}</code> ({len(blocks)} câu)\n"
                     f"• Màu chữ: <b>{'Đỏ Rực' if fn_meta.get('color_mode') == 'fixed' else 'Đổi Từng Màu (0% Trắng)'}</b>"
@@ -1605,7 +1696,7 @@ class DirectTelegramBotRunner:
             )
             enk_preview = eff_enk if eff_enk else "Tự động lấy khi chạy"
             msg_out = (
-                f"✅ <b>ĐÃ NẠP COOKIE + IMEI & BẬT SÀI LỆNH TRÊN ACC ZALO!</b>\n"
+                f"<tg-emoji emoji-id='5206607081334906820'>✅</tg-emoji> <b>ĐÃ NẠP COOKIE + IMEI & BẬT SÀI LỆNH TRÊN ACC ZALO!</b>\n"
                 f"────────────────────\n"
                 f"👤 Tài khoản: <b>#{acc_id} — {eff_name}</b>\n"
                 f"🆔 UID Zalo: <code>{eff_uid or 'Tự động nhận diện'}</code>\n"
@@ -1693,14 +1784,15 @@ class DirectTelegramBotRunner:
 
     # QUÉT QR ZALO PC TRỰC TIẾP TRÊN TELEGRAM (LẤY TOKEN + COOKIE + IMEI & SỐNG ĐA ACC 24/7)
     def handle_zalo_qr_command(self, chat_id, user_id, msg_id=None, region_code="sg_vip", custom_pc_name=""):
-        if user_id in self.active_qr_locks:
-            self.send_text(
-                chat_id,
-                "⏳ <b>Bạn đang có 1 phiên tạo mã QR đang chờ quét!</b> Vui lòng quét mã QR hiện tại hoặc đợi hết hạn.",
-                reply_to=msg_id,
-            )
-            return
-
+        # Nếu có phiên QR cũ đang treo của user_id này -> tự động hủy phiên cũ ngay lập tức để lấy mã QR mới 0ms!
+        prev_stop = self.active_qr_stop_events.get(user_id)
+        if prev_stop is not None:
+            try:
+                prev_stop.set()
+            except Exception:
+                pass
+        my_stop_ev = threading.Event()
+        self.active_qr_stop_events[user_id] = my_stop_ev
         self.active_qr_locks.add(user_id)
 
         def _qr_worker():
@@ -1710,16 +1802,16 @@ class DirectTelegramBotRunner:
             try:
                 w_res = self.send_text(
                     chat_id,
-                    "⏳ <b>Đang khởi tạo mã QR Zalo PC độc lập (hỗ trợ quét nối tiếp nhiều Acc Zalo)...</b>",
+                    f"{tg_anim('bolt', '⚡')} <b>Đang khởi tạo mã QR Zalo PC độc lập (hỗ trợ quét nối tiếp Đa Acc Zalo 24/7)...</b>",
                     reply_to=msg_id,
                 )
                 if w_res.get("ok") and w_res.get("result"):
                     wait_msg_id = w_res["result"].get("message_id")
 
-                import asyncio
-
-                async def qr_callback(event):
+                def qr_callback(event):
                     nonlocal wait_msg_id, qr_msg_id
+                    if my_stop_ev.is_set():
+                        return
                     ev_type = event.get("type")
                     data = event.get("data") or {}
 
@@ -1735,11 +1827,11 @@ class DirectTelegramBotRunner:
                             wait_msg_id = None
 
                         caption = (
-                            "📲 <b>MÃ QR ĐĂNG NHẬP ZALO PC (LẤY TOKEN & SỐNG ĐA ACC)</b>\n"
+                            f"{tg_anim('qr', '📲')} <b>MÃ QR ĐĂNG NHẬP ZALO PC (LẤY TOKEN & SỐNG ĐA ACC)</b>\n"
                             "────────────────────\n"
-                            "1️⃣ Mở ứng dụng <b>Zalo</b> trên điện thoại.\n"
-                            "2️⃣ Quét mã QR bên trên và bấm <b>Đăng nhập</b>.\n"
-                            "⏱️ <i>Sau khi quét, Bot sẽ trích xuất trọn bộ Token (zpw_enk) + Cookie + IMEI và giữ sống Acc này song song cùng các Acc khác 24/7!</i>"
+                            f"{tg_anim('sparkle', '1️⃣')} Mở ứng dụng <b>Zalo</b> trên điện thoại.\n"
+                            f"{tg_anim('target', '2️⃣')} Quét mã QR bên trên và bấm <b>Đăng nhập</b>.\n"
+                            f"{tg_anim('shield', '🛡️')} <i>Sau khi quét, Bot sẽ trích xuất trọn bộ Token (zpw_enk) + Cookie + IMEI và giữ sống Acc này song song cùng các Acc khác 24/7!</i>"
                         )
                         p_res = self.send_photo_bytes(chat_id, bordered_png, caption=caption, reply_to=msg_id)
                         if p_res.get("ok") and p_res.get("result"):
@@ -1749,36 +1841,38 @@ class DirectTelegramBotRunner:
                         dname = data.get("display_name") or "Zalo User"
                         self.send_text(
                             chat_id,
-                            f"📱 <b>Đã nhận diện quét QR bởi: {dname}!</b>\n👉 Vui lòng bấm <b>Đăng nhập</b> trên điện thoại để hoàn tất lấy Token...",
+                            f"{tg_anim('radar', '📱')} <b>Đã nhận diện quét QR bởi: {dname}!</b>\n"
+                            f"{tg_anim('bolt', '👉')} Vui lòng bấm <b>Đăng nhập</b> trên điện thoại để hoàn tất lấy Token...",
                             reply_to=qr_msg_id or msg_id,
                         )
 
                     elif ev_type == LoginQRCallbackEventType.QRCodeExpired:
                         if qr_msg_id:
                             self.delete_msg(chat_id, qr_msg_id)
-                        self.send_text(
-                            chat_id,
-                            "⌛ <b>Mã QR Zalo đã hết hạn!</b> Bấm <b>📲 Quét QR Lấy Token</b> hoặc gõ <code>/qr</code> để lấy mã mới.",
-                            reply_to=msg_id,
-                        )
+                        if not my_stop_ev.is_set():
+                            self.send_text(
+                                chat_id,
+                                f"{tg_anim('warn', '⌛')} <b>Mã QR Zalo đã hết hạn!</b> Bấm <b>📲 Quét QR Lấy Token</b> hoặc gõ <code>/qr</code> để lấy mã mới.",
+                                reply_to=msg_id,
+                            )
 
                     elif ev_type == LoginQRCallbackEventType.QRCodeDeclined:
                         if qr_msg_id:
                             self.delete_msg(chat_id, qr_msg_id)
                         self.send_text(
                             chat_id,
-                            "❌ <b>Bạn đã từ chối xác nhận đăng nhập trên điện thoại.</b>",
+                            f"{tg_anim('cross', '❌')} <b>Bạn đã từ chối xác nhận đăng nhập trên điện thoại.</b>",
                             reply_to=msg_id,
                         )
 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    result = loop.run_until_complete(login_qr_with_unique_imei(callback=qr_callback))
-                finally:
-                    loop.close()
+                # Chạy đồng bộ trực tiếp (không lồng asyncio event loop trong worker thread gây kẹt luồng!)
+                result = login_qr_with_unique_imei(callback=qr_callback, stop_ev=my_stop_ev)
 
-                if not result:
+                if not result or my_stop_ev.is_set():
+                    if wait_msg_id:
+                        self.delete_msg(chat_id, wait_msg_id)
+                    if qr_msg_id and my_stop_ev.is_set():
+                        self.delete_msg(chat_id, qr_msg_id)
                     return
 
                 cookies = result.get("cookies") or {}
@@ -1808,7 +1902,7 @@ class DirectTelegramBotRunner:
                 cookies_str = json.dumps(cookies, ensure_ascii=False)
                 total_accs, _, _, _ = self._get_live_runtime_summary()
                 msg_success = (
-                    f"✅ <b>QUÉT QR LẤY TOKEN & NẠP ĐA ACC THÀNH CÔNG!</b>\n"
+                    f"<tg-emoji emoji-id='5219805704906270925'>👑</tg-emoji> <b>QUÉT QR LẤY TOKEN & NẠP ĐA ACC THÀNH CÔNG!</b>\n"
                     f"────────────────────\n"
                     f"👤 Tài khoản: <b>#{acc_id} — {dname}</b>\n"
                     f"🆔 UID Zalo: <code>{uid}</code> • Nhóm: <b>{grp_cnt} Box</b>\n"
@@ -1848,6 +1942,8 @@ class DirectTelegramBotRunner:
                     reply_to=msg_id,
                 )
             finally:
+                if self.active_qr_stop_events.get(user_id) is my_stop_ev:
+                    self.active_qr_stop_events.pop(user_id, None)
                 self.active_qr_locks.discard(user_id)
                 if qr_file_path and os.path.exists(qr_file_path):
                     try:
@@ -2042,7 +2138,7 @@ class DirectTelegramBotRunner:
             self.answer_callback(cb_id, f"🛑 Đã dừng {stopped} chiến dịch!", show_alert=True)
             cap = self.build_tabbed_caption(
                 first_name, user_id, active_tab="func", page=1,
-                extra_notice=f"🛑 <b>Đã dừng tất cả ({stopped} chiến dịch)!</b>"
+                extra_notice=f"<tg-emoji emoji-id='5210952531676504517'>🛑</tg-emoji> <b>Đã dừng tất cả ({stopped} chiến dịch)!</b>"
             )
             self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 1))
             return
@@ -2454,7 +2550,7 @@ class DirectTelegramBotRunner:
         acc_cnt, running_cnt, color_label, delay_val = self._get_live_runtime_summary()
         perms = list_telegram_permissions()
         lines = [
-            "📊 <b>TRẠNG THÁI HỆ THỐNG BOT TREO 4APP 🇻🇳</b>",
+            "<tg-emoji emoji-id='5397782960512444700'>📡</tg-emoji> <b>TRẠNG THÁI HỆ THỐNG BOT TREO 4APP 🇻🇳</b>",
             "────────────────────",
             f"👑 Admin Gốc: <code>{ROOT_ADMIN_ID}</code>",
             f"🔐 Số ID được phép dùng Bot: <b>{len(perms)} ID</b> (Chặn 100% người lạ)",
@@ -2848,7 +2944,7 @@ class DirectTelegramBotRunner:
                 stopped = _main_app.stop_tasks_for_thread(None)
             except Exception:
                 stopped = 0
-            self.send_text(chat_id, f"🛑 <b>Đã dừng khẩn cấp toàn bộ ({stopped} chiến dịch)!</b>", reply_to=msg_id)
+            self.send_text(chat_id, f"<tg-emoji emoji-id='5210952531676504517'>🛑</tg-emoji> <b>Đã dừng khẩn cấp toàn bộ ({stopped} chiến dịch)!</b>", reply_to=msg_id)
             return
 
         # Mặc định hiển thị bảng điều khiển Video
@@ -2864,44 +2960,103 @@ class DirectTelegramBotRunner:
 
     def run_forever(self):
         self.running = True
+        self.last_poll_ok_ts = time.time()
         self.clear_webhook_and_init()
+        fail_streak = 0
         while self.running:
             try:
+                self.last_poll_ok_ts = time.time()
                 res = self.api_call(
                     "getUpdates",
                     {
                         "offset": self.offset,
-                        "timeout": 20,
+                        "timeout": 15,
                         "allowed_updates": ["message", "edited_message", "callback_query"],
                     },
-                    timeout=28,
+                    timeout=(6.0, 21.0),
+                    use_poll_session=True,
                 )
+                self.last_poll_ok_ts = time.time()
                 if res.get("ok") and isinstance(res.get("result"), list):
+                    fail_streak = 0
                     for upd in res["result"]:
                         uid_upd = upd.get("update_id", 0)
                         if uid_upd >= self.offset:
                             self.offset = uid_upd + 1
                         self.executor.submit(self._safe_process_update, upd)
                 else:
-                    time.sleep(1.5)
+                    fail_streak += 1
+                    desc_err = str(res.get("description") or "").lower()
+                    if "conflict" in desc_err or "webhook" in desc_err:
+                        try:
+                            self.api_call("deleteWebhook", {"drop_pending_updates": False}, timeout=8, use_poll_session=True)
+                        except Exception:
+                            pass
+                    if fail_streak >= 3:
+                        try:
+                            self.poll_session.close()
+                        except Exception:
+                            pass
+                        self.poll_session = self._create_isolated_session()
+                        fail_streak = 0
+                    time.sleep(1.2)
             except Exception as e:
                 self.last_error = str(e)
-                time.sleep(2.0)
+                fail_streak += 1
+                try:
+                    self.poll_session.close()
+                except Exception:
+                    pass
+                self.poll_session = self._create_isolated_session()
+                time.sleep(1.5)
 
 
 _BOT_INSTANCE = None
 _BOT_LOCK = threading.RLock()
+_BOT_WATCHDOG_STARTED = False
+
+
+def _ensure_internal_bot_watchdog():
+    global _BOT_WATCHDOG_STARTED, _BOT_INSTANCE
+    if _BOT_WATCHDOG_STARTED:
+        return
+    _BOT_WATCHDOG_STARTED = True
+
+    def _watchdog():
+        time.sleep(10.0)
+        while True:
+            try:
+                inst = _BOT_INSTANCE
+                if inst is not None and inst.running:
+                    age = time.time() - float(getattr(inst, "last_poll_ok_ts", time.time()))
+                    pt = getattr(inst, "poll_thread", None)
+                    if age > 42.0 or (pt is not None and not pt.is_alive()):
+                        start_background_telegram_bot(inst.token, force_restart=True)
+            except Exception:
+                pass
+            time.sleep(10.0)
+
+    threading.Thread(target=_watchdog, daemon=True, name="TelegramBotWatchdog").start()
 
 
 def start_background_telegram_bot(token=TELEGRAM_BOT_TOKEN, force_restart=False):
     global _BOT_INSTANCE
+    _ensure_internal_bot_watchdog()
     with _BOT_LOCK:
         if _BOT_INSTANCE is not None and _BOT_INSTANCE.running and not force_restart:
-            return _BOT_INSTANCE
+            pt = getattr(_BOT_INSTANCE, "poll_thread", None)
+            age = time.time() - float(getattr(_BOT_INSTANCE, "last_poll_ok_ts", time.time()))
+            if (pt is None or pt.is_alive()) and age <= 42.0:
+                return _BOT_INSTANCE
         if _BOT_INSTANCE is not None:
             _BOT_INSTANCE.running = False
+            try:
+                _BOT_INSTANCE.poll_session.close()
+            except Exception:
+                pass
         runner = DirectTelegramBotRunner(token=token or TELEGRAM_BOT_TOKEN)
         t = threading.Thread(target=runner.run_forever, daemon=True, name="TelegramBot4AppRunner")
+        runner.poll_thread = t
         t.start()
         _BOT_INSTANCE = runner
         return runner
