@@ -1904,6 +1904,20 @@ def _enrich_check_result(res_dict):
     return res_dict
 
 
+_IMEI_OP_LOCKS = {}
+_IMEI_OP_GLOBAL_LOCK = threading.RLock()
+
+
+def get_imei_operation_lock(imei_str):
+    k = str(imei_str or "default").strip() or "default"
+    with _IMEI_OP_GLOBAL_LOCK:
+        lk = _IMEI_OP_LOCKS.get(k)
+        if lk is None:
+            lk = threading.RLock()
+            _IMEI_OP_LOCKS[k] = lk
+        return lk
+
+
 def _check_zalo_cookie_imei_live_impl(imei, cookies_input="", zpw_enk="", user_agent="", uid="", computer_name="Web", session_obj=None, db_path=""):
     """Kiểm tra chính xác Máy Tính + Cookie + IMEI Zalo đang SỐNG TRONG ACC (ON) hay DIE (OFF):
     - Tự động nạp khóa `zpw_enk` và Cookie mới nhất đang sống của `imei` từ `ZaloPCSessionKeeper` / SQLite (`zalo_cookie_vault` / `accounts`)
@@ -2074,12 +2088,14 @@ def _check_zalo_cookie_imei_live_impl(imei, cookies_input="", zpw_enk="", user_a
             parsed = json.loads(dec.decode("utf-8", errors="ignore"))
             if isinstance(parsed, dict):
                 gmap = (parsed.get("data") or {}).get("gridVerMap") or {}
+                g_ids = [str(k) for k in gmap.keys() if str(k).strip()]
                 return {
                     "alive": True,
                     "in_account": True,
                     "uid": live_uid,
                     "display_name": live_name or (f"Zalo_{live_uid[-4:]}" if live_uid else "Zalo SG"),
                     "groups_count": len(gmap),
+                    "group_ids": g_ids,
                     "zpw_enk": live_enk,
                     "imei": imei_clean,
                     "user_agent": eff_ua,
@@ -2118,12 +2134,51 @@ def _check_zalo_cookie_imei_live_impl(imei, cookies_input="", zpw_enk="", user_a
 
 
 def check_zalo_cookie_imei_live(imei, cookies_input="", zpw_enk="", user_agent="", uid="", computer_name="Web", session_obj=None, db_path=""):
-    res = _check_zalo_cookie_imei_live_impl(
-        imei=imei, cookies_input=cookies_input, zpw_enk=zpw_enk,
-        user_agent=user_agent, uid=uid, computer_name=computer_name,
-        session_obj=session_obj, db_path=db_path
-    )
-    return _enrich_check_result(res)
+    imei_peek, _, _, _ = extract_imei_and_metadata_flexible(imei, cookies_input)
+    lk = get_imei_operation_lock(imei_peek or imei)
+    with lk:
+        res = _check_zalo_cookie_imei_live_impl(
+            imei=imei, cookies_input=cookies_input, zpw_enk=zpw_enk,
+            user_agent=user_agent, uid=uid, computer_name=computer_name,
+            session_obj=session_obj, db_path=db_path
+        )
+        return _enrich_check_result(res)
+
+
+def check_multiple_zalo_accounts_parallel(accounts_list, db_path="", max_workers=10):
+    """Kiểm tra song song nhiều tài khoản Zalo cùng lúc không nghẽn luồng, tách biệt khóa theo từng IMEI."""
+    from concurrent.futures import ThreadPoolExecutor
+    items = list(accounts_list or [])
+    if not items:
+        return []
+
+    def _probe_one(item):
+        try:
+            return check_zalo_cookie_imei_live(
+                imei=item.get("imei") or "",
+                cookies_input=item.get("cookies") or "{}",
+                zpw_enk=item.get("zpw_enk") or "",
+                user_agent=item.get("user_agent") or "",
+                uid=item.get("uid") or "",
+                db_path=db_path or DEFAULT_DB_PATH,
+            )
+        except Exception as e:
+            return {
+                "alive": False,
+                "in_account": False,
+                "uid": str(item.get("uid") or ""),
+                "display_name": str(item.get("name") or ""),
+                "groups_count": 0,
+                "group_ids": [],
+                "zpw_enk": "",
+                "imei": str(item.get("imei") or ""),
+                "cookies": {},
+                "reason": f"Lỗi kiểm tra phiên: {e}",
+            }
+
+    workers = max(1, min(int(max_workers or 10), len(items)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(_probe_one, items))
 
 
 def verify_zalo_pc_device_logged_in_account(imei, cookies_dict, zpw_enk="", user_agent="", uid="", session_obj=None):
@@ -2247,13 +2302,17 @@ class ZaloPCSessionKeeper:
     _DAEMON_STARTED = False
 
     @classmethod
-    def register_ws_frame_callback(cls, imei, callback_fn):
+    def register_ws_frame_callback(cls, imei, callback_fn, listener_id="default"):
         imei_s = str(imei or "").strip()
         if not imei_s or not callback_fn:
             return
         replay_frames = []
         with cls._LOCK:
-            cls._WS_FRAME_CALLBACKS[imei_s] = callback_fn
+            cb_map = cls._WS_FRAME_CALLBACKS.get(imei_s)
+            if not isinstance(cb_map, dict):
+                cb_map = {}
+            cb_map[str(listener_id or "default")] = callback_fn
+            cls._WS_FRAME_CALLBACKS[imei_s] = cb_map
             kp = cls._ACTIVE_KEEPERS.get(imei_s)
             if kp and kp.get("last_key_frames"):
                 replay_frames = list(kp["last_key_frames"])
@@ -2262,6 +2321,23 @@ class ZaloPCSessionKeeper:
                 callback_fn(op_r, dt_r)
             except Exception:
                 pass
+
+    @classmethod
+    def has_active_keeper(cls, imei):
+        imei_s = str(imei or "").strip()
+        if not imei_s:
+            return False
+        with cls._LOCK:
+            kp = cls._ACTIVE_KEEPERS.get(imei_s)
+            return bool(kp and not kp["stop_ev"].is_set() and kp.get("alive", True))
+
+    @classmethod
+    def get_keeper_state(cls, imei):
+        imei_s = str(imei or "").strip()
+        if not imei_s:
+            return None
+        with cls._LOCK:
+            return cls._ACTIVE_KEEPERS.get(imei_s)
 
     @classmethod
     def notify_external_ws_alive(cls, uid, imei):
@@ -2528,12 +2604,19 @@ class ZaloPCSessionKeeper:
                 kf.append((opcode, data))
                 if len(kf) > 4:
                     del kf[:-4]
-            cb = cls._WS_FRAME_CALLBACKS.get(st["imei"])
-            if cb:
+            cb_entry = cls._WS_FRAME_CALLBACKS.get(st["imei"])
+            if callable(cb_entry):
                 try:
-                    cb(opcode, data)
+                    cb_entry(opcode, data)
                 except Exception:
                     pass
+            elif isinstance(cb_entry, dict):
+                for _cb_fn in list(cb_entry.values()):
+                    if callable(_cb_fn):
+                        try:
+                            _cb_fn(opcode, data)
+                        except Exception:
+                            pass
         return True
 
     @classmethod
