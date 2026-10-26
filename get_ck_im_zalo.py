@@ -1,10 +1,10 @@
 # ==============================================================================
 # BỘ ĐIỀU KHIỂN TRUNG TÂM BOT TREO ĐA TÀI KHOẢN 4APP VIP 🇻🇳
 # Author : Dev Anh Khôi
-# Version: v2026.11.0 Ultra VIP
+# Version: v2026.12.0 Ultra VIP
 # ==============================================================================
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.11.0 Ultra VIP"
+APP_VERSION = "v2026.12.0 Ultra VIP"
 
 import os
 import re
@@ -183,7 +183,7 @@ FUNCTION_ITEMS_32 = [
 
     # Trang 3/4
     {"id": "fn_nhay_poll",     "label": "📊 Treo Poll 0s (Không Nghỉ)", "mode": "nhay_poll", "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Tạo bình chọn (Poll) tự động liên hoàn 0.0s KHÔNG CÓ THỜI GIAN NGHỈ (.nhaypoll)", "emoji_id": "5438496463044752972"},
-    {"id": "fn_typing",        "label": "⌨️ Hiệu Ứng Typing",    "mode": "typing_loop", "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Giả lập đang soạn tin nhắn liên tục chống khóa chat (.nhaytyping)", "emoji_id": "5431449001532594346"},
+    {"id": "fn_typing",        "label": "⌨️ Fake Typing 12 Nguồn", "mode": "typing_loop", "color_mode": "word_rainbow", "fixed_color": "red",   "file_hint": "nhay.txt",        "desc": "Siêu Fake Soạn Tin Nhắn 12 Nguồn (MQTT + Mercury + Comet + Titan) chống Die Cookie (.typing / .nhaytyping)", "emoji_id": "5431449001532594346"},
     {"id": "fn_tenbox",        "label": "✏️ Đổi Tên Box Zalo",   "mode": "nhay_tenbox", "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhaynamebox.txt", "desc": "Đổi tên Box Zalo & Messenger liên hoàn 0s (.tenbox / .nhaynamebox)", "emoji_id": "5368324170671202286"},
     {"id": "fn_todo",          "label": "📋 Giao Việc To-Do",    "mode": "zalo_todo",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "nhay.txt",        "desc": "Giao việc Zalo To-Do nhắc nhở thẳng mục tiêu (.todo)", "emoji_id": "5206607081334906820"},
     {"id": "fn_bankcard",      "label": "🏦 Thẻ Ngân Hàng",      "mode": "zalo_bank",   "color_mode": "word_rainbow", "fixed_color": "red",    "file_hint": "ngon.txt",        "desc": "Gửi thẻ ngân hàng VietQR tự động vào nhóm (.bank)", "emoji_id": "5472164874886846699"},
@@ -348,7 +348,7 @@ def _ensure_auth_tables(conn):
         (ROOT_ADMIN_ID,)
     )
     conn.execute(
-        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('allow_all_cmd', '0')"
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('allow_all_cmd', '1')"
     )
     conn.execute(
         "INSERT OR IGNORE INTO tg_authorized_users (uid, name, role, added_at) VALUES (?, ?, 'Admin', ?)",
@@ -665,7 +665,7 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
                 is_bot INTEGER DEFAULT 0,
                 chat_cmd_enabled INTEGER DEFAULT 1,
                 cmd_prefix TEXT DEFAULT '.',
-                allow_all_cmd INTEGER DEFAULT 0,
+                allow_all_cmd INTEGER DEFAULT 1,
                 enabled INTEGER DEFAULT 1,
                 uid TEXT DEFAULT '',
                 zpw_enk TEXT DEFAULT '',
@@ -676,7 +676,7 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
         for col_sql in (
             "ALTER TABLE accounts ADD COLUMN chat_cmd_enabled INTEGER DEFAULT 1",
             "ALTER TABLE accounts ADD COLUMN cmd_prefix TEXT DEFAULT '.'",
-            "ALTER TABLE accounts ADD COLUMN allow_all_cmd INTEGER DEFAULT 0",
+            "ALTER TABLE accounts ADD COLUMN allow_all_cmd INTEGER DEFAULT 1",
             "ALTER TABLE accounts ADD COLUMN enabled INTEGER DEFAULT 1",
             "ALTER TABLE accounts ADD COLUMN uid TEXT DEFAULT ''",
             "ALTER TABLE accounts ADD COLUMN zpw_enk TEXT DEFAULT ''",
@@ -708,7 +708,7 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
                 """UPDATE accounts
                    SET name=?, imei=?, cookies=?, uid=CASE WHEN ? != '' THEN ? ELSE uid END,
                        zpw_enk=CASE WHEN ? != '' THEN ? ELSE zpw_enk END,
-                       user_agent=?, chat_cmd_enabled=1, cmd_prefix='.', allow_all_cmd=0, enabled=1,
+                       user_agent=?, chat_cmd_enabled=1, cmd_prefix='.', allow_all_cmd=1, enabled=1,
                        owner_tg_id=?
                    WHERE id=?""",
                 (acc_label, imei_str, cookies_json, uid_str, uid_str, enk_str, enk_str, ua, eff_owner, acc_id),
@@ -1359,14 +1359,15 @@ class DirectTelegramBotRunner:
         notice_block = f"\n<blockquote>{extra_notice}</blockquote>" if extra_notice else ""
 
         return (
-            f"<b>HỆ THỐNG ĐA ACC 4APP VIP 🇻🇳 ({APP_VERSION}) — CHÀO {name_clean.upper()}</b> {tg_anim('sparkle', '✨')}\n\n"
+            f"<b>SIÊU TRUNG TÂM 4APP VIP 🇻🇳 ({APP_VERSION}) — CHÀO {name_clean.upper()}</b> {tg_anim('sparkle', '✨')}\n\n"
             f"<blockquote>"
             f"👨‍💻 <b>Author:</b> <code>{APP_AUTHOR}</code>  |  🔖 <b>Version:</b> <code>{APP_VERSION}</code>\n"
-            f"👑 <b>Quản Trị Viên:</b> <a href=\"tg://user?id={ROOT_ADMIN_ID}\">@{ROOT_ADMIN_ID} ↗️</a>  |  🎖️ <b>{role_str}</b>\n"
+            f"👑 <b>Quản Trị:</b> <a href=\"tg://user?id={ROOT_ADMIN_ID}\">@{ROOT_ADMIN_ID} ↗️</a>  |  🎖️ <b>{role_str}</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"🟢 <b>{scope_lbl}:</b> <code>{acc_cnt} Acc Online</code>   •   🚀 <b>Đang chạy:</b> <code>{running_cnt} chiến dịch</code>\n"
-            f"🎨 <b>Màu chữ:</b> <code>{color_label}</code>   •   ⏱️ <b>Tốc độ:</b> <code>{delay_val}s</code> (Poll: <code>0.0s</code>)\n"
-            f"🕒 <b>Cập nhật:</b> <code>{time_str}</code>"
+            f"🟢 <b>{scope_lbl}:</b> <code>{acc_cnt} Acc Online</code>   •   🚀 <b>Chiến dịch:</b> <code>{running_cnt} đang chạy</code>\n"
+            f"🛡️ <b>Anti-Ban:</b> <code>9 Lớp Bảo Vệ Cookie</code>   •   ⌨️ <b>Fake Typing:</b> <code>12 Nguồn MQTT+HTTP</code>\n"
+            f"🎨 <b>Màu chữ:</b> <code>{color_label}</code>   •   ⏱️ <b>Delay:</b> <code>{delay_val}s</code>   •   📋 <b>Lệnh .menu:</b> <code>BẬT 3 APP</code>\n"
+            f"🕒 <b>Đồng bộ:</b> <code>{time_str}</code>"
             f"</blockquote>"
             f"{notice_block}\n\n"
             f"{tg_anim('gear', '⚙️')} <b>{sec_title}</b>"
