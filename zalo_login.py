@@ -1,10 +1,10 @@
 # ==============================================================================
 # HỆ THỐNG ĐĂNG NHẬP QR ZALO PC & GIỮ SỐNG PHIÊN 24/7 (ZALO LOGIN ENGINE)
 # Author : Dev Anh Khôi
-# Version: v2026.11.0 Ultra VIP
+# Version: v2026.12.0 Ultra VIP
 # ==============================================================================
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.11.0 Ultra VIP"
+APP_VERSION = "v2026.12.0 Ultra VIP"
 
 import os
 import re
@@ -3480,9 +3480,9 @@ def _execute_qr_login_sync(
     grp_cnt = int(user_info_got.get("_groups_count") or 0)
 
     if not uid:
-        zpsid_val = str(cookie_jar_dict.get("zpsid") or cookie_jar_dict.get("zpw_sek") or "")
-        uid_m = re.search(r"(\d{8,22})", zpsid_val)
-        if uid_m:
+        zpsid_val = str(cookie_jar_dict.get("zpsid") or "")
+        uid_m = re.search(r"(\d{12,22})", zpsid_val)
+        if uid_m and not (len(uid_m.group(1)) == 10 and uid_m.group(1).startswith("17")):
             uid = uid_m.group(1)
 
     for k_f in list(cookie_jar_dict.keys()):
