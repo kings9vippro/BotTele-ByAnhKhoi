@@ -1,10 +1,10 @@
 # ==============================================================================
 # BỘ ĐIỀU KHIỂN TRUNG TÂM BOT TREO ĐA TÀI KHOẢN 4APP VIP 🇻🇳
 # Author : Dev Anh Khôi
-# Version: v2026.9.0 Ultra VIP
+# Version: v2026.11.0 Ultra VIP
 # ==============================================================================
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.10.0 Ultra VIP"
+APP_VERSION = "v2026.11.0 Ultra VIP"
 
 import os
 import re
@@ -616,12 +616,7 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
 
         raw_uid_in = str(uid or "").strip()
         uid_str = raw_uid_in if (raw_uid_in.isdigit() and len(raw_uid_in) >= 6 and raw_uid_in != imei_str) else ""
-        if not uid_str:
-            for ck_v in clean_ck.values():
-                m_u = re.match(r"^(\d{8,22})\.", str(ck_v or "").strip())
-                if m_u:
-                    uid_str = m_u.group(1)
-                    break
+        # Không trích xuất nhầm timestamp của cookie làm UID giả
         enk_str = str(zpw_enk or "").strip()
         dname_str = str(display_name or "").strip()
         owner_str = str(owner_tg_id or "").strip()
@@ -843,25 +838,12 @@ def sync_and_keepalive_tokens_to_db(raw_text, owner_tg_id=""):
     for m in DISCORD_TOKEN_RE.finditer(raw_text):
         tok = m.group(1).strip()
         try:
-            r = requests.get(
-                "https://discord.com/api/v10/users/@me",
-                headers={"Authorization": tok, "User-Agent": "Mozilla/5.0"},
-                timeout=6,
-            )
-            if r.status_code != 200:
-                r = requests.get(
-                    "https://discord.com/api/v10/users/@me",
-                    headers={"Authorization": f"Bot {tok}", "User-Agent": "Mozilla/5.0"},
-                    timeout=6,
-                )
-                is_bot = 1 if r.status_code == 200 else 0
-            else:
-                is_bot = 0
-
-            if r.status_code == 200:
-                u = r.json()
-                uid = str(u.get("id") or "")
-                uname = u.get("global_name") or u.get("username") or f"Discord_{uid[-4:]}"
+            import app as _main_app
+            w_res = _main_app.warmup_discord_stealth_token(tok, verify_network=False)
+            if w_res.get("ok"):
+                uid = str(w_res.get("uid") or "").strip()
+                uname = w_res.get("username") or (f"Discord_{uid[-4:]}" if uid else "Discord_VIP")
+                is_bot = 1 if w_res.get("is_bot") else 0
                 conn = _open_db()
                 try:
                     conn.execute("ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''")
@@ -869,62 +851,83 @@ def sync_and_keepalive_tokens_to_db(raw_text, owner_tg_id=""):
                     pass
                 cur = conn.cursor()
                 ex = cur.execute(
-                    "SELECT id FROM accounts WHERE platform='discord' AND (token=? OR uid=?)",
+                    "SELECT id FROM accounts WHERE platform='discord' AND (token=? OR (uid != '' AND uid=?))",
                     (tok, uid),
                 ).fetchone()
                 if ex:
                     acc_id = ex[0]
                     cur.execute(
-                        "UPDATE accounts SET name=?, token=?, is_bot=?, uid=?, enabled=1, owner_tg_id=? WHERE id=?",
+                        "UPDATE accounts SET name=?, token=?, is_bot=?, uid=?, chat_cmd_enabled=1, cmd_prefix='.', allow_all_cmd=1, enabled=1, owner_tg_id=? WHERE id=?",
                         (uname, tok, is_bot, uid, owner_str, acc_id),
                     )
                 else:
                     cur.execute(
-                        "INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, uid, enabled, owner_tg_id) VALUES (?, '', '{}', 'discord', ?, ?, ?, 1, ?)",
+                        "INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, owner_tg_id) VALUES (?, '', '{}', 'discord', ?, ?, ?, 1, '.', 1, 1, ?)",
                         (uname, tok, is_bot, uid, owner_str),
                     )
                     acc_id = cur.lastrowid
                 conn.commit()
                 conn.close()
+                if uid:
+                    _main_app.OWNER_UIDS_CACHE.add(uid)
                 saved_items.append({"platform": "Discord", "name": uname, "uid": uid, "id": acc_id})
         except Exception:
             pass
 
-    if "c_user=" in raw_text and "xs=" in raw_text:
-        uid_m = re.search(r"c_user=(\d+)", raw_text)
-        uid = uid_m.group(1) if uid_m else ""
-        fb_name = f"FB_{uid[-4:]}" if uid else "Messenger_Acc"
+    if ("c_user" in raw_text and "xs" in raw_text):
         try:
-            conn = _open_db()
-            try:
-                conn.execute("ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''")
-            except Exception:
-                pass
-            cur = conn.cursor()
-            ex = cur.execute(
-                "SELECT id FROM accounts WHERE platform='messenger' AND uid=?", (uid,)
-            ).fetchone()
-            if ex:
-                acc_id = ex[0]
-                cur.execute(
-                    "UPDATE accounts SET cookies=?, enabled=1, owner_tg_id=? WHERE id=?", (raw_text.strip(), owner_str, acc_id)
-                )
-            else:
-                cur.execute(
-                    "INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, uid, enabled, owner_tg_id) VALUES (?, '', ?, 'messenger', '', 0, ?, 1, ?)",
-                    (fb_name, raw_text.strip(), uid, owner_str),
-                )
-                acc_id = cur.lastrowid
-            conn.commit()
-            conn.close()
-            saved_items.append({"platform": "Messenger", "name": fb_name, "uid": uid, "id": acc_id})
+            import app as _main_app
+            c_dict = _main_app.normalize_messenger_cookies(raw_text)
+            uid = _main_app.extract_messenger_uid(c_dict)
+            if uid and "xs" in c_dict:
+                fb_name = f"FB_{uid[-4:]}"
+                pc_info = _main_app.FacebookPCDeviceGuard.bind_pc_profile_to_cookies(uid, c_dict)
+                c_dict = pc_info["cookies"]
+                try:
+                    mc = _main_app.MessengerClient.get_pooled_client(c_dict, uid=uid, force_new=True)
+                    if mc.display_name and not mc.display_name.startswith("Mess_"):
+                        fb_name = mc.display_name
+                    c_dict = mc.cookies_dict
+                    # Lấy máy tính thông báo thẳng vào Facebook/Messenger để chống quét Checkpoint!
+                    _main_app.FacebookPCDeviceGuard.notify_pc_login_to_facebook_async(mc)
+                except Exception:
+                    pass
+                c_json = json.dumps(c_dict, ensure_ascii=False)
+                conn = _open_db()
+                try:
+                    conn.execute("ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''")
+                except Exception:
+                    pass
+                cur = conn.cursor()
+                ex = cur.execute(
+                    "SELECT id FROM accounts WHERE platform='messenger' AND uid=?", (uid,)
+                ).fetchone()
+                if ex:
+                    acc_id = ex[0]
+                    cur.execute(
+                        "UPDATE accounts SET name=?, cookies=?, uid=?, pc_name=?, chat_cmd_enabled=1, cmd_prefix='.', allow_all_cmd=1, enabled=1, owner_tg_id=? WHERE id=?",
+                        (fb_name, c_json, uid, pc_info["pc_name"], owner_str, acc_id)
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, uid, pc_name, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, owner_tg_id) VALUES (?, '', ?, 'messenger', '', 0, ?, ?, 1, '.', 1, 1, ?)",
+                        (fb_name, c_json, uid, pc_info["pc_name"], owner_str),
+                    )
+                    acc_id = cur.lastrowid
+                conn.commit()
+                conn.close()
+                _main_app.OWNER_UIDS_CACHE.add(uid)
+                saved_items.append({"platform": "Messenger", "name": fb_name, "uid": uid, "id": acc_id, "pc_name": pc_info["pc_name"]})
         except Exception:
             pass
 
     try:
         import app as _main_app
-        if saved_items and hasattr(_main_app, "reload_accounts_to_ram"):
-            _main_app.reload_accounts_to_ram()
+        if saved_items:
+            if hasattr(_main_app, "refresh_accounts_ram_cache"):
+                _main_app.refresh_accounts_ram_cache()
+            if hasattr(_main_app, "sync_all_zalo_listeners"):
+                _main_app.sync_all_zalo_listeners()
     except Exception:
         pass
     return saved_items
@@ -986,74 +989,30 @@ class MetaAIAssistant:
 
 
 class DiscordTokenGetter:
-    def __init__(self):
-        self.session = requests.Session()
-        self.headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Origin": "https://discord.com",
-            "Referer": "https://discord.com/login",
-        }
-
+    """Bộ Lấy Token & Anti-Reg Acc Discord (Đồng bộ Chrome 131 TLS + X-Super-Properties + X-Fingerprint chống báo hack acc)."""
     def login_discord(self, email, password, twofa_code="", twofa_type="totp"):
         try:
-            r = self.session.post(
-                "https://discord.com/api/v9/auth/login",
-                headers=self.headers,
-                json={"login": email, "password": password, "undelete": False},
-                timeout=12,
-            )
-            data = r.json()
-            if "token" in data and data["token"]:
-                return {"status": "SUCCESS", "token": data["token"]}
-            if data.get("mfa") and "ticket" in data:
-                ticket = data["ticket"]
-                if not twofa_code:
-                    return {"status": "2FA_REQUIRED", "ticket": ticket, "message": "Tài khoản bật 2FA, hãy kèm mã 6 số hoặc Secret 2FA."}
-                code_use = str(twofa_code).strip()
-                if len(code_use) > 8:
-                    totp_c, _ = generate_totp_local(code_use)
-                    if totp_c:
-                        code_use = totp_c
-                ep = "totp" if twofa_type != "sms" else "sms"
-                r2 = self.session.post(
-                    f"https://discord.com/api/v9/auth/mfa/{ep}",
-                    headers=self.headers,
-                    json={"code": code_use, "ticket": ticket},
-                    timeout=12,
-                )
-                d2 = r2.json()
-                if "token" in d2 and d2["token"]:
-                    return {"status": "SUCCESS", "token": d2["token"]}
-                return {"status": "ERROR", "message": f"Lỗi xác thực 2FA: {d2.get('message', d2)}"}
-            return {"status": "ERROR", "message": data.get("message") or str(data)}
+            import app as _main_app
+            res = _main_app.login_discord_reg_session(email, password, two_fa_code=twofa_code, twofa_type=twofa_type)
+            if res.get("ok") and res.get("token"):
+                return {"status": "SUCCESS", "token": res["token"], "profile": res.get("profile") or {}}
+            if res.get("need_2fa"):
+                return {"status": "2FA_REQUIRED", "message": res.get("error") or "Cần mã 2FA 6 số hoặc Secret Key"}
+            return {"status": "ERROR", "message": res.get("error") or "Không thể đăng nhập Discord"}
         except Exception as e:
             return {"status": "ERROR", "message": str(e)}
 
 
 class FacebookCookieGetter:
-    def __init__(self):
-        self.session = requests.Session()
-        self.ua = "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"
-
+    """Bộ Lấy Cookie & Anti-Reg Acc Facebook Máy Tính (Windows 11 Chrome 131 Desktop — Chống quét Checkpoint & Tự động lấy Máy Tính thông báo vào Facebook)."""
     def login_facebook(self, email, password, twofa_code=""):
         try:
-            headers = {
-                "User-Agent": self.ua,
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Origin": "https://m.facebook.com",
-                "Referer": "https://m.facebook.com/login/",
-            }
-            self.session.get("https://m.facebook.com/login/", headers=headers, timeout=10)
-            payload = {"email": email, "pass": password, "login": "Log In"}
-            self.session.post("https://m.facebook.com/login/device-based/regular/login/", headers=headers, data=payload, timeout=12)
-            ck_dict = self.session.cookies.get_dict()
-            if "c_user" in ck_dict and "xs" in ck_dict:
-                ck_str = "; ".join(f"{k}={v}" for k, v in ck_dict.items())
-                return {"status": "SUCCESS", "cookies": ck_str, "uid": ck_dict["c_user"], "access_token": ""}
-            if "checkpoint" in ck_dict:
-                return {"status": "CHECKPOINT", "message": "Tài khoản yêu cầu xác minh Checkpoint / 2FA trên thiết bị."}
-            return {"status": "ERROR", "message": "Sai mật khẩu hoặc Facebook chặn đăng nhập trực tiếp. Hãy dán trực tiếp chuỗi Cookie c_user=...; xs=... vào Bot!"}
+            import app as _main_app
+            getter = _main_app.FacebookCookieGetter()
+            ck_str, uid, msg = getter.login_facebook(email, password, twofa_code=twofa_code)
+            if ck_str and uid:
+                return {"status": "SUCCESS", "cookies": ck_str, "uid": uid, "message": msg}
+            return {"status": "ERROR", "message": msg or "Không lấy được Cookie. Hãy dán trực tiếp Cookie c_user + xs từ máy tính!"}
         except Exception as e:
             return {"status": "ERROR", "message": str(e)}
 
