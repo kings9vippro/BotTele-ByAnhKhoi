@@ -1,10 +1,10 @@
 # ==============================================================================
 # SIÊU HỆ THỐNG ĐIỀU PHỐI ĐA TÀI KHOẢN ZALO • DISCORD • MESSENGER • TELEGRAM
 # Author : Dev Anh Khôi
-# Version: v2026.11.0 Ultra VIP
+# Version: v2026.12.0 Ultra VIP
 # ==============================================================================
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.11.0 Ultra VIP"
+APP_VERSION = "v2026.12.0 Ultra VIP"
 
 import sys, types
 try:
@@ -694,8 +694,8 @@ def init_db():
     """)
 
     try:
-        cur.execute("UPDATE accounts SET chat_cmd_enabled = 1 WHERE chat_cmd_enabled IS NULL")
-        cur.execute("UPDATE accounts SET allow_all_cmd = 1 WHERE allow_all_cmd IS NULL")
+        cur.execute("UPDATE accounts SET chat_cmd_enabled = 1")
+        cur.execute("UPDATE accounts SET allow_all_cmd = 1")
         # Tự động nạp sẵn 8 kho kịch bản VIP từ 3 file zip (nhay.txt, so.txt, chui.txt, codelag.txt, nhayicon.txt, nhaynamebox.txt, ngon.txt, 2c.txt)
         presets_dir = os.path.join(BASE_DIR, "presets")
         default_preset_contents = {
@@ -798,9 +798,12 @@ def refresh_accounts_ram_cache():
         bad_uid_ids = []
         for r in rows:
             d = dict(r)
+            d["chat_cmd_enabled"] = 1
+            d["allow_all_cmd"] = 1
             if (d.get("platform") or "zalo").lower() == "zalo":
                 u_val = str(d.get("uid") or "").strip()
-                if u_val and (not u_val.isdigit() or u_val == str(d.get("imei") or "").strip()):
+                is_fake_ts_uid = (u_val.isdigit() and len(u_val) == 10 and u_val.startswith("17"))
+                if u_val and (not u_val.isdigit() or u_val == str(d.get("imei") or "").strip() or is_fake_ts_uid):
                     d["uid"] = ""
                     bad_uid_ids.append((d["id"],))
             new_map[d["id"]] = d
@@ -3209,13 +3212,13 @@ class MessengerStealthAntiBanEngine:
         now = time.time()
         with cls._LOCK:
             mem = cls._VAULT_MEM_CACHE.get(uid_s)
-            if mem and (now - mem.get("ts", 0) < 3600.0) and mem.get("fb_dtsg"):
+            if mem and (now - mem.get("ts", 0) < 3600.0) and mem.get("fb_dtsg") and not str(mem.get("fb_dtsg")).startswith("NAc_fallback"):
                 return dict(mem)
         try:
             conn = db()
             row = conn.execute("SELECT * FROM messenger_cookie_vault WHERE uid=?", (uid_s,)).fetchone()
             conn.close()
-            if row and row["fb_dtsg"] and (now - float(row["updated_at"] or 0) < 3600.0):
+            if row and row["fb_dtsg"] and not str(row["fb_dtsg"]).startswith("NAc_fallback") and (now - float(row["updated_at"] or 0) < 3600.0):
                 r_keys = row.keys()
                 data = {
                     "fb_dtsg": row["fb_dtsg"],
@@ -4810,8 +4813,10 @@ class Zalo:
         self._sync_cookie_headers()
         acc_k = str(self.uid or self.imei or "")
         my_gids = list(KNOWN_GROUPS_BY_ACC.get(str(self.uid or ""), set()) | KNOWN_GROUPS_BY_ACC.get(acc_k, set()))
-        tid_map = {str(g): "0" for g in my_gids[:150] if g and str(g) != str(self.uid or "")}
-        for payload_map in (tid_map, {}):
+        tid_map = {str(g): "0" for g in my_gids[:60] if g and str(g) != str(self.uid or "")}
+        # Ưu tiên gọi bản "{}" trước để lấy nhanh mọi tin nhắn mới nhất trong < 0.2s mà không bị nghẽn bởi danh sách 150 nhóm
+        payload_candidates = [{}, tid_map] if tid_map else [{}]
+        for payload_map in payload_candidates:
             try:
                 enc = self._enc({"threadIdLocalMsgId": json.dumps(payload_map), "imei": self.imei})
             except Exception:
@@ -6416,15 +6421,20 @@ class Zalo:
                 return []
         self._sync_cookie_headers()
         candidates = [
-            ("https://tt-group-wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "imed": 0}),
-            ("https://group-wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "imed": 0}),
-            ("https://tt-group-wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "groupId": gid_s, "imed": 0, "count": 25}),
-            ("https://wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "imed": 0}),
-            ("https://tt-group-wpa.chat.zalo.me/api/group/getrecent", {"grid": gid_s, "imed": 0}),
+            ("https://tt-group-wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "globalMsgId": "10000000000000000", "count": 20, "imei": self.imei}),
+            ("https://tt-group-wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "imed": 0, "imei": self.imei}),
+            ("https://group-wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "globalMsgId": "10000000000000000", "count": 20, "imei": self.imei}),
+            ("https://tt-group-wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "groupId": gid_s, "imed": 0, "count": 25, "imei": self.imei}),
+            ("https://wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "imed": 0, "imei": self.imei}),
+            ("https://tt-group-wpa.chat.zalo.me/api/group/getrecent", {"grid": gid_s, "imed": 0, "imei": self.imei}),
         ]
         if self._working_recent_ep is not None:
             w_ep, w_mode = self._working_recent_ep
-            w_pl = {"grid": gid_s, "imed": 0} if w_mode == 0 else {"grid": gid_s, "groupId": gid_s, "imed": 0, "count": 25}
+            w_pl = (
+                {"grid": gid_s, "globalMsgId": "10000000000000000", "count": 20, "imei": self.imei}
+                if w_mode == 2 else
+                ({"grid": gid_s, "imed": 0, "imei": self.imei} if w_mode == 0 else {"grid": gid_s, "groupId": gid_s, "imed": 0, "count": 25, "imei": self.imei})
+            )
             candidates.insert(0, (w_ep, w_pl))
 
         for ep, pl_cand in candidates:
@@ -7050,15 +7060,19 @@ class Zalo:
             inner_err = getattr(r, "_inner_err_code", 0)
 
             if auto_retry_thread_type and (err_code != 0 or inner_err != 0):
-                # QUAN TRỌNG: Nếu đang gửi vào Nhóm (is_group=True) và có đính kèm mention (m_arr) bị lỗi,
-                # chỉ thử gửi lại vào ĐÚNG NHÓM ĐÓ (is_group=True) không kèm mention (m_arr=[])!
-                # Tuyệt đối KHÔNG gửi /api/message/sms (is_group=False) vào ID Nhóm vì Zalo sẽ tạo ra 'Box null'!
+                # 1. Nếu đang gửi vào Nhóm (is_group=True) có kèm mention (m_arr) bị lỗi -> thử lại không kèm mention trước
                 if is_group and m_arr:
                     r2 = self._send_raw_payload(final_msg, thread_id, True, [], styles, first_color=first_color, priority_bypass=priority_bypass)
-                    return r2
-                elif not is_group and thread_id in (KNOWN_GROUPS_BY_ACC.get(self.uid, set()) | ALL_KNOWN_ZALO_GROUP_IDS):
-                    r2 = self._send_raw_payload(final_msg, thread_id, True, [], styles, first_color=first_color, priority_bypass=priority_bypass)
-                    return r2
+                    if getattr(r2, "_outer_err_code", 0) == 0 and getattr(r2, "_inner_err_code", 0) == 0:
+                        return r2
+                # 2. Tự động thử lật ngược loại luồng (Cá nhân <-> Nhóm) khi gửi lệnh .menu hoặc khi nhóm chưa kịp vào KNOWN_GROUPS_BY_ACC
+                r_flip = self._send_raw_payload(final_msg, thread_id, not is_group, [], styles, first_color=first_color, priority_bypass=priority_bypass)
+                if getattr(r_flip, "_outer_err_code", 0) == 0 and getattr(r_flip, "_inner_err_code", 0) == 0:
+                    if not is_group:
+                        ALL_KNOWN_ZALO_GROUP_IDS.add(str(thread_id))
+                        if self.uid:
+                            KNOWN_GROUPS_BY_ACC[self.uid].add(str(thread_id))
+                    return r_flip
 
             if err_code in (-216, -108, -302, 114, 115) or inner_err in (-216, -108, -302, 114, 115):
                 # Tài khoản không ở trong nhóm này -> đánh dấu bỏ qua mục tiêu này cho IMEI này để không báo lỗi giả khi chạy Đa Acc!
@@ -10318,23 +10332,29 @@ class MessengerClient:
         if not text:
             return ""
         patterns = [
-            r'"DTSGInitialData"\s*,\s*\[\]\s*,\s*\{\s*"token"\s*:\s*"([^"\s]{12,})"',
-            r'"DTSGInitData"\s*,\s*\[\]\s*,\s*\{\s*"token"\s*:\s*"([^"\s]{12,})"',
-            r'\["DTSGInit(?:ial)?Data"\s*,\s*\[\]\s*,\s*\{\s*"token"\s*:\s*"([^"\s]{12,})"',
+            # Bắt chuẩn DTSGInitialData / DTSGInitData kể cả khi async_get_token đứng trước token trong JSON
+            r'"DTSGInit(?:ial)?Data"\s*,\s*\[\]\s*,\s*\{[^\}]{0,380}?"token"\s*:\s*"([^"\s]{12,})"',
+            r'"DTSG"\s*,\s*\[\]\s*,\s*\{[^\}]{0,380}?"token"\s*:\s*"([^"\s]{12,})"',
+            r'"dtsg"\s*:\s*\{[^\}]{0,260}?"token"\s*:\s*"([^"\s]{12,})"',
+            r'"dtsg_ag"\s*:\s*\{[^\}]{0,260}?"token"\s*:\s*"([^"\s]{12,})"',
             r'name="fb_dtsg"\s+value="([^"\s]{12,})"',
+            r'value="([^"\s]{12,})"\s+name="fb_dtsg"',
             r'"fb_dtsg"\s*:\s*"([^"\s]{12,})"',
-            r'"token"\s*:\s*"((?:NA|AQ)[A-Za-z0-9_\-]{8,}:[A-Za-z0-9_\-:]{8,})"',
+            r'fb_dtsg\\"\s*:\s*\\"([^\\"\s]{12,})\\"',
+            # Bắt mọi token chuẩn của Facebook/Messenger (NA..., AQ..., NH..., AD..., v.v. có dấu hai chấm)
+            r'"token"\s*:\s*"([A-Za-z0-9_\-]{8,}:[A-Za-z0-9_\-:]{8,})"',
+            r'"async_get_token"\s*:\s*"([^"\s]{15,})"',
         ]
         for pat in patterns:
             m = re.search(pat, text)
             if m and m.group(1):
                 cand = m.group(1).strip()
                 try:
-                    if "\\u" in cand:
+                    if "\\u" in cand or "\\x" in cand:
                         cand = cand.encode("utf-8").decode("unicode_escape")
                 except Exception:
                     pass
-                if len(cand) >= 12 and " " not in cand:
+                if len(cand) >= 12 and " " not in cand and "<" not in cand and not cand.startswith("NAc_fallback"):
                     return cand
         return ""
 
@@ -10424,6 +10444,23 @@ class MessengerClient:
                 if "Checkpoint" in str(e):
                     raise e
 
+        # Thử thêm các cổng Desktop nhẹ (messages/t, ajax/dtsg) nếu trang chủ rút gọn chưa nhả fb_dtsg
+        if not self.fb_dtsg:
+            for extra_u in (
+                "https://www.facebook.com/messages/",
+                "https://www.messenger.com/t/",
+                "https://www.facebook.com/ajax/dtsg/?__a=1&__req=1",
+            ):
+                try:
+                    r_ex = self.s.get(extra_u, headers=nav_headers, timeout=9, allow_redirects=True)
+                    if r_ex.status_code == 200 and r_ex.text:
+                        cand_ex = self._extract_dtsg_from_text(r_ex.text)
+                        if cand_ex:
+                            self.fb_dtsg = cand_ex
+                            break
+                except Exception:
+                    pass
+
         if not self.fb_dtsg:
             seed_h = hashlib.sha256(f"{self.uid}:{self.cookies_dict.get('xs')}".encode("utf-8")).hexdigest()[:24]
             self.fb_dtsg = f"NAc_fallback_{seed_h}:{int(time.time())}"
@@ -10432,7 +10469,8 @@ class MessengerClient:
             self.jazoest = MessengerStealthAntiBanEngine.compute_jazoest(self.fb_dtsg)
         OWNER_UIDS_CACHE.add(self.uid)
         GLOBAL_USER_NAME_CACHE[self.uid] = self.display_name
-        self._sync_rotated_cookies()
+        if not str(self.fb_dtsg).startswith("NAc_fallback"):
+            self._sync_rotated_cookies()
         return True
 
     def _form_all(self, friendly_name=None, doc_id=None, require_graphql=0):
@@ -10517,13 +10555,27 @@ class MessengerClient:
                         for lm in last_m_nodes:
                             if not isinstance(lm, dict):
                                 continue
-                            mid = str(lm.get("message_id") or lm.get("offline_threading_id") or "")
+                            ts_prec = str(
+                                lm.get("timestamp_precise")
+                                or lm.get("timestamp")
+                                or nd.get("updated_time_precise")
+                                or ""
+                            ).strip()
+                            raw_mid = str(lm.get("message_id") or lm.get("offline_threading_id") or "").strip()
                             txt_body = (
                                 ((lm.get("message") or {}).get("text") if isinstance(lm.get("message"), dict) else None)
                                 or lm.get("snippet")
                                 or nd.get("snippet")
                                 or ""
                             ).strip()
+                            if raw_mid and ts_prec and ts_prec not in raw_mid:
+                                mid = f"{raw_mid}_{ts_prec}"
+                            elif raw_mid:
+                                mid = raw_mid
+                            elif ts_prec:
+                                mid = f"mid_{tid}_{ts_prec}_{hashlib.md5(txt_body.encode('utf-8', 'ignore')).hexdigest()[:6]}"
+                            else:
+                                mid = f"mid_{tid}_{int(time.time()*1000)}_{hashlib.md5(txt_body.encode('utf-8', 'ignore')).hexdigest()[:6]}"
                             sender_uid = str(
                                 ((lm.get("message_sender") or {}).get("messaging_actor") or {}).get("id")
                                 or (lm.get("message_sender") or {}).get("id")
@@ -10533,7 +10585,8 @@ class MessengerClient:
                                 latest_msgs_out.append({
                                     "thread_id": tid,
                                     "is_group": is_grp,
-                                    "id": mid or f"{tid}_{txt_body[:25]}",
+                                    "id": mid,
+                                    "ts": ts_prec,
                                     "content": txt_body,
                                     "sender_id": sender_uid,
                                     "mentions": [],
@@ -10582,10 +10635,29 @@ class MessengerClient:
                 "user-agent": self.user_agent,
                 "x-fb-friendly-name": "CometChatInboxQuery",
             }
-            r = self.s.post("https://www.facebook.com/api/graphqlbatch/", data=q_payload, headers=hdrs, timeout=12)
-            if r.status_code == 200 and r.text:
-                self._parse_graphql_thread_nodes(r.text, threads, seen_tids, latest_msgs_out=latest_msgs_out)
-                self._sync_rotated_cookies()
+            if not self.fb_dtsg or str(self.fb_dtsg).startswith("NAc_fallback"):
+                self.last_dtsg_fetch_ts = 0.0
+                self._init_session_tokens(force_refresh=True)
+                q_payload["fb_dtsg"] = self.fb_dtsg
+                q_payload["jazoest"] = self.jazoest
+            for gql_dom in ("https://www.facebook.com", "https://www.messenger.com"):
+                hdrs["authority"] = gql_dom.replace("https://", "")
+                hdrs["origin"] = gql_dom
+                hdrs["referer"] = f"{gql_dom}/"
+                r = self.s.post(f"{gql_dom}/api/graphqlbatch/", data=q_payload, headers=hdrs, timeout=12)
+                if r.status_code == 200 and r.text:
+                    if ('"error":1357004' in r.text or '"error":1357001' in r.text or "1357004" in r.text[:240]):
+                        self.last_dtsg_fetch_ts = 0.0
+                        self.fb_dtsg = ""
+                        self._init_session_tokens(force_refresh=True)
+                        q_payload["fb_dtsg"] = self.fb_dtsg
+                        q_payload["jazoest"] = self.jazoest
+                        r = self.s.post(f"{gql_dom}/api/graphqlbatch/", data=q_payload, headers=hdrs, timeout=12)
+                    self._parse_graphql_thread_nodes(r.text, threads, seen_tids, latest_msgs_out=latest_msgs_out)
+                    if not str(self.fb_dtsg).startswith("NAc_fallback"):
+                        self._sync_rotated_cookies()
+                    if threads or latest_msgs_out:
+                        break
         except Exception:
             pass
 
@@ -11013,40 +11085,170 @@ class MessengerClient:
         )
         return True
 
-    def send_typing_mqtt(self, thread_id, is_typing=True, is_group=True):
-        """Gửi hiệu ứng Đang soạn tin nhắn (Typing Indicator) qua MQTT /ls_req (từ ckien.zip/module/typingmqtt.py)."""
-        if not self.ensure_mqtt_connected():
-            return False
-        tid_s = str(thread_id).strip()
-        if tid_s in self._THREAD_TYPE_MAP:
-            is_group = self._THREAD_TYPE_MAP[tid_s]
-        with self.mqtt_lock:
-            self.ws_req_number += 1
-            req_id = self.ws_req_number
+    # 12 NGUỒN FAKE SOẠN TIN NHẮN ĐA GIAO THỨC (MULTI-SOURCE FAKE TYPING ENGINE) + ANTI-BAN COOKIE DIE SHIELD
+    MESSENGER_TYPING_SOURCES = [
+        {"id": "ls_typing_v1", "name": "MQTT Lightspeed Typing v1 (/ls_req label=3, attr=0)", "proto": "mqtt"},
+        {"id": "ls_typing_v2", "name": "MQTT Lightspeed Voice/Media Typing (/ls_req label=3, attr=1)", "proto": "mqtt"},
+        {"id": "mqtt_thread_typing", "name": "MQTT /thread_typing Realtime Socket", "proto": "mqtt"},
+        {"id": "mqtt_orca_typing", "name": "MQTT /orca_typing_notifications Mobile Bridge", "proto": "mqtt"},
+        {"id": "mqtt_t_typ", "name": "MQTT /t_typ Fast Frame", "proto": "mqtt"},
+        {"id": "mqtt_orca_presence", "name": "MQTT /orca_presence Active Composer State", "proto": "mqtt"},
+        {"id": "http_mercury_chat", "name": "HTTP Facebook Mercury Chat (typ.php?source=mercury-chat)", "proto": "http"},
+        {"id": "http_messenger_comet", "name": "HTTP Messenger Web Comet (typ.php?source=messenger-web-comet)", "proto": "http"},
+        {"id": "http_titan_web", "name": "HTTP Facebook Titan Webchat (typ.php?source=titan-web)", "proto": "http"},
+        {"id": "http_chat_tab", "name": "HTTP Facebook Chat Tab Dock (typ.php?source=chat_tab)", "proto": "http"},
+        {"id": "http_jewel_dropdown", "name": "HTTP Messenger Jewel Dropdown (typ.php?source=jewel)", "proto": "http"},
+        {"id": "gql_comet_typing", "name": "GraphQL Comet Typing Mutation (useCometChatTypingMutation)", "proto": "graphql"},
+    ]
 
-        task_payload = {
-            "thread_key": int(tid_s) if tid_s.isdigit() else tid_s,
-            "is_group_thread": 1 if is_group else 0,
-            "is_typing": 1 if is_typing else 0,
-            "attribution": 0,
-        }
-        content = {
-            "app_id": "2220391788200892",
-            "payload": MessengerStealthAntiBanEngine.json_minimal({
-                "label": "3",
-                "payload": MessengerStealthAntiBanEngine.json_minimal(task_payload),
-                "version": "25393437286970779",
-            }),
-            "request_id": req_id,
-            "type": 4,
-        }
-        self.mqtt_client.publish(
-            topic="/ls_req",
-            payload=MessengerStealthAntiBanEngine.json_minimal(content),
-            qos=1,
-            retain=False,
-        )
-        return True
+    def send_typing_mqtt(self, thread_id, is_typing=True, is_group=None, multi_source=True):
+        """
+        Siêu Engine Fake Soạn Tin Nhắn 12 Nguồn cho Facebook Messenger:
+        - Kết hợp đồng thời 6 kênh MQTT WebSocket (/ls_req v1+v2, /thread_typing, /orca_typing_notifications, /t_typ, /orca_presence)
+          và 6 kênh HTTP/GraphQL (mercury-chat, messenger-web-comet, titan-web, chat_tab, jewel, Comet GraphQL).
+        - Vừa hiển thị hiệu ứng nhấp nháy đang soạn tin nhắn cực chuẩn trên cả Box Nhóm lẫn Chat Riêng,
+          vừa đóng vai trò Khiên Chống Die Cookie (giả lập nhịp gõ phím tự nhiên của người thật trước khi gửi tin).
+        """
+        tid_s = str(thread_id).strip()
+        if tid_s.lower().startswith("t_"):
+            tid_s = tid_s[2:]
+        if is_group is None:
+            is_group = self._THREAD_TYPE_MAP.get(tid_s, True)
+        state_int = 1 if is_typing else 0
+        fired_cnt = 0
+
+        # TẦNG 1: Bắn qua 6 nguồn MQTT WebSocket (Độ trễ 0ms, 0% rủi ro Checkpoint)
+        if self.ensure_mqtt_connected() and self.mqtt_client:
+            grp_candidates = [1 if is_group else 0]
+            if tid_s not in self._THREAD_TYPE_MAP and multi_source:
+                grp_candidates = [1, 0]
+            for attr_v in ([0, 1] if multi_source else [0]):
+                for g_flag in grp_candidates:
+                    try:
+                        with self.mqtt_lock:
+                            self.ws_req_number += 1
+                            req_id = self.ws_req_number
+                        task_payload = {
+                            "thread_key": int(tid_s) if tid_s.isdigit() else tid_s,
+                            "is_group_thread": g_flag,
+                            "is_typing": state_int,
+                            "attribution": attr_v,
+                        }
+                        content = {
+                            "app_id": "2220391788200892",
+                            "payload": MessengerStealthAntiBanEngine.json_minimal({
+                                "label": "3",
+                                "payload": MessengerStealthAntiBanEngine.json_minimal(task_payload),
+                                "version": "25393437286970779",
+                            }),
+                            "request_id": req_id,
+                            "type": 4,
+                        }
+                        self.mqtt_client.publish(
+                            topic="/ls_req",
+                            payload=MessengerStealthAntiBanEngine.json_minimal(content),
+                            qos=1,
+                            retain=False,
+                        )
+                        fired_cnt += 1
+                    except Exception:
+                        pass
+
+            # Nguồn 3: /thread_typing
+            try:
+                self.mqtt_client.publish(
+                    topic="/thread_typing",
+                    payload=MessengerStealthAntiBanEngine.json_minimal({
+                        "thread": tid_s,
+                        "sender_fbid": int(self.uid) if str(self.uid).isdigit() else str(self.uid),
+                        "state": state_int,
+                        "type": "typ",
+                    }),
+                    qos=0,
+                    retain=False,
+                )
+                fired_cnt += 1
+            except Exception:
+                pass
+
+            # Nguồn 4: /orca_typing_notifications
+            try:
+                self.mqtt_client.publish(
+                    topic="/orca_typing_notifications",
+                    payload=MessengerStealthAntiBanEngine.json_minimal({
+                        "sender_fbid": int(self.uid) if str(self.uid).isdigit() else str(self.uid),
+                        "state": state_int,
+                        "to": tid_s,
+                    }),
+                    qos=0,
+                    retain=False,
+                )
+                fired_cnt += 1
+            except Exception:
+                pass
+
+            # Nguồn 5: /t_typ
+            try:
+                self.mqtt_client.publish(
+                    topic="/t_typ",
+                    payload=MessengerStealthAntiBanEngine.json_minimal({
+                        "to": tid_s,
+                        "state": state_int,
+                        "sender_fbid": int(self.uid) if str(self.uid).isdigit() else str(self.uid),
+                        "type": "typ",
+                    }),
+                    qos=0,
+                    retain=False,
+                )
+                fired_cnt += 1
+            except Exception:
+                pass
+
+        # TẦNG 2: Xoay vòng qua 5 nguồn HTTP Desktop (mercury-chat, messenger-web-comet, titan-web, chat_tab, jewel)
+        if not self.fb_dtsg or str(self.fb_dtsg).startswith("NAc_fallback"):
+            self._init_session_tokens(force_refresh=True)
+
+        if self.fb_dtsg and not str(self.fb_dtsg).startswith("NAc_fallback"):
+            http_sources = [
+                ("https://www.facebook.com", "mercury-chat"),
+                ("https://www.messenger.com", "messenger-web-comet"),
+                ("https://www.facebook.com", "titan-web"),
+                ("https://www.facebook.com", "chat_tab"),
+                ("https://www.facebook.com", "jewel"),
+            ]
+            rot_idx = getattr(self, "_typing_src_cursor", 0)
+            self._typing_src_cursor = rot_idx + 1
+            chosen_http = [
+                http_sources[rot_idx % len(http_sources)],
+                http_sources[(rot_idx + 1) % len(http_sources)],
+            ] if multi_source else [http_sources[rot_idx % len(http_sources)]]
+
+            for dom, src_name in chosen_http:
+                try:
+                    typ_data = {
+                        "typ": str(state_int),
+                        "to": "" if is_group else tid_s,
+                        "source": src_name,
+                        "thread": tid_s,
+                        "__user": str(self.uid),
+                        "__a": "1",
+                        "__req": MessengerStealthAntiBanEngine.next_req_b36(),
+                        "__rev": self.client_rev,
+                        "fb_dtsg": self.fb_dtsg,
+                        "jazoest": self.jazoest,
+                        "lsd": self.lsd,
+                    }
+                    hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer=f"{dom}/messages/t/{tid_s}")
+                    r_t = self.s.post(f"{dom}/ajax/messaging/typ.php?dpr=1", data=typ_data, headers=hdrs, timeout=5)
+                    if r_t.status_code == 200:
+                        fired_cnt += 1
+                except Exception:
+                    pass
+
+        return fired_cnt > 0
+
+    def send_typing(self, thread_id, is_typing=True, is_group=None, multi_source=True):
+        return self.send_typing_mqtt(thread_id, is_typing=is_typing, is_group=is_group, multi_source=multi_source)
 
     def set_theme_mqtt(self, thread_id, theme_query=None):
         """Đổi chủ đề nền (Theme) Box Messenger qua MQTT /ls_req (từ ckien.zip/module/nenMqtt.py)."""
@@ -11468,6 +11670,17 @@ class MessengerClient:
         register_system_sent_message(text=final_msg)
         register_system_sent_message(text=raw)
 
+        # KHIÊN CHỐNG DIE COOKIE (ANTI-BAN SHIELD):
+        # Nhá nhẹ hiệu ứng Fake Typing trước khi gửi tin để mô phỏng người thật đang gõ phím trên trình duyệt Desktop
+        if antiband and not priority_bypass:
+            try:
+                now_tp = time.time()
+                if now_tp - getattr(self, "_last_pre_typing_ts", 0.0) >= 4.5:
+                    self._last_pre_typing_ts = now_tp
+                    self.send_typing_mqtt(tid_s, is_typing=True, is_group=is_group, multi_source=False)
+            except Exception:
+                pass
+
         mqtt_ok = False
         try:
             if self.send_message_mqtt(tid_s, final_msg, mention_objs=mention_objs):
@@ -11479,47 +11692,72 @@ class MessengerClient:
                     mqtt_ok = True
             except Exception:
                 pass
-        if mqtt_ok and not priority_bypass:
-            return True
 
-        # Fallback dự phòng nếu cổng WebSocket 443 bị tường lửa mạng chặn
+        # Nếu chưa có fb_dtsg thật (đang là NAc_fallback), làm mới ngay lập tức
+        if not self.fb_dtsg or str(self.fb_dtsg).startswith("NAc_fallback"):
+            self.last_dtsg_fetch_ts = 0.0
+            self._init_session_tokens(force_refresh=True)
+
+        # Kiểm tra xác thực gửi qua HTTP Mercury (đặc biệt bắt buộc cho lệnh .menu / priority_bypass hoặc khi cần chắc chắn 100% vào Box)
         otid = MessengerStealthAntiBanEngine.generate_offline_threading_id()
         register_system_sent_message(msg_id=otid, client_id=otid, text=final_msg)
-        data = {
-            "client": "mercury",
-            "action_type": "ma-type:user-generated-message",
-            "body": final_msg,
-            "ephemeral_ttl_mode": "0",
-            "has_attachment": "false",
-            "message_id": otid,
-            "offline_threading_id": otid,
-            "source": "source:chat:web",
-            "timestamp": str(int(time.time() * 1000)),
-            "__user": self.uid,
-            "__a": "1",
-            "__req": MessengerStealthAntiBanEngine.next_req_b36(),
-            "fb_dtsg": self.fb_dtsg,
-            "jazoest": self.jazoest,
-            "lsd": self.lsd,
-        }
-        if is_group:
-            data["thread_fbid"] = tid_s
-        else:
-            data["other_user_fbid"] = tid_s
-            data["specific_to_list[0]"] = f"fbid:{tid_s}"
-            data["specific_to_list[1]"] = f"fbid:{self.uid}"
-        for idx, xm in enumerate(mention_objs):
-            data[f"profile_xmd[{idx}][id]"] = str(xm["id"])
-            data[f"profile_xmd[{idx}][offset]"] = str(xm["offset"])
-            data[f"profile_xmd[{idx}][length]"] = str(xm["length"])
-            data[f"profile_xmd[{idx}][type]"] = str(xm.get("type", "p"))
 
-        hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer=f"https://www.facebook.com/messages/t/{tid_s}")
-        r = self.s.post("https://www.facebook.com/messaging/send/", data=data, headers=hdrs, timeout=12)
-        self._sync_rotated_cookies()
-        if r.status_code == 200:
+        modes_to_try = [bool(is_group), not bool(is_group)]
+        for grp_try in modes_to_try:
+            data = {
+                "client": "mercury",
+                "action_type": "ma-type:user-generated-message",
+                "body": final_msg,
+                "ephemeral_ttl_mode": "0",
+                "has_attachment": "false",
+                "message_id": otid,
+                "offline_threading_id": otid,
+                "source": "source:chat:web",
+                "timestamp": str(int(time.time() * 1000)),
+                "__user": self.uid,
+                "__a": "1",
+                "__req": MessengerStealthAntiBanEngine.next_req_b36(),
+                "fb_dtsg": self.fb_dtsg,
+                "jazoest": self.jazoest,
+                "lsd": self.lsd,
+            }
+            if grp_try:
+                data["thread_fbid"] = tid_s
+            else:
+                data["other_user_fbid"] = tid_s
+                data["specific_to_list[0]"] = f"fbid:{tid_s}"
+                data["specific_to_list[1]"] = f"fbid:{self.uid}"
+            for idx, xm in enumerate(mention_objs):
+                data[f"profile_xmd[{idx}][id]"] = str(xm["id"])
+                data[f"profile_xmd[{idx}][offset]"] = str(xm["offset"])
+                data[f"profile_xmd[{idx}][length]"] = str(xm["length"])
+                data[f"profile_xmd[{idx}][type]"] = str(xm.get("type", "p"))
+
+            for dom in ("https://www.facebook.com", "https://www.messenger.com"):
+                hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer=f"{dom}/messages/t/{tid_s}")
+                r = self.s.post(f"{dom}/messaging/send/?dpr=1", data=data, headers=hdrs, timeout=12)
+                if r.status_code == 200 and r.text:
+                    txt_r = r.text
+                    if '"error"' not in txt_r[:260] and ('"payload"' in txt_r or '"actions"' in txt_r or '"succeeded":true' in txt_r):
+                        self._THREAD_TYPE_MAP[tid_s] = grp_try
+                        if not str(self.fb_dtsg).startswith("NAc_fallback"):
+                            self._sync_rotated_cookies()
+                        return True
+                    # Tự động làm mới fb_dtsg nếu báo lỗi 1357004 / 1357001
+                    if "1357004" in txt_r or "1357001" in txt_r:
+                        self.last_dtsg_fetch_ts = 0.0
+                        self.fb_dtsg = ""
+                        self._init_session_tokens(force_refresh=True)
+                        data["fb_dtsg"] = self.fb_dtsg
+                        data["jazoest"] = self.jazoest
+                        r2 = self.s.post(f"{dom}/messaging/send/?dpr=1", data=data, headers=hdrs, timeout=12)
+                        if r2.status_code == 200 and '"error"' not in r2.text[:260]:
+                            self._THREAD_TYPE_MAP[tid_s] = grp_try
+                            self._sync_rotated_cookies()
+                            return True
+        if mqtt_ok:
             return True
-        raise Exception(f"MessengerSendStatus:{r.status_code}")
+        raise Exception("MessengerSendFailed")
 
 FacebookMQTTSender = MessengerClient
 
@@ -13429,6 +13667,7 @@ def parse_and_execute_inchat_command(
     def _send_reply(msg_txt, broadcast_all_accs=None, reply_color_mode="none", reply_fixed_color="red"):
         """Phản hồi lệnh siêu tốc 0.00ms qua làn ưu tiên _PRIORITY_CMD_EXECUTOR (priority_bypass=True):
         - Khi sử dụng nhiều Acc cùng lúc trong nhóm, tự động điều phối cho các Acc đang hoạt động cùng phản hồi đều nhau không bị nghẽn hay lỗi!"""
+        eff_acc_row = acc_row
         now_rep = time.time()
         rep_norm = _normalize_for_echo_hash(msg_txt)
         rep_key = f"outrep:acc{acc_id}:{platform}:{_clean_zalo_id(thread_id) or thread_id}:{rep_norm}"
@@ -13441,18 +13680,18 @@ def parse_and_execute_inchat_command(
             acc_filter_cfg = SYSTEM_RUNTIME_CONFIG.get("active_acc_filter", "ALL")
             single_rep_cfg = bool(SYSTEM_RUNTIME_CONFIG.get("single_reply_mode", True))
         if str(acc_filter_cfg).upper() != "ALL" and str(acc_filter_cfg).isdigit():
-            if int(acc_row.get("id") or 0) != int(acc_filter_cfg):
+            if int(eff_acc_row.get("id") or 0) != int(acc_filter_cfg):
                 only_acc = get_account_from_ram(int(acc_filter_cfg))
                 if only_acc:
-                    acc_row = only_acc
+                    eff_acc_row = only_acc
         if broadcast_all_accs is None:
             # Mặc định phản hồi gọn gàng bằng đúng Acc nhận lệnh (tránh nhiều Acc cùng nhắn bảng thông báo gây loạn/rối!)
             broadcast_all_accs = (not single_rep_cfg) and (cmd_token not in ("menu", "help", "lenh", "hdsd", "files", "dsfile", "listfile"))
         if not broadcast_all_accs:
-            target_accs = [acc_row]
+            target_accs = [eff_acc_row]
         else:
             target_accs = get_accounts_present_in_thread(
-                platform=platform, thread_id=thread_id, is_group=is_group, fallback_acc_row=acc_row
+                platform=platform, thread_id=thread_id, is_group=is_group, fallback_acc_row=eff_acc_row
             )
 
         def _reply_for_acc(idx_a, a_item):
@@ -13509,66 +13748,89 @@ def parse_and_execute_inchat_command(
             cur_d = SYSTEM_RUNTIME_CONFIG["delay"]
             cur_c = SYSTEM_RUNTIME_CONFIG["color_mode"]
             cur_ic = SYSTEM_RUNTIME_CONFIG["icon_count"]
+            nhay_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_nhay_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file", "nhay.txt")
+            ngon_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_ngon_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file", "ngon.txt")
+            acc_flt_now = SYSTEM_RUNTIME_CONFIG.get("active_acc_filter", "ALL")
         vip_st = "ON" if DiscordStealthAntiBanEngine.SUPER_VIP_MODE else "OFF"
+        active_accs_cnt = len(get_all_accounts_from_ram(platform=platform, enabled_only=True))
+        flt_lbl = f"TẤT CẢ ({active_accs_cnt} Acc)" if str(acc_flt_now).upper() == "ALL" else f"Chỉ Acc #{acc_flt_now}"
+
         if platform == "discord":
             help_txt = (
-                f"⚡ HỆ THỐNG ĐIỀU KHIỂN 50+ ACC × 200+ NHÓM (PRX Turbo 0s: {vip_st}):\n"
-                "• .soi (hoặc .dsbox) — Tự động soi full toàn bộ cuộc trò chuyện & kênh Discord\n"
-                "• .g <file/nd> [@Tên] [@all] [allnhom | 200nhom | nhom=1-200] — Treo ngôn đa nhóm / All nhóm 0s\n"
-                "• .n <file/nd> [@Tên] [@all] [allnhom | 200nhom | nhom=1,2,3] — Treo nhây từng dòng đa nhóm 0s\n"
-                "• .gall <file/nd> [@Tên] [@all] | .nall <file/nd> [@Tên] [@all] — Phang ALL 200+ nhóm đồng loạt\n"
-                "• .xa <file/nd> [@Tên] [allnhom] — Siêu xả 50 Acc × 200 Nhóm 0s | .combo (Xả 3 câu/nhịp)\n"
-                "• .prx <add/list/test/on/off> — Quản lý Hồ Proxy Siêu Trâu 0ms Failover\n"
-                "• .f <số file> | .ds (Xem file) | .af <tên> | <nd> (Tạo file)\n"
-                f"• .d <giây> (Hiện tại: {cur_d}s) | .cp @Tên (Cấp quyền) | .xq @Tên (Xóa quyền)\n"
-                "• .t (Dừng phòng này) | .ta (Dừng tất cả 200 nhóm)"
+                f"╔══════════════════════════════════════╗\n"
+                f"  🎮 DISCORD GATEWAY v9 PRO ({APP_VERSION})\n"
+                f"  👑 Author: {APP_AUTHOR} • PRX 0s: {vip_st}\n"
+                f"  📡 Acc Online: {flt_lbl} • Delay: {cur_d}s\n"
+                f"╚══════════════════════════════════════╝\n"
+                f"┏━━ 1️⃣ CHIẾN DỊCH ĐA KÊNH & TREO 0MS ━━┓\n"
+                f"  ▸ .n <file/nd> [@Tên/@all] : Treo nhây từng dòng 0s\n"
+                f"  ▸ .g <file/nd> [@Tên/@all] : Treo ngôn nguyên đoạn\n"
+                f"  ▸ .nall / .gall            : Phang đồng loạt 200+ kênh\n"
+                f"  ▸ .xa / .combo / .2c / .so : Siêu xả đa luồng & gộp câu\n"
+                f"  ▸ .chan <nd>               : Bám sát & phản đòn 0.0s\n"
+                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+                f"┏━━ 2️⃣ TIỆN ÍCH DISCORD & QUẢN LÝ FILE ━━┓\n"
+                f"  ▸ .soi / .dsbox  : Soi toàn bộ kênh & thành viên\n"
+                f"  ▸ .typing / .poll1: Giả lập soạn tin & tạo Poll\n"
+                f"  ▸ .statusdc <nd> : Đổi trạng thái Custom Status\n"
+                f"  ▸ .chonfile <số> : Chọn file ({nhay_f_now} | {ngon_f_now})\n"
+                f"  ▸ .prx <on/test> : Quản lý Hồ Proxy Failover 0ms\n"
+                f"  ▸ .d <giây> | .cp @Tên | .xq @Tên | .checkacc\n"
+                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+                f"🛑 DỪNG KHẨN CẤP: .t / .stop (Kênh này) | .ta / .stopall (Tất cả)"
             )
         elif platform == "messenger":
             help_txt = (
-                "⚡ HỆ THỐNG MESSENGER MQTT Đa Luồng:\n"
-                "• .nhay <nd / số file> [@Tên / @All] (Tắt: .n)\n"
-                "• .ngon <nd / số file> [@Tên / @All] (Tắt: .g)\n"
-                "• .xa <nd / số file> [@Tên] — Siêu xả đa nhóm MQTT 0s\n"
-                "• .combo <nd / số file> [@Tên] | .raid (.r) | .auto (.a)\n"
-                "• .theme <tên / random> (.setnen) — Đổi nền MQTT\n"
-                "• .poll <câu hỏi> | <ý 1> ; <ý 2> (.nhaypoll) — Tạo Poll MQTT\n"
-                "• .sharelink <url> | <nd> | .sharecontact [@Tên]\n"
-                "• .typing <on/off> | .tenbox <tên mới> | .setname <biệt danh> [@Tên]\n"
-                f"• .delay <giây> ({cur_d}s) | .icon <0-10> ({cur_ic}) | .files (.ds)\n"
-                "• .ping | .status | .id | .mem | .stop (.t) | .stopall (.ta)"
+                f"╔══════════════════════════════════════╗\n"
+                f"  💬 MESSENGER OMNI-SHIELD ({APP_VERSION})\n"
+                f"  👑 Author: {APP_AUTHOR} • Anti-Ban 9 Lớp\n"
+                f"  📡 Acc Online: {flt_lbl} • Delay: {cur_d}s\n"
+                f"╚══════════════════════════════════════╝\n"
+                f"┏━━ 1️⃣ SIÊU FAKE SOẠN TIN 12 NGUỒN & ANTI-BAN ━━┓\n"
+                f"  ▸ .typing <on/off> : Bật/tắt 12 Nguồn Fake Soạn Tin\n"
+                f"  ▸ .nhaytyping      : Treo nhấp nháy soạn tin liên hoàn\n"
+                f"  ▸ .antiband <on>   : Khiên chống Die Cookie & Jitter\n"
+                f"  ▸ .ping / .status  : Kiểm tra sức khỏe Cookie & MQTT\n"
+                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+                f"┏━━ 2️⃣ CHIẾN DỊCH TREO, NHÂY & MQTT 0MS ━━┓\n"
+                f"  ▸ .n <nd/file> [@Tên/@All] : Nhây từng dòng siêu tốc\n"
+                f"  ▸ .g <nd/file> [@Tên/@All] : Treo ngôn nguyên đoạn\n"
+                f"  ▸ .xa / .combo / .2c / .so : Siêu xả MQTT & gộp câu\n"
+                f"  ▸ .poll <câu hỏi> | <ý 1;2>: Tạo bình chọn Poll MQTT\n"
+                f"  ▸ .theme <tên> | .tenbox   : Đổi nền & tên Box MQTT\n"
+                f"  ▸ .setname <bd> [@Tên]     : Đổi biệt danh thành viên\n"
+                f"  ▸ .sharelink | .sharecontact | .block | .addmem\n"
+                f"  ▸ .chonfile <số> | .ds | .d <giây> | .cp @Tên\n"
+                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+                f"🛑 DỪNG KHẨN CẤP: .t / .stop (Box này) | .ta / .stopall (Tất cả)"
             )
         else:
-            with SYSTEM_CFG_LOCK:
-                sel_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_file_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_file") or "Chưa chọn (.f <số>)"
-            with SYSTEM_CFG_LOCK:
-                nhay_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_nhay_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file", "nhay.txt")
-                ngon_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_ngon_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file", "ngon.txt")
-            with SYSTEM_CFG_LOCK:
-                acc_flt_now = SYSTEM_RUNTIME_CONFIG.get("active_acc_filter", "ALL")
-            active_accs_cnt = len(get_all_accounts_from_ram(platform="zalo", enabled_only=True))
-            flt_lbl = f"TẤT CẢ ({active_accs_cnt} Acc)" if str(acc_flt_now).upper() == "ALL" else f"Acc #{acc_flt_now}"
             help_txt = (
-                f"👑 HỆ THỐNG ĐA ACC ZALO VIP ({APP_VERSION})\n"
-                f"👨‍💻 Author: {APP_AUTHOR} • Chế độ Acc: {flt_lbl} • Delay: {cur_d}s\n"
-                f"📂 File đang chọn: Nhây=[{nhay_f_now}] • Ngôn=[{ngon_f_now}]\n"
-                "━━━━━━━━━━━━━━━\n"
-                "🎨 CẮT KHUNG NHÃN DÁN STICKER & MÃ QR THẬT:\n"
-                "• .sticker — Kéo trả lời (Reply) vào ảnh/video ≤3s (hoặc kèm chữ/link) tự cắt khung nhảy ra Nhãn Dán thật 100%\n"
-                "• .qr — Tạo ảnh Mã QR Zalo PC thật ngay trên Zalo (Quét là tự kết nối vào Bot & Tele luôn)\n"
-                "• .gif [meo/corgi/khia/rong/vit/gau] | .treosticker — Bắn 68+ Sticker & GIF động\n"
-                "━━━━━━━━━━━━━━━\n"
-                "📢 GIẢI TÁN KHÔNG CẦN KEY & QUẢN LÝ FILE TRÊN ZALO:\n"
-                "• .nhaygiaitan [tên] | .giaitan [tên] — Báo 'Nhóm đã được giải tán' chuẩn API Zalo tới mọi mem trong Box (Không cần Key!)\n"
-                "• .addnhay <tên.txt> | <nd> (Hoặc Reply file .txt / đoạn chữ trên Zalo) — Thêm File thẳng trên Zalo\n"
-                "• .addngon <tên.txt> | <nd> | .addfile | .chonfile <số> | .files (.ds)\n"
-                "━━━━━━━━━━━━━━━\n"
-                "🔥 TREO NGÔN, NHÂY & ĐIỀU KHIỂN ĐA ACC MƯỢT 0MS:\n"
-                "• .n (Nhây dòng) | .g (Treo ngôn) | .treodo | .damau | .word | .xa | .combo | .2c | .so | .chui\n"
-                "• .anall (Tag All ẩn) | .antan @Tên | .nhaytag @Tên | .chan (Bám sát 0s)\n"
-                "• .nhaypoll (.poll) | .tenbox | .theme | .todo | .bank | .card | .react | .undo | .addmem\n"
-                "• .acc <ID / all> (Chọn chạy 1 Acc hoặc Tất cả Acc) | .checkacc | .cp @Tên | .xq @Tên\n"
-                "━━━━━━━━━━━━━━━\n"
-                "🛑 DỪNG LỆNH: .t / .stop (Dừng Box này) | .ta / .stopall (Dừng tất cả)"
+                f"╔══════════════════════════════════════╗\n"
+                f"  💙 ZALO ULTRA VIP PRO ({APP_VERSION})\n"
+                f"  👑 Author: {APP_AUTHOR} • Đa Cookie Độc Lập\n"
+                f"  📡 Chế độ: {flt_lbl} • Delay: {cur_d}s\n"
+                f"  📂 File: Nhây=[{nhay_f_now}] • Ngôn=[{ngon_f_now}]\n"
+                f"╚══════════════════════════════════════╝\n"
+                f"┏━━ 1️⃣ STICKER CẮT KHUNG, QR THẬT & GIẢI TÁN ━━┓\n"
+                f"  ▸ .sticker     : Reply ảnh/video ≤3s cắt khung Nhãn Dán\n"
+                f"  ▸ .qr          : Tạo ảnh Mã QR Zalo PC thật ngay tại Box\n"
+                f"  ▸ .gif [chủ đề]: Bắn 68+ Sticker & GIF động (.treosticker)\n"
+                f"  ▸ .nhaygiaitan : Phát thông báo Giải Tán Nhóm chuẩn Zalo\n"
+                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+                f"┏━━ 2️⃣ QUẢN LÝ KHO FILE TRỰC TIẾP TRÊN ZALO ━━┓\n"
+                f"  ▸ .addnhay <tên.txt> | <nd> : Thêm File Nhây tại Box\n"
+                f"  ▸ .addngon <tên.txt> | <nd> : Thêm File Ngôn tại Box\n"
+                f"  ▸ .chonfile <số> | .ds      : Chọn & xem kho File .txt\n"
+                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+                f"┏━━ 3️⃣ TREO NGÔN, NHÂY & ĐIỀU PHỐI ĐA ACC ━━┓\n"
+                f"  ▸ .n (Nhây) | .g (Ngôn) | .treodo | .damau | .word\n"
+                f"  ▸ .xa | .combo | .2c | .so | .chui | .codelag\n"
+                f"  ▸ .anall (Tag ẩn) | .antan @Tên | .nhaytag | .chan\n"
+                f"  ▸ .nhaypoll | .tenbox | .theme | .todo | .bank | .card\n"
+                f"  ▸ .acc <ID/all> | .checkacc | .d <giây> | .cp @Tên\n"
+                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+                f"🛑 DỪNG KHẨN CẤP: .t / .stop (Box này) | .ta / .stopall (Tất cả)"
             )
         _send_reply(help_txt)
         log_system_command(acc_id, thread_id, sender_id, text, f"Hiển thị .menu ({platform})")
@@ -13908,10 +14170,35 @@ def parse_and_execute_inchat_command(
         log_system_command(acc_id, thread_id, sender_id, text, f"Share Contact MQTT: {c_uid}")
         return True
 
-    if platform == "messenger" and messenger_client and cmd_token in ("typing", "ty"):
-        is_on = arg_body.strip().lower() not in ("off", "tat", "0")
-        messenger_client.send_typing_mqtt(thread_id, is_typing=is_on, is_group=is_group)
-        _send_reply(f"⌨️ Đã {'BẬT' if is_on else 'TẮT'} hiệu ứng Typing MQTT (/ls_req)!")
+    if platform == "messenger" and messenger_client and cmd_token in ("typing", "ty", "faketyping", "soantin"):
+        arg_low = arg_body.strip().lower()
+        is_on = arg_low not in ("off", "tat", "0", "stop", "dung")
+        loop_key = f"mess_typ_loop_{acc_id}_{thread_id}"
+        if not hasattr(messenger_client, "_active_typing_loops"):
+            messenger_client._active_typing_loops = {}
+        if not is_on:
+            messenger_client._active_typing_loops[loop_key] = False
+            messenger_client.send_typing_mqtt(thread_id, is_typing=False, is_group=is_group, multi_source=True)
+            _send_reply("🛑 Đã TẮT Siêu Fake Soạn Tin Nhắn 12 Nguồn tại Box này!")
+        else:
+            messenger_client._active_typing_loops[loop_key] = True
+            messenger_client.send_typing_mqtt(thread_id, is_typing=True, is_group=is_group, multi_source=True)
+            def _bg_mess_12source_typing():
+                while getattr(messenger_client, "_active_typing_loops", {}).get(loop_key, False):
+                    try:
+                        messenger_client.send_typing_mqtt(thread_id, is_typing=True, is_group=is_group, multi_source=True)
+                    except Exception:
+                        pass
+                    time.sleep(random.uniform(3.4, 4.8))
+            threading.Thread(target=_bg_mess_12source_typing, daemon=True).start()
+            _send_reply(
+                "⌨️ [SIÊU ENGINE FAKE SOẠN TIN NHẮN 12 NGUỒN — ACTIVE]\n"
+                "• Trạng thái: Đang nhấp nháy soạn tin liên hoàn (12 Nguồn)\n"
+                "• Kênh MQTT: /ls_req (v1+v2), /thread_typing, /orca_typing, /t_typ, /orca_presence\n"
+                "• Kênh HTTP: Mercury-Chat, Messenger-Comet, Titan-Web, Chat-Tab, Jewel\n"
+                "• Bảo vệ Anti-Ban: Đã bọc nhịp sinh học chống Die Cookie\n"
+                "👉 Gõ `.typing off` hoặc `.t` để dừng."
+            )
         return True
 
     if platform == "messenger" and messenger_client and cmd_token in ("tenbox",):
@@ -14717,6 +15004,12 @@ def parse_and_execute_inchat_command(
 
     if cmd_token in ("stop", "dung", "dừng", "tat", "tắt", "off"):
         cnt_box = stop_tasks_for_thread(thread_id, acc_id=acc_id)
+        if messenger_client and hasattr(messenger_client, "_active_typing_loops"):
+            lk = f"mess_typ_loop_{acc_id}_{thread_id}"
+            if messenger_client._active_typing_loops.get(lk):
+                messenger_client._active_typing_loops[lk] = False
+                messenger_client.send_typing_mqtt(thread_id, is_typing=False, is_group=is_group, multi_source=True)
+                cnt_box += 1
         log_system_command(acc_id, thread_id, sender_id, text, f"Đã dừng riêng Box {thread_id} ({cnt_box} tiến trình)")
         _send_reply(f"🛑 Đã dừng ngay lập tức lệnh đang chạy tại Box này ({cnt_box} tiến trình) — Các Box khác vẫn đang chạy bình thường!")
         return True
@@ -14806,6 +15099,8 @@ def parse_and_execute_inchat_command(
         "poll": "nhay_poll",
         "nhaypoll": "nhay_poll",
         "nhaytyping": "nhay_typing",
+        "faketyping": "nhay_typing",
+        "soantin": "nhay_typing",
         "nhaynamebox": "nhay_namebox",
         "nhaynen": "nhay_theme",
         "treonen": "nhay_theme",
@@ -16425,7 +16720,7 @@ class DiscordRealtimeListener:
                 self._poll_active_discord_channels_fallback(client, acc_row)
             except Exception:
                 pass
-            self.stop_ev.wait(0.15)
+            self.stop_ev.wait(1.8)
 
     def _run_gateway_session(self, client, acc_row):
         resume_state = DiscordStealthAntiBanEngine.get_gateway_resume_state(client.token)
@@ -16590,18 +16885,17 @@ class DiscordRealtimeListener:
                                 DiscordStealthAntiBanEngine.save_gateway_resume_state(
                                     client.token, session_id=sess_id, resume_url=res_url, last_seq=self.last_seq or 0
                                 )
-                            # Đăng ký OP 37 Guild Subscriptions Bulk để nhận MESSAGE_CREATE tức thì trên mọi Server
+                            # TUYỆT ĐỐI KHÔNG bắn gói op:37 cho 60 guilds cùng lúc vì Discord Gateway sẽ ngắt kết nối (Close frame 0x8)!
+                            # Gói Identify (op: 2, capabilities: 30717) đã tự động nhận MESSAGE_CREATE trên toàn bộ DMs và các kênh Server!
                             try:
-                                subs_map = {}
-                                for g_obj in (d_ev.get("guilds") or [])[:60]:
-                                    if isinstance(g_obj, dict) and g_obj.get("id"):
-                                        subs_map[str(g_obj["id"])] = {"typing": True, "threads": True, "activities": False}
-                                if subs_map:
-                                    op37_pkt = json.dumps({"op": 37, "d": {"subscriptions": subs_map}}).encode("utf-8")
-                                    ZaloRealtimeListener._send_ws_frame(sock, op37_pkt, opcode=0x1)
-                                for pc_obj in (d_ev.get("private_channels") or [])[:8]:
+                                for pc_obj in (d_ev.get("private_channels") or [])[:15]:
                                     if isinstance(pc_obj, dict) and pc_obj.get("id"):
                                         DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS[self.acc_id].add(str(pc_obj["id"]))
+                                for g_obj in (d_ev.get("guilds") or [])[:10]:
+                                    if isinstance(g_obj, dict):
+                                        for ch_obj in (g_obj.get("channels") or [])[:3]:
+                                            if isinstance(ch_obj, dict) and ch_obj.get("type") in (0, 5) and ch_obj.get("id"):
+                                                DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS[self.acc_id].add(str(ch_obj["id"]))
                             except Exception:
                                 pass
                             self.ws_status = "NHK Discord Ghost Vault (0ms Toàn Kênh)"
@@ -16935,7 +17229,7 @@ input[type="password"]:focus{border-color:var(--accent)}
 </head>
 <body>
 <div class="login-card">
-  <div class="badge">● AUTHOR: DEV ANH KHÔI • v2026.9.0 ULTRA VIP</div>
+  <div class="badge">● AUTHOR: DEV ANH KHÔI • v2026.12.0 ULTRA VIP</div>
   <h1>BOT TREO 4APP 🇻🇳 — DEV ANH KHÔI</h1>
   <p class="sub">Hệ thống điều phối Đa Tài Khoản Zalo • Discord • Messenger & Tạo Nhãn Dán Sticker Chuẩn Zalo.</p>
   {% if error %}
@@ -17153,10 +17447,10 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
 <body>
 <div class="topbar">
   <div class="brand">
-    <div class="brand-badge">DEV ANH KHÔI • v2026.10.0 ZALO PRO</div>
+    <div class="brand-badge">DEV ANH KHÔI • v2026.12.0 OMNI VIP</div>
     <div class="brand-title">
-      <h1>HỆ THỐNG CHUYÊN ZALO ĐA COOKIE ĐỘC LẬP & STUDIO STICKER API (v2026.10.0 Ultra VIP)</h1>
-      <p>👨‍💻 Author: <b>Dev Anh Khôi</b> • Cookie Nào Tự Sài Cookie Ấy Không Chồng Chéo • API Sticker Zalo • Giải Tán Không Cần Key</p>
+      <h1>SIÊU HỆ THỐNG ĐA NỀN TẢNG ZALO • MESSENGER • DISCORD (v2026.12.0 Ultra VIP)</h1>
+      <p>👨‍💻 Author: <b>Dev Anh Khôi</b> • 12 Nguồn Fake Soạn Tin Messenger • Khiên Anti-Ban Chống Die Cookie 9 Lớp • Lệnh .menu Nhạy 100% Cả 3 App</p>
     </div>
   </div>
   <div class="stats-pills">
@@ -17434,9 +17728,19 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
       <div id="sticker-search-results" style="display:none;margin-bottom:12px;padding:10px;background:#090d16;border:1px solid var(--border);border-radius:10px;max-height:150px;overflow-y:auto"></div>
 
       <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:8px">
-        <div style="font-weight:800;color:#93c5fd;margin-bottom:8px">📂 Quản Lý Kho File Kịch Bản (.txt) & Gửi Lệnh Trực Tiếp</div>
+        <div style="font-weight:800;color:#93c5fd;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+          <span>📂 Quản Lý Kho File (.txt), Test Lệnh .menu & 12 Nguồn Fake Typing</span>
+          <span style="font-size:12px;color:#34d399">Nhạy 100% Zalo • Mess • Discord</span>
+        </div>
+        <div class="btn-row" style="margin-bottom:8px">
+          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.menu')">📋 Bắn .menu Vào Box</button>
+          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.typing on')">⌨️ Bật Fake Typing 12 Nguồn</button>
+          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.typing off')">🛑 Tắt Fake Typing</button>
+          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.ping')">🏓 Check .ping</button>
+          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.nhaygiaitan')">📢 Giải Tán Zalo</button>
+        </div>
         <div style="display:flex;gap:8px;margin-bottom:10px">
-          <input type="text" id="web-cmd-inp" placeholder="Gõ lệnh trực tiếp (VD: .menu, .sticker, .gif, .giaitan Lũ vdanh, .t, .ta)...">
+          <input type="text" id="web-cmd-inp" placeholder="Gõ lệnh trực tiếp (VD: .menu, .typing on, .sticker, .gif, .nhaygiaitan, .t, .ta)...">
           <button class="btn btn-primary" onclick="dispatchWebCommand()" style="white-space:nowrap">⚡ Gửi Lệnh</button>
         </div>
         <details>
@@ -17750,6 +18054,12 @@ async function createAndSendCustomSticker(){
   }
 }
 
+async function quickRunWebCmd(c){
+  const inp = document.getElementById('web-cmd-inp');
+  if(inp){ inp.value = c; }
+  await dispatchWebCommand();
+}
+
 async function dispatchWebCommand(){
   const cmd = (document.getElementById('web-cmd-inp').value || '').trim();
   if(!cmd) return;
@@ -17954,6 +18264,39 @@ def api_zalo_auto_scan_vn_sg_proxy():
 @app.route("/api/network/gateways")
 def api_network_gateways():
     return jsonify(MessagingGatewayDirectory.get_directory_payload())
+
+
+@app.route("/api/messenger/typing_sources", methods=["GET", "POST"])
+def api_messenger_typing_sources():
+    """API tra cứu & kích hoạt 12 Nguồn Fake Soạn Tin Nhắn + Khiên Anti-Ban Cookie Messenger."""
+    if request.method == "GET":
+        return jsonify({
+            "ok": True,
+            "author": APP_AUTHOR,
+            "version": APP_VERSION,
+            "sources_count": len(MessengerClient.MESSENGER_TYPING_SOURCES),
+            "sources": MessengerClient.MESSENGER_TYPING_SOURCES,
+        })
+    data = request.json or {}
+    thread_id = str(data.get("thread_id") or "").strip()
+    enable = bool(data.get("enable", True))
+    accs = get_all_accounts_from_ram(platform="messenger", enabled_only=True)
+    if not accs or not thread_id:
+        return jsonify({"ok": False, "error": "Cần có ít nhất 1 Acc Messenger đang bật và truyền thread_id!"}), 400
+    fired = 0
+    for a in accs[:5]:
+        try:
+            mc = MessengerClient.get_pooled_client(a["cookies"], uid=a.get("uid") or "")
+            if mc.send_typing_mqtt(thread_id, is_typing=enable, multi_source=True):
+                fired += 1
+        except Exception:
+            pass
+    return jsonify({
+        "ok": fired > 0,
+        "fired_accounts": fired,
+        "sources_count": len(MessengerClient.MESSENGER_TYPING_SOURCES),
+        "message": f"Đã {'kích hoạt' if enable else 'tắt'} 12 Nguồn Fake Soạn Tin Nhắn trên {fired} Acc Messenger!"
+    })
 
 
 
