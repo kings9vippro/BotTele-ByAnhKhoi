@@ -4,7 +4,7 @@
 # Version: v2026.9.0 Ultra VIP
 # ==============================================================================
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.9.0 Ultra VIP"
+APP_VERSION = "v2026.10.0 Ultra VIP"
 
 import os
 import re
@@ -1370,6 +1370,40 @@ def extract_imei_and_metadata_flexible(imei_input, raw_cookies=""):
     if m_ua:
         ua = m_ua.group(1).strip()
 
+    # Nếu người dùng chỉ dán mỗi Cookie (chưa có IMEI / z_uuid), tự động tra cứu trong Kho Cookie SQLite hoặc tạo IMEI cố định theo Cookie!
+    if not imei_clean and cookies_dict and (cookies_dict.get("zpw_sek") or cookies_dict.get("zpsid")):
+        sek_probe = str(cookies_dict.get("zpw_sek") or "").strip()
+        sid_probe = str(cookies_dict.get("zpsid") or "").strip()
+        try:
+            if os.path.exists(DEFAULT_DB_PATH):
+                conn_i = sqlite3.connect(DEFAULT_DB_PATH, timeout=5)
+                conn_i.row_factory = sqlite3.Row
+                cur_i = conn_i.cursor()
+                for tbl_q, col_ck in (("zalo_cookie_vault", "cookies_json"), ("accounts", "cookies")):
+                    try:
+                        rows_i = cur_i.execute(f"SELECT imei, {col_ck}, zpw_enk, user_agent FROM {tbl_q} WHERE imei IS NOT NULL AND imei != '' ORDER BY rowid DESC LIMIT 80").fetchall()
+                        for r_i in rows_i:
+                            raw_c_db = str(r_i[col_ck] or "")
+                            if (sek_probe and len(sek_probe) > 12 and sek_probe in raw_c_db) or (sid_probe and len(sid_probe) > 12 and sid_probe in raw_c_db):
+                                imei_clean = str(r_i["imei"]).strip()
+                                if not zpw_enk and r_i["zpw_enk"]:
+                                    zpw_enk = str(r_i["zpw_enk"]).strip()
+                                if not ua and r_i["user_agent"]:
+                                    ua = str(r_i["user_agent"]).strip()
+                                break
+                    except Exception:
+                        pass
+                    if imei_clean:
+                        break
+                conn_i.close()
+        except Exception:
+            pass
+        if not imei_clean:
+            seed_token = sek_probe or sid_probe
+            det_u = str(uuid.uuid5(uuid.NAMESPACE_OID, f"zalo_pc_cookie:{seed_token}"))
+            imei_clean = f"{det_u}-31373432303030303030303030"
+            cookies_dict["z_uuid"] = imei_clean
+
     return imei_clean, cookies_dict, zpw_enk, ua
 
 
@@ -1607,7 +1641,7 @@ _LOGIN_INFO_CACHE = {}
 _LOGIN_INFO_LOCK = threading.RLock()
 
 
-def _lookup_stored_session_by_imei(imei, db_path=""):
+def _lookup_stored_session_by_imei(imei, db_path="", cookies_hint=None):
     """Tra cứu nhanh phiên máy tính đang sống trong RAM (`ZaloPCSessionKeeper` / `_LOGIN_INFO_CACHE`) hoặc SQLite (`zalo_cookie_vault` / `accounts`)
     theo `imei` để tái sử dụng khóa `zpw_enk`, `uid` và `zpw_sek` mới nhất mà KHÔNG gọi lại `getLoginInfo` gây văng phiên!"""
     imei_s = str(imei or "").strip()
@@ -1668,12 +1702,32 @@ def _lookup_stored_session_by_imei(imei, db_path=""):
             if row_a and row_a["zpw_enk"]:
                 c_d = parse_cookies_input_flexible(row_a["cookies"])
                 return {
+                    "imei": imei_s,
                     "zpw_enk": str(row_a["zpw_enk"]),
                     "uid": str(row_a["uid"] or ""),
                     "display_name": str(row_a["name"] or ""),
                     "cookies": c_d,
                     "user_agent": str(row_a["user_agent"] or ""),
                 }
+            if isinstance(cookies_hint, dict) and (cookies_hint.get("zpw_sek") or cookies_hint.get("zpsid")):
+                sek_h = str(cookies_hint.get("zpw_sek") or "").strip()
+                sid_h = str(cookies_hint.get("zpsid") or "").strip()
+                conn2 = sqlite3.connect(eff_db, timeout=8)
+                conn2.row_factory = sqlite3.Row
+                rows_v = conn2.execute("SELECT imei, uid, display_name, cookies_json, zpw_enk, user_agent FROM zalo_cookie_vault ORDER BY updated_at DESC LIMIT 60").fetchall()
+                for rv in rows_v:
+                    cj = str(rv["cookies_json"] or "")
+                    if (sek_h and len(sek_h) > 12 and sek_h in cj) or (sid_h and len(sid_h) > 12 and sid_h in cj):
+                        conn2.close()
+                        return {
+                            "imei": str(rv["imei"] or imei_s),
+                            "zpw_enk": str(rv["zpw_enk"] or ""),
+                            "uid": str(rv["uid"] or ""),
+                            "display_name": str(rv["display_name"] or ""),
+                            "cookies": parse_cookies_input_flexible(cj),
+                            "user_agent": str(rv["user_agent"] or ""),
+                        }
+                conn2.close()
         except Exception:
             pass
     return {}
@@ -1738,9 +1792,9 @@ def exchange_cookies_for_zpw_enk(session_obj, imei, cookie_jar_dict, ua, sec_ch_
 
     user_info_got = {}
     used_comp_name = "Web"
-    comp_candidates = ["Web"]
-    if computer_name and str(computer_name).strip() and str(computer_name).strip() != "Web":
-        comp_candidates.append(str(computer_name).strip()[:36])
+    comp_candidates = ["Web", "Zalo PC"]
+    if computer_name and str(computer_name).strip() and str(computer_name).strip() not in comp_candidates:
+        comp_candidates.insert(1, str(computer_name).strip()[:36])
 
     endpoints = [
         "https://wpa.chat.zalo.me/api/login/getLoginInfo",
@@ -1933,7 +1987,9 @@ def _check_zalo_cookie_imei_live_impl(imei, cookies_input="", zpw_enk="", user_a
     - Nếu là Cookie mới tinh bên ngoài, tự động đổi `zpsid` -> `zpw_sek` -> `zpw_enk`, đăng nhập vào thẳng tài khoản và giữ sống 24/7!"""
     imei_clean, cookies_dict, extracted_enk, extracted_ua = extract_imei_and_metadata_flexible(imei, cookies_input)
 
-    stored = _lookup_stored_session_by_imei(imei_clean, db_path=db_path) if imei_clean else {}
+    stored = _lookup_stored_session_by_imei(imei_clean, db_path=db_path, cookies_hint=cookies_dict) if (imei_clean or cookies_dict) else {}
+    if stored.get("imei") and not imei_clean:
+        imei_clean = str(stored["imei"]).strip()
     if stored.get("cookies"):
         for k_st, v_st in stored["cookies"].items():
             if _is_valid_cookie_val(v_st, k_st) and not _is_valid_cookie_val(cookies_dict.get(k_st), k_st):
@@ -2602,16 +2658,17 @@ class ZaloPCSessionKeeper:
                 frag_buf = bytearray(data)
 
         if opcode in (0x1, 0x2) and data:
+            cmd_id = 0
             if len(data) >= 4 and data[0] != ord("{"):
                 cmd_id = struct.unpack("<H", data[1:3])[0]
                 if cmd_id == 3000:
                     st["ws_backoff_until"] = time.time() + 45.0
                     return False
-            if b'"key"' in data:
+            if cmd_id in (1, 2) or b'"key"' in data or len(st.get("last_key_frames") or []) < 2:
                 kf = st.setdefault("last_key_frames", [])
                 kf.append((opcode, data))
-                if len(kf) > 4:
-                    del kf[:-4]
+                if len(kf) > 6:
+                    del kf[:-6]
             cb_entry = cls._WS_FRAME_CALLBACKS.get(st["imei"])
             if callable(cb_entry):
                 try:
