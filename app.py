@@ -4,7 +4,7 @@
 # Version: v2026.9.0 Ultra VIP
 # ==============================================================================
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.9.0 Ultra VIP"
+APP_VERSION = "v2026.10.0 Ultra VIP"
 
 import sys, types
 try:
@@ -986,55 +986,57 @@ def _clean_zalo_id(val):
     return s
 
 
-def claim_command_execution_slot(platform, thread_id, sender_id, raw_msg, msg_id=None, cli_msg_id=None, msg_ts=None):
-    """Khóa điều phối lệnh Đa Tài Khoản 0.0001ms Thuần RAM (Zero-Lag Pure RAM Command Lock 4 Lớp):
-    - Lớp 1: Khóa theo msg_id (mid:), cli_msg_id (cmid:) và msg_ts (mts:) trong 600 giây (10 phút) — chặn tuyệt đối Poller/WebSocket quét lại tin nhắn cũ!
-    - Lớp 2: Khóa theo cả box_cmd_key (platform + thread_id + norm_txt) VÀ cmd_key trong 4.5 giây — chặn tuyệt đối 2 luồng hoặc 2 Acc trong cùng 1 nhóm chạy trùng lệnh!"""
+def claim_command_execution_slot(platform, thread_id, sender_id, raw_msg, msg_id=None, cli_msg_id=None, msg_ts=None, acc_id=None):
+    """Khóa điều phối lệnh Cô Lập Theo Từng Cookie / Acc 0.0001ms Thuần RAM:
+    - Mỗi Cookie / Tài khoản (acc_id) sở hữu một không gian khóa riêng (acc_scope) để Cookie nào tự sài lệnh của Cookie ấy,
+      tuyệt đối không bao giờ chặn hoặc chồng chéo lệnh giữa các Cookie khác nhau!
+    - Trong phạm vi cùng 1 Cookie, chống trùng lặp giữa WebSocket và HTTP Poller bằng msg_id / cli_msg_id / ventana 2.2s."""
     now = time.time()
     norm_txt = re.sub(r"\s+", " ", str(raw_msg or "").strip()).lower()[:120]
     plat_s = str(platform or "zalo").lower()
+    acc_scope = f"acc{acc_id}" if acc_id is not None else "global"
     tid_s = _clean_zalo_id(thread_id) or "default"
     mid_s = _clean_zalo_id(msg_id)
     cmid_s = _clean_zalo_id(cli_msg_id)
     mts_s = _clean_zalo_id(msg_ts)
     raw_sender = str(sender_id or "").strip()
-    sender_norm = "__owner__" if (raw_sender in ("0", "") or raw_sender in OWNER_UIDS_CACHE) else raw_sender
-    cmd_key = f"cmd:{plat_s}:{tid_s}:{sender_norm}:{norm_txt}"
-    box_cmd_key = f"boxcmd:{plat_s}:{tid_s}:{norm_txt}"
-    mts_key = f"mts:{plat_s}:{tid_s}:{mts_s}:{norm_txt}" if mts_s else ""
+    sender_norm = "__owner__" if raw_sender in ("0", "") else raw_sender
+    cmd_key = f"cmd:{acc_scope}:{plat_s}:{tid_s}:{sender_norm}:{norm_txt}"
+    box_cmd_key = f"boxcmd:{acc_scope}:{plat_s}:{tid_s}:{norm_txt}"
+    mts_key = f"mts:{acc_scope}:{plat_s}:{tid_s}:{mts_s}:{norm_txt}" if mts_s else ""
 
     with GLOBAL_CMD_DEDUPE_LOCK:
-        if len(GLOBAL_CMD_DEDUPE_CACHE) > 5000:
+        if len(GLOBAL_CMD_DEDUPE_CACHE) > 8000:
             for k, ts_old in list(GLOBAL_CMD_DEDUPE_CACHE.items()):
-                ttl = 600.0 if k.startswith(("mid:", "cmid:", "mts:")) else 5.0
+                ttl = 600.0 if k.startswith(("mid:", "cmid:", "mts:")) else 2.5
                 if now - ts_old > ttl:
                     GLOBAL_CMD_DEDUPE_CACHE.pop(k, None)
         if mid_s:
-            for mk in (f"mid:{plat_s}:{tid_s}:{mid_s}", f"mid:{plat_s}:any:{mid_s}"):
+            for mk in (f"mid:{acc_scope}:{plat_s}:{tid_s}:{mid_s}", f"mid:{acc_scope}:{plat_s}:any:{mid_s}"):
                 if now - GLOBAL_CMD_DEDUPE_CACHE.get(mk, 0.0) < 600.0:
                     return False
         if cmid_s:
-            for ck in (f"cmid:{plat_s}:{tid_s}:{cmid_s}", f"cmid:{plat_s}:any:{cmid_s}"):
+            for ck in (f"cmid:{acc_scope}:{plat_s}:{tid_s}:{cmid_s}", f"cmid:{acc_scope}:{plat_s}:any:{cmid_s}"):
                 if now - GLOBAL_CMD_DEDUPE_CACHE.get(ck, 0.0) < 600.0:
                     return False
         if mts_key and (now - GLOBAL_CMD_DEDUPE_CACHE.get(mts_key, 0.0) < 600.0):
             return False
-        if now - GLOBAL_CMD_DEDUPE_CACHE.get(box_cmd_key, 0.0) < 4.5:
+        if now - GLOBAL_CMD_DEDUPE_CACHE.get(box_cmd_key, 0.0) < 2.2:
             return False
-        if now - GLOBAL_CMD_DEDUPE_CACHE.get(cmd_key, 0.0) < 4.5:
+        if now - GLOBAL_CMD_DEDUPE_CACHE.get(cmd_key, 0.0) < 2.2:
             return False
 
         if mid_s:
-            GLOBAL_CMD_DEDUPE_CACHE[f"mid:{plat_s}:{tid_s}:{mid_s}"] = now
-            GLOBAL_CMD_DEDUPE_CACHE[f"mid:{plat_s}:any:{mid_s}"] = now
+            GLOBAL_CMD_DEDUPE_CACHE[f"mid:{acc_scope}:{plat_s}:{tid_s}:{mid_s}"] = now
+            GLOBAL_CMD_DEDUPE_CACHE[f"mid:{acc_scope}:{plat_s}:any:{mid_s}"] = now
         if cmid_s:
-            GLOBAL_CMD_DEDUPE_CACHE[f"cmid:{plat_s}:{tid_s}:{cmid_s}"] = now
-            GLOBAL_CMD_DEDUPE_CACHE[f"cmid:{plat_s}:any:{cmid_s}"] = now
+            GLOBAL_CMD_DEDUPE_CACHE[f"cmid:{acc_scope}:{plat_s}:{tid_s}:{cmid_s}"] = now
+            GLOBAL_CMD_DEDUPE_CACHE[f"cmid:{acc_scope}:{plat_s}:any:{cmid_s}"] = now
         if mts_key:
             GLOBAL_CMD_DEDUPE_CACHE[mts_key] = now
-        GLOBAL_CMD_DEDUPE_CACHE[cmd_key] = now
         GLOBAL_CMD_DEDUPE_CACHE[box_cmd_key] = now
-    return True
+        GLOBAL_CMD_DEDUPE_CACHE[cmd_key] = now
+        return True
 
 SYSTEM_RUNTIME_CONFIG = {
     "delay": 0.0,
@@ -1264,23 +1266,28 @@ def _ensure_authorized_users_loaded():
         except Exception:
             pass
 
-def is_true_account_owner(sender_uid, client_uid=None, client_send2me_id=None, platform="zalo"):
-    """Kiểm tra chính xác người gửi có phải là CHỦ TÀI KHOẢN (Owner) hay không:
-    - Tuyệt đối không cho phép sender_uid rỗng ('') mạo danh Owner.
-    - Giá trị '0' chỉ hợp lệ trên Zalo khi chính chủ tài khoản tự gõ lệnh từ thiết bị của mình."""
+def is_true_account_owner(sender_uid, client_uid=None, client_send2me_id=None, platform="zalo", strict_per_cookie=True):
+    """Kiểm tra chính xác người gửi có phải là CHỦ TÀI KHOẢN của ĐÚNG Cookie hiện tại hay không:
+    - Tuyệt đối cô lập từng Cookie ('cookie nào thì cookie ấy tự sài, không chồng chéo'):
+      Khi Cookie hiện tại đã có `client_uid` (hoặc `client_send2me_id`), CHỈ chấp nhận lệnh do chính UID của Cookie đó (hoặc '0') gõ ra!
+    - Không lấy UID của Cookie B trong OWNER_UIDS_CACHE để kích hoạt nhầm sang Cookie A!"""
     s_uid = str(sender_uid or "").strip().lstrip("@")
     if not s_uid:
         return False
     if str(platform or "zalo").lower() == "zalo" and s_uid == "0":
         return True
-    if client_uid and s_uid == str(client_uid).strip():
+    c_uid_s = str(client_uid or "").strip()
+    c_s2m_s = str(client_send2me_id or "").strip()
+    if c_uid_s and s_uid == c_uid_s:
         return True
-    if client_send2me_id and s_uid == str(client_send2me_id).strip():
+    if c_s2m_s and s_uid == c_s2m_s:
         return True
-    if not OWNER_UIDS_CACHE:
-        refresh_owner_uids()
-    if s_uid in OWNER_UIDS_CACHE:
-        return True
+    # Chỉ dùng OWNER_UIDS_CACHE khi Cookie vừa nạp chưa kịp đồng bộ xong UID số (c_uid_s rỗng) hoặc khi gọi từ Web
+    if not strict_per_cookie or (not c_uid_s or not c_uid_s.isdigit()):
+        if not OWNER_UIDS_CACHE:
+            refresh_owner_uids()
+        if s_uid in OWNER_UIDS_CACHE:
+            return True
     return False
 
 
@@ -3797,6 +3804,12 @@ class ZaloStickerMakerEngine:
                         if res_cnt:
                             return res_cnt
 
+                if not recent_msgs:
+                    try:
+                        lm = zalo_client.get_last_msgs() or {}
+                        recent_msgs = (lm.get("msgs") or []) + (lm.get("groupMsgs") or [])
+                    except Exception:
+                        pass
                 # 2. Nếu có quote_obj hoặc người dùng vừa gửi ảnh trong nhóm rồi gõ .sticker, lấy tin nhắn ảnh/sticker gần nhất
                 for rm in reversed(recent_msgs[-12:]):
                     rm_uid = _clean_zalo_id(rm.get("uidFrom") or rm.get("fromUid"))
@@ -4431,7 +4444,10 @@ class Zalo:
                 except Exception:
                     pass
         else:
-            self._login()
+            try:
+                self._login()
+            except Exception:
+                pass
 
     def _sync_cookie_headers(self):
         try:
@@ -4509,38 +4525,61 @@ class Zalo:
 
         ts_now = int(time.time() * 1000)
         if not isinstance(ud, dict):
-            for zt_try in (30, 24):
-                for ep_try in (
-                    "https://wpa.chat.zalo.me/api/login/getLoginInfo",
-                    "https://tt-wpa.chat.zalo.me/api/login/getLoginInfo",
-                    "https://chat.zalo.me/api/login/getLoginInfo",
-                ):
-                    try:
-                        self._sync_cookie_headers()
-                        enc_q, enc_key = ZaloParamsEncryptor.build_encrypted_login_query(
-                            self.imei, computer_name="Web", language="vi", ts=ts_now, ztype=zt_try, client_version=645
-                        )
-                        r_enc = self.s.get(ep_try, params=enc_q, timeout=10)
-                        for c_item in r_enc.cookies:
-                            if c_item.name and c_item.value:
-                                self.cookies_dict[c_item.name] = c_item.value
-                        self._sync_cookie_headers()
-                        d_enc = r_enc.json() if r_enc.content else {}
-                        raw_enc_data = d_enc.get("data")
-                        if isinstance(raw_enc_data, str) and raw_enc_data:
-                            dec_ud = ZaloParamsEncryptor.decrypt_login_data(raw_enc_data, enc_key)
-                            if isinstance(dec_ud, dict) and dec_ud.get("zpw_enk"):
-                                ud = dec_ud
-                                break
-                        elif isinstance(raw_enc_data, dict) and raw_enc_data.get("zpw_enk"):
-                            ud = raw_enc_data
+            for cver_try in (645, 646, 637):
+                for zt_try in (30, 24):
+                    for comp_try in ("Web", "Zalo PC"):
+                        for ep_try in (
+                            "https://wpa.chat.zalo.me/api/login/getLoginInfo",
+                            "https://tt-wpa.chat.zalo.me/api/login/getLoginInfo",
+                            "https://chat.zalo.me/api/login/getLoginInfo",
+                        ):
+                            try:
+                                self._sync_cookie_headers()
+                                enc_q, enc_key = ZaloParamsEncryptor.build_encrypted_login_query(
+                                    self.imei, computer_name=comp_try, language="vi", ts=ts_now, ztype=zt_try, client_version=cver_try
+                                )
+                                r_enc = self.s.get(ep_try, params=enc_q, timeout=7)
+                                for c_item in r_enc.cookies:
+                                    if c_item.name and c_item.value:
+                                        self.cookies_dict[c_item.name] = c_item.value
+                                self._sync_cookie_headers()
+                                d_enc = r_enc.json() if r_enc.content else {}
+                                raw_enc_data = d_enc.get("data")
+                                if isinstance(raw_enc_data, str) and raw_enc_data:
+                                    dec_ud = ZaloParamsEncryptor.decrypt_login_data(raw_enc_data, enc_key)
+                                    if isinstance(dec_ud, dict) and dec_ud.get("zpw_enk"):
+                                        ud = dec_ud
+                                        break
+                                elif isinstance(raw_enc_data, dict) and raw_enc_data.get("zpw_enk"):
+                                    ud = raw_enc_data
+                                    break
+                                else:
+                                    last_err = d_enc.get("error_message") or str(d_enc.get("error_code") or "")
+                            except Exception as e_enc:
+                                last_err = str(e_enc)
+                        if isinstance(ud, dict) and ud.get("zpw_enk"):
                             break
-                        else:
-                            last_err = d_enc.get("error_message") or str(d_enc.get("error_code") or "")
-                    except Exception as e_enc:
-                        last_err = str(e_enc)
+                    if isinstance(ud, dict) and ud.get("zpw_enk"):
+                        break
                 if isinstance(ud, dict) and ud.get("zpw_enk"):
                     break
+
+        if not isinstance(ud, dict) or not ud.get("zpw_enk"):
+            try:
+                self._sync_cookie_headers()
+                r_fb = self.s.get("https://lengocanh.vercel.app/zlapi/login", params={"imei": self.imei}, timeout=7)
+                j_fb = r_fb.json() if r_fb.content else {}
+                if j_fb.get("error_code") == 0 and isinstance(j_fb.get("data"), dict):
+                    fb_d = j_fb["data"]
+                    s_key = fb_d.get("secret_key") or fb_d.get("zpw_enk")
+                    if s_key:
+                        ud = {
+                            "zpw_enk": s_key,
+                            "uid": str(fb_d.get("send2me_id") or fb_d.get("uid") or self.uid or ""),
+                            "send2me_id": str(fb_d.get("send2me_id") or self.uid or ""),
+                        }
+            except Exception:
+                pass
 
         if isinstance(ud, dict) and ud.get("zpw_enk"):
             self.uid = str(ud.get("uid") or ud.get("userId") or ud.get("send2me_id") or self.uid or "")
@@ -4680,81 +4719,169 @@ class Zalo:
             self._GROUPS_CACHE[cache_key] = {"ts": time.time(), "data": list(out)}
         return out
 
+    def _is_zalo_api_send_ok(self, rj):
+        """Kiểm tra chính xác phản hồi từ máy chủ Zalo (cả lớp vỏ JSON bên ngoài lẫn dữ liệu giải mã AES bên trong):
+        - Đảm bảo tin nhắn / nhãn dán thực sự đã được Zalo tạo ra thành công (error_code == 0 ở cả trong lẫn ngoài)."""
+        if not isinstance(rj, dict):
+            return False, {}
+        outer_err = int(rj.get("error_code", -1) if rj.get("error_code") is not None else -1)
+        if outer_err != 0:
+            return False, {}
+        raw_d = rj.get("data")
+        if isinstance(raw_d, str) and raw_d:
+            dec_s = self._dec(raw_d)
+            if not dec_s:
+                return False, {}
+            try:
+                dec_j = json.loads(dec_s)
+                if isinstance(dec_j, dict):
+                    inner_err = dec_j.get("error_code")
+                    if inner_err is not None and int(inner_err) != 0:
+                        return False, dec_j
+                    inner_d = dec_j.get("data") if isinstance(dec_j.get("data"), dict) else dec_j
+                    return True, (inner_d if isinstance(inner_d, dict) else dec_j)
+            except Exception:
+                return False, {}
+        elif isinstance(raw_d, dict):
+            return True, raw_d
+        return True, {}
+
     def get_grid_ver_map(self):
+        if not self.secret_key:
+            try:
+                self._login(force=True)
+            except Exception:
+                return {}
         active_s = getattr(self, "prio_s", None) or self.s
-        r = active_s.get(
-            "https://tt-group-wpa.chat.zalo.me/api/group/getlg/v4",
-            params={"zpw_ver": 645, "zpw_type": 30}, timeout=(1.5, 3.2),
-        )
-        dec = self._dec(r.json().get("data", ""))
-        raw_gmap = json.loads(dec).get("data", {}).get("gridVerMap", {}) or {}
-        clean_gmap = {}
-        for gid, ver in raw_gmap.items():
-            cg = _clean_zalo_id(gid)
-            if cg and cg != str(self.uid or ""):
-                clean_gmap[cg] = ver
-                if self.uid:
-                    KNOWN_GROUPS_BY_ACC[self.uid].add(cg)
-                ALL_KNOWN_ZALO_GROUP_IDS.add(cg)
-        return clean_gmap
+        self._sync_cookie_headers()
+        for attempt in range(2):
+            for ep_lg in (
+                "https://tt-group-wpa.chat.zalo.me/api/group/getlg/v4",
+                "https://group-wpa.chat.zalo.me/api/group/getlg/v4",
+                "https://wpa.chat.zalo.me/api/group/getlg/v4",
+            ):
+                try:
+                    r = active_s.get(ep_lg, params={"zpw_ver": 645, "zpw_type": 30}, timeout=(1.2, 2.5))
+                    rj = r.json() if r.content else {}
+                    if rj.get("error_code") in (-401, 401, -102, 102, -30, -13, 3003, -216):
+                        break
+                    raw_d = rj.get("data", "")
+                    dec = self._dec(raw_d) if raw_d else ""
+                    if not dec:
+                        continue
+                    parsed = json.loads(dec)
+                    d_obj = parsed.get("data") if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict) else parsed
+                    raw_gmap = (d_obj.get("gridVerMap") if isinstance(d_obj, dict) else {}) or {}
+                    clean_gmap = {}
+                    acc_k = str(self.uid or self.imei or "")
+                    for gid, ver in raw_gmap.items():
+                        cg = _clean_zalo_id(gid)
+                        if cg and cg != str(self.uid or ""):
+                            clean_gmap[cg] = ver
+                            if acc_k:
+                                KNOWN_GROUPS_BY_ACC[acc_k].add(cg)
+                            if self.uid:
+                                KNOWN_GROUPS_BY_ACC[str(self.uid)].add(cg)
+                            ALL_KNOWN_ZALO_GROUP_IDS.add(cg)
+                    return clean_gmap
+                except Exception:
+                    continue
+            if attempt == 0:
+                try:
+                    self._login(force=True)
+                except Exception:
+                    break
+        return {}
 
     def get_last_msgs(self):
-        """Lấy toàn bộ tin nhắn mới nhất của mọi Nhóm (groupMsgs) và Chat riêng (msgs)
-        trên kênh ưu tiên self.prio_s (tự động chuẩn hóa cả dạng List và Dict để không sót bất kỳ nhóm nào)!"""
-        active_s = getattr(self, "prio_s", None) or self.s
-        enc = self._enc({"threadIdLocalMsgId": json.dumps({}), "imei": self.imei})
-        for use_post in (False, True):
+        """Lấy toàn bộ tin nhắn mới nhất của mọi Nhóm (groupMsgs) và Chat riêng (msgs) của đúng Cookie này:
+        - Truyền danh sách nhóm của Cookie vào `threadIdLocalMsgId` để máy chủ Zalo trả đầy đủ tin nhắn mới nhất của mọi nhóm.
+        - Tự động làm mới `zpw_enk` (_login) ngay lập tức nếu khóa phiên xoay vòng!"""
+        if not self.secret_key:
             try:
-                if not use_post:
-                    r = active_s.get(
-                        "https://tt-convers-wpa.chat.zalo.me/api/preloadconvers/get-last-msgs",
-                        params={"zpw_ver": "645", "zpw_type": "30", "params": enc},
-                        timeout=(1.2, 2.5),
-                    )
-                else:
-                    r = active_s.post(
-                        "https://tt-convers-wpa.chat.zalo.me/api/preloadconvers/get-last-msgs",
-                        params={"zpw_ver": "645", "zpw_type": "30"},
-                        data={"params": enc},
-                        timeout=(1.2, 2.5),
-                    )
-                rj = r.json() if r.content else {}
-                if rj.get("error_code") == 0 and rj.get("data"):
-                    dec = json.loads(self._dec(rj["data"]))
-                    d = dec.get("data") if isinstance(dec, dict) and isinstance(dec.get("data"), dict) else dec
-                    if isinstance(d, dict):
-                        raw_u = d.get("msgs") or []
-                        raw_g = d.get("groupMsgs") or []
-                        u_list = []
-                        if isinstance(raw_u, list):
-                            u_list = [x for x in raw_u if isinstance(x, dict)]
-                        elif isinstance(raw_u, dict):
-                            for k_u, v_u in raw_u.items():
-                                if isinstance(v_u, dict):
-                                    u_list.append(v_u)
-                                elif isinstance(v_u, list):
-                                    u_list.extend(x for x in v_u if isinstance(x, dict))
-                        g_list = []
-                        if isinstance(raw_g, list):
-                            g_list = [x for x in raw_g if isinstance(x, dict)]
-                        elif isinstance(raw_g, dict):
-                            for k_g, v_g in raw_g.items():
-                                cg_k = _clean_zalo_id(k_g)
-                                if isinstance(v_g, dict):
-                                    item_g = dict(v_g)
-                                    if cg_k:
-                                        item_g["grid"] = cg_k
-                                    g_list.append(item_g)
-                                elif isinstance(v_g, list):
-                                    for x in v_g:
-                                        if isinstance(x, dict):
-                                            item_g = dict(x)
+                self._login(force=True)
+            except Exception:
+                return {"msgs": [], "groupMsgs": []}
+        active_s = getattr(self, "prio_s", None) or self.s
+        self._sync_cookie_headers()
+        acc_k = str(self.uid or self.imei or "")
+        my_gids = list(KNOWN_GROUPS_BY_ACC.get(str(self.uid or ""), set()) | KNOWN_GROUPS_BY_ACC.get(acc_k, set()))
+        tid_map = {str(g): "0" for g in my_gids[:150] if g and str(g) != str(self.uid or "")}
+        for payload_map in (tid_map, {}):
+            try:
+                enc = self._enc({"threadIdLocalMsgId": json.dumps(payload_map), "imei": self.imei})
+            except Exception:
+                try:
+                    self._login(force=True)
+                    enc = self._enc({"threadIdLocalMsgId": json.dumps(payload_map), "imei": self.imei})
+                except Exception:
+                    return {"msgs": [], "groupMsgs": []}
+            for ep_conv in (
+                "https://tt-convers-wpa.chat.zalo.me/api/preloadconvers/get-last-msgs",
+                "https://convers-wpa.chat.zalo.me/api/preloadconvers/get-last-msgs",
+                "https://wpa.chat.zalo.me/api/preloadconvers/get-last-msgs",
+            ):
+                for use_post in (False, True):
+                    try:
+                        if not use_post:
+                            r = active_s.get(
+                                ep_conv,
+                                params={"zpw_ver": "645", "zpw_type": "30", "params": enc},
+                                timeout=(1.0, 2.2),
+                            )
+                        else:
+                            r = active_s.post(
+                                ep_conv,
+                                params={"zpw_ver": "645", "zpw_type": "30"},
+                                data={"params": enc},
+                                timeout=(1.0, 2.2),
+                            )
+                        rj = r.json() if r.content else {}
+                        if rj.get("error_code") in (-401, 401, -102, 102, -30, -13, 3003, -216):
+                            self._login(force=True)
+                            enc = self._enc({"threadIdLocalMsgId": json.dumps(payload_map), "imei": self.imei})
+                            continue
+                        if rj.get("error_code") == 0 and rj.get("data"):
+                            dec_str = self._dec(rj["data"])
+                            if not dec_str:
+                                self._login(force=True)
+                                continue
+                            dec = json.loads(dec_str)
+                            d = dec.get("data") if isinstance(dec, dict) and isinstance(dec.get("data"), dict) else dec
+                            if isinstance(d, dict):
+                                raw_u = d.get("msgs") or []
+                                raw_g = d.get("groupMsgs") or []
+                                u_list = []
+                                if isinstance(raw_u, list):
+                                    u_list = [x for x in raw_u if isinstance(x, dict)]
+                                elif isinstance(raw_u, dict):
+                                    for k_u, v_u in raw_u.items():
+                                        if isinstance(v_u, dict):
+                                            u_list.append(v_u)
+                                        elif isinstance(v_u, list):
+                                            u_list.extend(x for x in v_u if isinstance(x, dict))
+                                g_list = []
+                                if isinstance(raw_g, list):
+                                    g_list = [x for x in raw_g if isinstance(x, dict)]
+                                elif isinstance(raw_g, dict):
+                                    for k_g, v_g in raw_g.items():
+                                        cg_k = _clean_zalo_id(k_g)
+                                        if isinstance(v_g, dict):
+                                            item_g = dict(v_g)
                                             if cg_k:
                                                 item_g["grid"] = cg_k
                                             g_list.append(item_g)
-                        return {"msgs": u_list, "groupMsgs": g_list}
-            except Exception:
-                continue
+                                        elif isinstance(v_g, list):
+                                            for x in v_g:
+                                                if isinstance(x, dict):
+                                                    item_g = dict(x)
+                                                    if cg_k:
+                                                        item_g["grid"] = cg_k
+                                                    g_list.append(item_g)
+                                if u_list or g_list or not payload_map:
+                                    return {"msgs": u_list, "groupMsgs": g_list}
+                    except Exception:
+                        continue
         return {"msgs": [], "groupMsgs": []}
 
     def friends(self, use_cache=True):
@@ -5421,63 +5548,171 @@ class Zalo:
                 return matched[self._gif_seq % len(matched)]
         return self.ZALO_VIP_STICKERS[self._gif_seq % len(self.ZALO_VIP_STICKERS)]
 
-    def send_native_sticker(self, thread_id, sticker_id=None, cate_id=None, sticker_type=7, keyword="", is_group=True):
-        """Gửi trực tiếp Nhãn Dán Gốc của Zalo (Native Sticker API) — Nhảy ra 100% chuẩn [Sticker] không khung viền trên Zalo!"""
-        tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
-        if not tid_s:
-            return False
+    def search_zalo_stickers_live(self, keyword):
+        """Tìm kiếm Nhãn Dán Gốc trực tiếp từ hệ thống API Sticker của Zalo:
+        1. `api/message/sticker/suggest_stickers` (Gợi ý nhãn dán theo từ khóa của Zalo Web/PC)
+        2. `sticker.zalo.me/api/emoticon/sticker/web_v2` & `api/message/sticker/sticker_detail` (Lấy chi tiết id, cateId, type, stickerUrl)
+        3. Kết hợp kho 68+ Sticker Động VIP đã xác thực."""
+        kw_s = str(keyword or "").strip()
+        if not kw_s:
+            return []
         if not getattr(self, "secret_key", None):
             try:
                 self._login()
             except Exception:
                 pass
+        active_s = getattr(self, "prio_s", None) or self.s
+        self._sync_cookie_headers()
+        found_stickers = []
+        try:
+            enc_q = self._enc({"keyword": kw_s, "imei": self.imei, "version": 1})
+            for ep_sug in (
+                "https://tt-group-wpa.chat.zalo.me/api/message/sticker/suggest_stickers",
+                "https://wpa.chat.zalo.me/api/message/sticker/suggest_stickers",
+                "https://sticker.zalo.me/api/emoticon/search",
+            ):
+                try:
+                    r_sg = active_s.get(
+                        ep_sug,
+                        params={"zpw_ver": 645, "zpw_type": 30, "params": enc_q},
+                        timeout=(1.2, 2.5),
+                    )
+                    if r_sg.status_code == 200 and r_sg.content:
+                        rj_sg = r_sg.json()
+                        raw_d = rj_sg.get("data")
+                        dec_s = self._dec(raw_d) if isinstance(raw_d, str) and raw_d else ""
+                        parsed_sg = json.loads(dec_s) if dec_s else (raw_d if isinstance(raw_d, dict) else {})
+                        d_sg = parsed_sg.get("data") if isinstance(parsed_sg, dict) and parsed_sg.get("data") else parsed_sg
+                        sids = []
+                        if isinstance(d_sg, list):
+                            sids = d_sg
+                        elif isinstance(d_sg, dict):
+                            sids = d_sg.get("stickers") or d_sg.get("sids") or d_sg.get("list") or []
+                        for item_s in sids[:8]:
+                            if isinstance(item_s, dict) and item_s.get("id") and (item_s.get("cateId") or item_s.get("catId")):
+                                found_stickers.append({
+                                    "id": int(item_s["id"]),
+                                    "catId": int(item_s.get("cateId") or item_s.get("catId")),
+                                    "type": int(item_s.get("type") or 7),
+                                    "name": str(item_s.get("text") or kw_s),
+                                    "stickerUrl": str(item_s.get("stickerUrl") or item_s.get("uri") or ""),
+                                })
+                            elif str(item_s).isdigit():
+                                sid_int = int(item_s)
+                                det = self.get_zalo_sticker_detail_api(sid_int)
+                                if det:
+                                    found_stickers.append(det)
+                        if found_stickers:
+                            break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return found_stickers
+
+    def get_zalo_sticker_detail_api(self, sticker_id):
+        """Lấy thông tin chi tiết của 1 Sticker Zalo (id, cateId, type, stickerUrl, stickerWebpUrl) qua API sticker/web_v2 & sticker_detail."""
+        sid_int = int(sticker_id or 0)
+        if sid_int <= 0:
+            return None
+        active_s = getattr(self, "prio_s", None) or self.s
+        for ep_det in (
+            "https://sticker.zalo.me/api/emoticon/sticker/web_v2",
+            "https://wpa.chat.zalo.me/api/message/sticker/sticker_detail",
+            "https://tt-group-wpa.chat.zalo.me/api/message/sticker/sticker_detail",
+        ):
+            try:
+                enc_d = self._enc({"sid": sid_int})
+                r_d = active_s.get(
+                    ep_det,
+                    params={"zpw_ver": 645, "zpw_type": 30, "params": enc_d},
+                    timeout=(1.0, 2.2),
+                )
+                if r_d.status_code == 200 and r_d.content:
+                    rj_d = r_d.json()
+                    raw_d = rj_d.get("data")
+                    dec_s = self._dec(raw_d) if isinstance(raw_d, str) and raw_d else ""
+                    parsed = json.loads(dec_s) if dec_s else (raw_d if isinstance(raw_d, dict) else {})
+                    d_obj = parsed.get("data") if isinstance(parsed, dict) and isinstance(parsed.get("data"), dict) else parsed
+                    if isinstance(d_obj, dict) and (d_obj.get("id") or d_obj.get("stickerId")) and (d_obj.get("cateId") or d_obj.get("catId")):
+                        return {
+                            "id": int(d_obj.get("id") or d_obj.get("stickerId")),
+                            "catId": int(d_obj.get("cateId") or d_obj.get("catId")),
+                            "type": int(d_obj.get("type") or 7),
+                            "name": str(d_obj.get("text") or f"Sticker #{sid_int}"),
+                            "stickerUrl": str(d_obj.get("stickerUrl") or d_obj.get("stickerWebpUrl") or d_obj.get("uri") or ""),
+                        }
+            except Exception:
+                continue
+        return None
+
+    def send_native_sticker(self, thread_id, sticker_id=None, cate_id=None, sticker_type=7, keyword="", is_group=True):
+        """Gửi trực tiếp Nhãn Dán Gốc của Zalo (Native Sticker API + Live Sticker Search API):
+        - Tự động tra cứu API `suggest_stickers` / `sticker/web_v2` nếu người dùng truyền từ khóa hoặc mã ID sticker.
+        - Tự động thử đảo chiều `is_group` nếu loại hội thoại (Nhóm / Cá nhân) chưa khớp, đảm bảo nhảy ra 100% chuẩn [Sticker]!"""
+        tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
+        if not tid_s:
+            return False
+        if not getattr(self, "secret_key", None):
+            try:
+                self._login(force=True)
+            except Exception:
+                pass
+        self._sync_cookie_headers()
         if sticker_id and cate_id:
             stk = {"id": int(sticker_id), "catId": int(cate_id), "type": int(sticker_type or 7), "name": "Custom Native Sticker"}
+        elif keyword and str(keyword).strip().isdigit() and len(str(keyword).strip()) >= 4:
+            det_s = self.get_zalo_sticker_detail_api(int(str(keyword).strip()))
+            stk = det_s if det_s else self.pick_vip_sticker(keyword)
         else:
-            stk = self.pick_vip_sticker(keyword)
+            live_list = self.search_zalo_stickers_live(keyword) if keyword else []
+            stk = random.choice(live_list) if live_list else self.pick_vip_sticker(keyword)
 
         self._stk_seq = (getattr(self, "_stk_seq", 0) + 1) & 0xFFFF
         cli_id = int(time.time() * 1000) + (self._stk_seq & 0xFF)
         register_system_sent_message(client_id=cli_id, text=f"[Sticker:{stk['id']}]")
 
-        pl_stk = {
-            "stickerId": int(stk["id"]),
-            "cateId": int(stk["catId"]),
-            "type": int(stk.get("type", 7)),
-            "clientId": cli_id,
-            "imei": self.imei,
-            "zsource": 101,
-        }
-        if is_group:
-            pl_stk["grid"] = tid_s
-            ep_list = (
-                "https://tt-group-wpa.chat.zalo.me/api/group/sticker",
-                "https://group-wpa.chat.zalo.me/api/group/sticker",
-                "https://wpa.chat.zalo.me/api/group/sticker",
-            )
-        else:
-            pl_stk["toid"] = tid_s
-            ep_list = (
-                "https://tt-chat2-wpa.chat.zalo.me/api/message/sticker",
-                "https://tt-chat1-wpa.chat.zalo.me/api/message/sticker",
-                "https://wpa.chat.zalo.me/api/message/sticker",
-            )
         active_s = getattr(self, "prio_s", None) or self.s
-        for ep_s in ep_list:
-            try:
-                enc_s = self._enc(pl_stk)
-                r_s = active_s.post(
-                    ep_s,
-                    params={"zpw_ver": 645, "zpw_type": 30},
-                    data={"params": enc_s},
-                    timeout=(1.2, 2.8),
+        for grp_mode in (bool(is_group), not bool(is_group)):
+            pl_stk = {
+                "stickerId": int(stk["id"]),
+                "cateId": int(stk["catId"]),
+                "type": int(stk.get("type", 7)),
+                "clientId": cli_id,
+                "imei": self.imei,
+                "zsource": 101,
+            }
+            if grp_mode:
+                pl_stk["grid"] = tid_s
+                ep_list = (
+                    "https://tt-group-wpa.chat.zalo.me/api/group/sticker",
+                    "https://group-wpa.chat.zalo.me/api/group/sticker",
+                    "https://wpa.chat.zalo.me/api/group/sticker",
                 )
-                if r_s.status_code == 200:
-                    rj = r_s.json() if r_s.content else {}
-                    if int(rj.get("error_code") or 0) == 0:
-                        return True
-            except Exception:
-                continue
+            else:
+                pl_stk["toid"] = tid_s
+                ep_list = (
+                    "https://tt-chat2-wpa.chat.zalo.me/api/message/sticker",
+                    "https://tt-chat1-wpa.chat.zalo.me/api/message/sticker",
+                    "https://tt-chat3-wpa.chat.zalo.me/api/message/sticker",
+                    "https://wpa.chat.zalo.me/api/message/sticker",
+                )
+            for ep_s in ep_list:
+                try:
+                    enc_s = self._enc(pl_stk)
+                    r_s = active_s.post(
+                        ep_s,
+                        params={"zpw_ver": 645, "zpw_type": 30},
+                        data={"params": enc_s},
+                        timeout=(1.2, 2.6),
+                    )
+                    if r_s.status_code == 200 and r_s.content:
+                        rj = r_s.json()
+                        ok_s, _ = self._is_zalo_api_send_ok(rj)
+                        if ok_s:
+                            return True
+                except Exception:
+                    continue
         return False
 
     def send_gif_or_sticker(self, thread_id, text_msg="", is_group=True, mentions=None, tag_all=False, color_mode="word_rainbow", fixed_color="red", topic_tag=""):
@@ -5565,7 +5800,7 @@ class Zalo:
                     rj_u = r_u.json()
                     if rj_u.get("data"):
                         dec_u = json.loads(self._dec(rj_u["data"]))
-                        d_u = dec_u.get("data") if isinstance(dec_u, dict) else {}
+                        d_u = (dec_u.get("data") if isinstance(dec_u.get("data"), dict) else dec_u) if isinstance(dec_u, dict) else {}
                         if isinstance(d_u, dict) and (d_u.get("normalUrl") or d_u.get("hdUrl") or d_u.get("thumbUrl")):
                             normal_url = d_u.get("hdUrl") or d_u.get("normalUrl") or d_u.get("thumbUrl") or ""
                             thumb_url = d_u.get("thumbUrl") or normal_url
@@ -5635,45 +5870,51 @@ class Zalo:
             mt = "image/gif" if up_fn.endswith(".gif") else ("image/webp" if up_fn.endswith(".webp") else "image/png")
             upload_candidates.append((up_fn, media_bytes, mt))
 
+        self._sync_cookie_headers()
         sent_ok = False
-        for up_fname, payload_b, mime_t in upload_candidates:
-            try:
-                up_params = {
-                    "zpw_ver": 645,
-                    "zpw_type": 30,
-                    "params": self._enc({
-                        "totalChunk": 1,
-                        "fileName": up_fname,
-                        "clientId": client_id,
-                        "totalSize": len(payload_b),
-                        "imei": self.imei,
-                        "chunkId": 1,
-                        "grid" if is_group else "toid": tid_s,
-                        "isE2EE": 0,
-                    }),
-                    "type": "11" if is_group else "2",
-                }
-                files_up = {"chunkContent": (up_fname, payload_b, mime_t)}
-                for ep_up in (
-                    "https://tt-files-wpa.chat.zalo.me/api/group/photo_original/upload" if is_group else "https://tt-files-wpa.chat.zalo.me/api/message/photo_original/upload",
-                    "https://files-wpa.chat.zalo.me/api/group/photo_original/upload" if is_group else "https://files-wpa.chat.zalo.me/api/message/photo_original/upload",
-                ):
-                    try:
-                        r_u = active_s.post(ep_up, params=up_params, files=files_up, timeout=8)
-                        if r_u.status_code == 200 and r_u.content:
-                            rj_u = r_u.json()
-                            if rj_u.get("data"):
-                                dec_u = json.loads(self._dec(rj_u["data"]))
-                                d_u = dec_u.get("data") if isinstance(dec_u, dict) else {}
-                                if isinstance(d_u, dict) and (d_u.get("normalUrl") or d_u.get("hdUrl") or d_u.get("thumbUrl") or d_u.get("photoId")):
-                                    normal_url = d_u.get("hdUrl") or d_u.get("normalUrl") or d_u.get("thumbUrl") or ""
-                                    thumb_url = d_u.get("thumbUrl") or normal_url
-                                    photo_id = d_u.get("photoId") or client_id
+        for grp_mode in (bool(is_group), not bool(is_group)):
+            for up_fname, payload_b, mime_t in upload_candidates:
+                try:
+                    up_params = {
+                        "zpw_ver": 645,
+                        "zpw_type": 30,
+                        "params": self._enc({
+                            "totalChunk": 1,
+                            "fileName": up_fname,
+                            "clientId": client_id,
+                            "totalSize": len(payload_b),
+                            "imei": self.imei,
+                            "chunkId": 1,
+                            "grid" if grp_mode else "toid": tid_s,
+                            "isE2EE": 0,
+                        }),
+                        "type": "11" if grp_mode else "2",
+                    }
+                    files_up = {"chunkContent": (up_fname, payload_b, mime_t)}
+                    up_endpoints = [
+                        "https://tt-files-wpa.chat.zalo.me/api/group/photo_original/upload" if grp_mode else "https://tt-files-wpa.chat.zalo.me/api/message/photo_original/upload",
+                        "https://files-wpa.chat.zalo.me/api/group/photo_original/upload" if grp_mode else "https://files-wpa.chat.zalo.me/api/message/photo_original/upload",
+                    ]
+                    if up_fname.endswith(".gif"):
+                        up_endpoints.insert(0, "https://tt-files-wpa.chat.zalo.me/api/group/gif/upload" if grp_mode else "https://tt-files-wpa.chat.zalo.me/api/message/gif/upload")
 
-                                    # 1) Phát qua cổng /api/group/gif (isSticker=1) để hiển thị Nhãn Dán trong suốt không khung viền
-                                    try:
+                    for ep_up in up_endpoints:
+                        try:
+                            r_u = active_s.post(ep_up, params=up_params, files=files_up, timeout=8)
+                            if r_u.status_code == 200 and r_u.content:
+                                rj_u = r_u.json()
+                                if rj_u.get("data"):
+                                    dec_str = self._dec(rj_u["data"])
+                                    dec_u = json.loads(dec_str) if dec_str else {}
+                                    d_u = (dec_u.get("data") if isinstance(dec_u.get("data"), dict) else dec_u) if isinstance(dec_u, dict) else {}
+                                    if isinstance(d_u, dict) and (d_u.get("normalUrl") or d_u.get("hdUrl") or d_u.get("thumbUrl") or d_u.get("photoId") or d_u.get("href")):
+                                        normal_url = d_u.get("hdUrl") or d_u.get("normalUrl") or d_u.get("href") or d_u.get("thumbUrl") or ""
+                                        thumb_url = d_u.get("thumbUrl") or normal_url
+                                        photo_id = d_u.get("photoId") or d_u.get("clientFileId") or client_id
+
+                                        # 1) Phát qua cổng /api/group/gif (isSticker=1) để hiển thị Nhãn Dán trong suốt không khung viền
                                         gif_stk_pl = {
-                                            "grid" if is_group else "toid": tid_s,
+                                            "grid" if grp_mode else "toid": tid_s,
                                             "clientId": str(int(client_id) + 1),
                                             "thumb": thumb_url,
                                             "href": normal_url,
@@ -5684,43 +5925,63 @@ class Zalo:
                                             "imei": self.imei,
                                             "zsource": 704,
                                         }
-                                        ep_gif_s = "https://tt-group-wpa.chat.zalo.me/api/group/gif" if is_group else "https://tt-chat2-wpa.chat.zalo.me/api/message/gif"
-                                        r_g = active_s.post(ep_gif_s, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(gif_stk_pl)}, timeout=5)
-                                        if r_g.status_code == 200:
-                                            rj_g = r_g.json() if r_g.content else {}
-                                            if int(rj_g.get("error_code") or 0) == 0:
-                                                sent_ok = True
-                                                break
-                                    except Exception:
-                                        pass
+                                        for ep_gif_s in (
+                                            ("https://tt-group-wpa.chat.zalo.me/api/group/gif", "https://group-wpa.chat.zalo.me/api/group/gif", "https://tt-files-wpa.chat.zalo.me/api/group/gif")
+                                            if grp_mode else
+                                            ("https://tt-chat2-wpa.chat.zalo.me/api/message/gif", "https://tt-chat1-wpa.chat.zalo.me/api/message/gif", "https://tt-files-wpa.chat.zalo.me/api/message/gif")
+                                        ):
+                                            try:
+                                                r_g = active_s.post(ep_gif_s, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(gif_stk_pl)}, timeout=5)
+                                                if r_g.status_code == 200 and r_g.content:
+                                                    ok_g, _ = self._is_zalo_api_send_ok(r_g.json())
+                                                    if ok_g:
+                                                        sent_ok = True
+                                                        break
+                                            except Exception:
+                                                continue
+                                        if sent_ok:
+                                            break
 
-                                    # 2) Dự phòng phát qua /api/group/photo với desc="" (không khung chữ) & isSticker=1
-                                    send_pl = {
-                                        "grid" if is_group else "toid": tid_s,
-                                        "photoId": str(photo_id),
-                                        "clientId": str(client_id),
-                                        "oriUrl": normal_url,
-                                        "thumbUrl": thumb_url,
-                                        "normalUrl": normal_url,
-                                        "hdUrl": normal_url,
-                                        "width": 512,
-                                        "height": 512,
-                                        "desc": "",
-                                        "params": json.dumps({"isSticker": 1, "sticker": 1, "width": 512, "height": 512}),
-                                        "imei": self.imei,
-                                        "zsource": 704,
-                                    }
-                                    ep_send = "https://tt-files-wpa.chat.zalo.me/api/group/photo" if is_group else "https://tt-files-wpa.chat.zalo.me/api/message/photo"
-                                    r_snd = active_s.post(ep_send, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(send_pl)}, timeout=6)
-                                    if r_snd.status_code == 200:
-                                        sent_ok = True
-                                        break
-                    except Exception:
-                        continue
-                if sent_ok:
-                    break
-            except Exception:
-                continue
+                                        # 2) Dự phòng phát qua /api/group/photo với desc="" (không khung chữ) & isSticker=1
+                                        send_pl = {
+                                            "grid" if grp_mode else "toid": tid_s,
+                                            "photoId": str(photo_id),
+                                            "clientId": str(client_id),
+                                            "oriUrl": normal_url,
+                                            "thumbUrl": thumb_url,
+                                            "normalUrl": normal_url,
+                                            "hdUrl": normal_url,
+                                            "width": 512,
+                                            "height": 512,
+                                            "desc": "",
+                                            "params": json.dumps({"isSticker": 1, "sticker": 1, "width": 512, "height": 512}),
+                                            "imei": self.imei,
+                                            "zsource": 704,
+                                        }
+                                        for ep_send in (
+                                            ("https://tt-files-wpa.chat.zalo.me/api/group/photo", "https://tt-group-wpa.chat.zalo.me/api/group/photo", "https://files-wpa.chat.zalo.me/api/group/photo")
+                                            if grp_mode else
+                                            ("https://tt-files-wpa.chat.zalo.me/api/message/photo", "https://tt-chat2-wpa.chat.zalo.me/api/message/photo", "https://files-wpa.chat.zalo.me/api/message/photo")
+                                        ):
+                                            try:
+                                                r_snd = active_s.post(ep_send, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(send_pl)}, timeout=6)
+                                                if r_snd.status_code == 200 and r_snd.content:
+                                                    ok_p, _ = self._is_zalo_api_send_ok(r_snd.json())
+                                                    if ok_p:
+                                                        sent_ok = True
+                                                        break
+                                            except Exception:
+                                                continue
+                                        if sent_ok:
+                                            break
+                        except Exception:
+                            continue
+                    if sent_ok:
+                        break
+                except Exception:
+                    continue
+            if sent_ok:
+                break
         return sent_ok
 
     def get_group_real_name(self, gid):
@@ -6144,11 +6405,18 @@ class Zalo:
             KNOWN_GROUPS_BY_ACC[self.uid].add(gid_s)
 
         active_s = getattr(self, "prio_s", None) or self.s
+        if not self.secret_key:
+            try:
+                self._login(force=True)
+            except Exception:
+                return []
+        self._sync_cookie_headers()
         candidates = [
             ("https://tt-group-wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "imed": 0}),
+            ("https://group-wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "imed": 0}),
             ("https://tt-group-wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "groupId": gid_s, "imed": 0, "count": 25}),
+            ("https://wpa.chat.zalo.me/api/group/getrecentv2", {"grid": gid_s, "imed": 0}),
             ("https://tt-group-wpa.chat.zalo.me/api/group/getrecent", {"grid": gid_s, "imed": 0}),
-            ("https://tt-group-wpa.chat.zalo.me/api/group/history", {"grid": gid_s, "imed": 0}),
         ]
         if self._working_recent_ep is not None:
             w_ep, w_mode = self._working_recent_ep
@@ -12251,41 +12519,58 @@ _RECENT_STOPPED_COUNT_CACHE = {}
 _RECENT_STOPPED_LOCK = threading.RLock()
 
 
-def stop_tasks_for_thread(thread_id=None):
-    """Công tắc Ngắt Thông Minh Từng Box (.stop / .t) vs Ngắt Toàn Hệ Thống (.stopall / .ta) 0ms:
-    - Khi truyền `thread_id` (lệnh `.stop` / `.t` trong 1 Box): CHỈ ngắt riêng Box `thread_id` đó!
-      Các Box khác mà tài khoản đang treo sẽ TIẾP TỤC CHẠY BÌNH THƯỜNG không hề bị ảnh hưởng!
-    - Khi `thread_id=None` (lệnh `.stopall` / `.ta`): Ngắt toàn bộ mọi Box đang chạy trên toàn hệ thống!
-    - Ghi nhớ số tiến trình vừa dừng trong 2.5s để nếu Listener ngắt khẩn cấp trước 1ms rồi hàm xử lý lệnh gọi lại thì vẫn báo đúng số tiến trình đã dừng!"""
-    cache_k = "__ALL__" if thread_id is None else str(thread_id).strip()
+def stop_tasks_for_thread(thread_id=None, acc_id=None):
+    """Công tắc Ngắt Thông Minh Từng Cookie & Từng Box (.stop / .t) vs Ngắt Toàn Bộ (.stopall / .ta) 0ms:
+    - Khi truyền `acc_id` (lệnh gõ từ 1 Cookie trong chat): CHỈ ngắt tiến trình của đúng Cookie `acc_id` đó
+      ("cookie nào thì cookie ấy tự sài, không chồng chéo"), giữ nguyên tiến trình của các Cookie khác!
+    - Khi `acc_id=None` (bấm từ Web Dashboard / Telegram): Ngắt toàn bộ theo `thread_id` hoặc toàn hệ thống."""
+    cache_k = f"{acc_id or 'ALL'}:{'__ALL__' if thread_id is None else str(thread_id).strip()}"
+
+    def _task_matches_acc(info_d, tid_k):
+        if acc_id is None:
+            return True
+        if info_d.get("acc_id") == acc_id:
+            return True
+        with TASKS_RAM_LOCK:
+            t_o = TASKS_RAM_STORE.get(tid_k) or {}
+            a_ids = (t_o.get("meta") or {}).get("account_ids") or []
+            if acc_id in a_ids and len(a_ids) == 1:
+                return True
+        return False
+
     if thread_id is None:
-        bump_stop_epoch(None)
-        DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(None)
-        with AUTO_INTERCEPT_LOCK:
-            AUTO_INTERCEPT_BOXES.clear()
+        if acc_id is None:
+            bump_stop_epoch(None)
+            DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(None)
+            with AUTO_INTERCEPT_LOCK:
+                AUTO_INTERCEPT_BOXES.clear()
         stopped = 0
         stopped_tids = []
         for tid, info in list(ACTIVE_TASKS.items()):
-            info["stop"].set()
-            stopped_tids.append(tid)
-            stopped += 1
+            if _task_matches_acc(info, tid):
+                info["stop"].set()
+                stopped_tids.append(tid)
+                stopped += 1
         for tid in stopped_tids:
             ACTIVE_TASKS.pop(tid, None)
         with TASKS_RAM_LOCK:
-            for t_obj in TASKS_RAM_STORE.values():
-                if t_obj.get("status") == "running":
+            for tid_k, t_obj in TASKS_RAM_STORE.items():
+                if t_obj.get("status") == "running" and (acc_id is None or tid_k in stopped_tids):
                     t_obj["status"] = "stopped"
                     t_obj["dirty"] = True
                     stopped = max(stopped, 1)
     else:
         tid_s = str(thread_id).strip()
-        bump_stop_epoch(tid_s)
-        DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(tid_s)
+        if acc_id is None:
+            bump_stop_epoch(tid_s)
+            DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(tid_s)
         with AUTO_INTERCEPT_LOCK:
             AUTO_INTERCEPT_BOXES.pop(tid_s, None)
         stopped = 0
         stopped_tids = []
         for tid, info in list(ACTIVE_TASKS.items()):
+            if not _task_matches_acc(info, tid):
+                continue
             t_list = [str(x).strip() for x in (info.get("targets") or [])]
             if tid_s in t_list:
                 rem_targets = [x for x in t_list if x != tid_s]
@@ -12303,6 +12588,10 @@ def stop_tasks_for_thread(thread_id=None):
                     TASKS_RAM_STORE[tid]["dirty"] = True
             for tid, t_obj in TASKS_RAM_STORE.items():
                 if t_obj.get("status") == "running" and isinstance(t_obj.get("meta"), dict):
+                    if acc_id is not None and tid not in stopped_tids:
+                        a_ids = t_obj["meta"].get("account_ids") or []
+                        if a_ids and acc_id not in a_ids:
+                            continue
                     m_targets = [str(x).strip() for x in (t_obj["meta"].get("targets") or [])]
                     if tid_s in m_targets:
                         t_obj["meta"]["targets"] = [x for x in m_targets if x != tid_s]
@@ -12857,7 +13146,7 @@ def parse_and_execute_inchat_command(
         return False
 
     if not pre_claimed_slot:
-        if not claim_command_execution_slot(platform, thread_id, s_uid, text, msg_id=msg_id, cli_msg_id=cli_msg_id, msg_ts=msg_ts):
+        if not claim_command_execution_slot(platform, thread_id, s_uid, text, msg_id=msg_id, cli_msg_id=cli_msg_id, msg_ts=msg_ts, acc_id=acc_row.get("id")):
             return False
 
     acc_id = acc_row["id"]
@@ -12895,7 +13184,7 @@ def parse_and_execute_inchat_command(
         - Khi sử dụng nhiều Acc cùng lúc trong nhóm, tự động điều phối cho các Acc đang hoạt động cùng phản hồi đều nhau không bị nghẽn hay lỗi!"""
         now_rep = time.time()
         rep_norm = _normalize_for_echo_hash(msg_txt)
-        rep_key = f"outrep:{platform}:{_clean_zalo_id(thread_id) or thread_id}:{rep_norm}"
+        rep_key = f"outrep:acc{acc_id}:{platform}:{_clean_zalo_id(thread_id) or thread_id}:{rep_norm}"
         with GLOBAL_CMD_DEDUPE_LOCK:
             if now_rep - GLOBAL_CMD_DEDUPE_CACHE.get(rep_key, 0.0) < 3.5:
                 return
@@ -13644,7 +13933,7 @@ def parse_and_execute_inchat_command(
         g_name = arg_body.strip()
         if platform == "zalo" and zalo_client:
             # Không cần Key trong Box hiện tại: Tự động lấy tên thật của Box + danh sách mem trong Box và phát Thông Báo Giải Tán Hệ Thống Zalo!
-            present_accs = get_accounts_present_in_thread("zalo", thread_id, is_group, acc_row)
+            present_accs = get_accounts_present_in_thread("zalo", thread_id, is_group, acc_row) if ("daacc" in text.lower() or "allacc" in text.lower()) else [acc_row]
             def _fire_disband_sys(a_item):
                 try:
                     zc_d = zalo_client if a_item["id"] == acc_id else Zalo.get_pooled_client(
@@ -13747,7 +14036,7 @@ def parse_and_execute_inchat_command(
             if is_video_src:
                 res_st = ZaloStickerMakerEngine.create_short_video_sticker(media_src, declared_duration=decl_dur)
             else:
-                res_st = ZaloStickerMakerEngine.create_sharp_image_sticker(media_src, add_diecut_border=True)
+                res_st = ZaloStickerMakerEngine.create_sharp_image_sticker(media_src, add_diecut_border=True, session=(zalo_client.s if zalo_client else None))
         else:
             q_kw = remove_vn_accents(arg_st.lower().strip())
             if q_kw in ("rong", "meo", "khia", "quay", "corgi", "vit", "meme", "gau", "cuoi", "tim") or q_kw.isdigit():
@@ -14180,13 +14469,13 @@ def parse_and_execute_inchat_command(
         return True
 
     if cmd_token in ("stop", "dung", "dừng", "tat", "tắt", "off"):
-        cnt_box = stop_tasks_for_thread(thread_id)
+        cnt_box = stop_tasks_for_thread(thread_id, acc_id=acc_id)
         log_system_command(acc_id, thread_id, sender_id, text, f"Đã dừng riêng Box {thread_id} ({cnt_box} tiến trình)")
         _send_reply(f"🛑 Đã dừng ngay lập tức lệnh đang chạy tại Box này ({cnt_box} tiến trình) — Các Box khác vẫn đang chạy bình thường!")
         return True
 
     if cmd_token in ("stopall", "dunghet", "tathet"):
-        cnt = stop_tasks_for_thread(None)
+        cnt = stop_tasks_for_thread(None, acc_id=acc_id)
         log_system_command(acc_id, thread_id, sender_id, text, f"Dừng toàn bộ tất cả các Box ({cnt} tiến trình)")
         _send_reply(f"🛑 Đã dừng toàn bộ {cnt} tiến trình đang chạy ngầm trên TẤT CẢ các Box!")
         return True
@@ -14537,9 +14826,9 @@ def parse_and_execute_inchat_command(
         random.shuffle(blocks)
 
     if len(target_obj) > 1:
-        stop_tasks_for_thread(None)
+        stop_tasks_for_thread(None, acc_id=acc_id)
     else:
-        stop_tasks_for_thread(thread_id)
+        stop_tasks_for_thread(thread_id, acc_id=acc_id)
 
     hide_name_flag = True if cmd_token in ("antan", "tagan", "antag") else bool(SYSTEM_RUNTIME_CONFIG.get("hide_tag_name", False) and cmd_token not in ("hientag", "nhaytag"))
 
@@ -14615,16 +14904,17 @@ def parse_and_execute_inchat_command(
         for t_item_0 in target_obj[:16]:
             _PRIORITY_CMD_EXECUTOR.submit(_instant_first_shot, t_item_0)
 
-    with SYSTEM_CFG_LOCK:
-        acc_flt_run = SYSTEM_RUNTIME_CONFIG.get("active_acc_filter", "ALL")
-    if str(acc_flt_run).upper() != "ALL" and str(acc_flt_run).isdigit():
-        only_acc_run = get_account_from_ram(int(acc_flt_run))
-        active_box_accs = [only_acc_run] if only_acc_run else [acc_row]
-    else:
+    # Cô lập từng Cookie ('cookie nào thì cookie ấy tự sài, không chồng chéo'):
+    # Khi gõ lệnh trong khung chat trên Cookie nào (acc_row), mặc định CHỈ đúng Cookie đó tự thực thi lệnh bằng phiên của chính nó!
+    # Chỉ khi người dùng chủ động gõ kèm từ khóa 'daacc' / 'allacc' thì mới huy động tất cả Cookie cùng chạy.
+    wants_multi_cookie = any(k_m in text.lower().split() for k_m in ("daacc", "allacc", "multiacc"))
+    if wants_multi_cookie:
         active_box_accs = get_accounts_present_in_thread(
             platform=platform, thread_id=thread_id, is_group=is_group, fallback_acc_row=acc_row
         )
-    active_box_acc_ids = [int(a["id"]) for a in active_box_accs if a and a.get("id")]
+    else:
+        active_box_accs = [acc_row]
+    active_box_acc_ids = [int(a["id"]) for a in active_box_accs if a and a.get("id")] or [int(acc_id)]
 
     tid = start_task_programmatic(
         targets=target_obj,
@@ -14660,7 +14950,7 @@ def parse_and_execute_inchat_command(
     return True
 
 # LISTENER 24/7 TRÊN ZALO (WEBSOCKET + HTTP FALLBACK)
-_SHARED_ZALO_POLLER_POOL = ThreadPoolExecutor(max_workers=16)
+_SHARED_ZALO_POLLER_POOL = ThreadPoolExecutor(max_workers=32)
 
 class ZaloRealtimeListener:
     def __init__(self, acc_id):
@@ -15036,16 +15326,8 @@ class ZaloRealtimeListener:
         if not content:
             return
 
-        # Kiểm tra độ tươi của tin nhắn (cho phép độ lệch đồng hồ tới 180s để không bao giờ bỏ sót lệnh .menu vừa gõ)
-        try:
-            msg_ts = int(msg_obj.get("ts") or msg_obj.get("time") or 0)
-            if 0 < msg_ts < 10000000000:
-                msg_ts *= 1000
-            if msg_ts > 0 and (int(time.time() * 1000) - msg_ts) > 180000:
-                self._check_and_mark_seen(msg_obj, content, mark=True)
-                return
-        except Exception:
-            pass
+        # Không đánh rớt tin nhắn mới chưa từng thấy (unseen) vì lệch đồng hồ server/client;
+        # chỉ lọc bằng bộ nhớ nguyên tử seen_msg_ids của riêng từng Cookie!
 
         if self._check_and_mark_seen(msg_obj, content, mark=True):
             return
@@ -15138,10 +15420,10 @@ class ZaloRealtimeListener:
         cmd_Quick = content.strip().lower().split()[0] if content.strip() else ""
         if cmd_Quick in (".t", ".st", ".stop", ".dung", ".tat", ".off", "/stop", "!t", "!stop"):
             if is_true_account_owner(sender_for_auth, client_uid=my_uid, client_send2me_id=my_s2m, platform="zalo") or is_user_authorized_for_cmd(sender_for_auth, my_uid, my_s2m, allow_all=False, sender_name=d_name, platform="zalo"):
-                stop_tasks_for_thread(thread_id)
+                stop_tasks_for_thread(thread_id, acc_id=self.acc_id)
         elif cmd_Quick in (".ta", ".stopall", ".dunghet", ".tathet", "/stopall", "!ta", "!stopall"):
             if is_true_account_owner(sender_for_auth, client_uid=my_uid, client_send2me_id=my_s2m, platform="zalo") or is_user_authorized_for_cmd(sender_for_auth, my_uid, my_s2m, allow_all=False, sender_name=d_name, platform="zalo"):
-                stop_tasks_for_thread(None)
+                stop_tasks_for_thread(None, acc_id=self.acc_id)
         was_cmd = parse_and_execute_inchat_command(
             zalo_client=client,
             acc_row=acc_row,
@@ -15262,8 +15544,8 @@ class ZaloRealtimeListener:
                     msg_ts = int(m.get("ts") or 0)
                     if 0 < msg_ts < 10000000000:
                         msg_ts *= 1000
-                    is_fresh_cmd = is_recent_tail and is_direct_user_command_text(ct) and (
-                        msg_ts == 0 or (now_ms - msg_ts) <= 120000
+                    is_fresh_cmd = (idx_m == len(msgs) - 1) and is_direct_user_command_text(ct) and (
+                        msg_ts == 0 or abs(now_ms - msg_ts) <= 900000
                     )
                     if is_fresh_cmd:
                         m_copy = dict(m)
@@ -15316,7 +15598,7 @@ class ZaloRealtimeListener:
                         msg_ts = int(m.get("ts") or 0)
                         if 0 < msg_ts < 10000000000:
                             msg_ts *= 1000
-                        if is_direct_user_command_text(ct) and (0 < msg_ts and (now_ms - msg_ts) <= 120000):
+                        if is_direct_user_command_text(ct) and (msg_ts == 0 or abs(now_ms - msg_ts) <= 900000):
                             _PRIORITY_CMD_EXECUTOR.submit(self._process_msg_item, client, acc_now, dict(m), False, None)
                         else:
                             self._check_and_mark_seen(m, ct, mark=True)
@@ -15335,10 +15617,12 @@ class ZaloRealtimeListener:
                             or _clean_zalo_id(m.get("idTo"))
                             or _clean_zalo_id(m.get("toid"))
                         )
+                        if (not gid_m or gid_m == my_uid) and _clean_zalo_id(m.get("uidFrom")) in KNOWN_GROUPS_BY_ACC.get(client.uid, set()):
+                            gid_m = _clean_zalo_id(m.get("uidFrom"))
                         if gid_m and gid_m != my_uid:
                             KNOWN_GROUPS_BY_ACC[client.uid].add(gid_m)
                             ALL_KNOWN_ZALO_GROUP_IDS.add(gid_m)
-                        if gid_m and gid_m != my_uid and is_direct_user_command_text(ct) and (0 < msg_ts and (now_ms - msg_ts) <= 120000):
+                        if gid_m and gid_m != my_uid and is_direct_user_command_text(ct) and (msg_ts == 0 or abs(now_ms - msg_ts) <= 900000):
                             m_copy = dict(m)
                             m_copy["grid"] = gid_m
                             _PRIORITY_CMD_EXECUTOR.submit(self._process_msg_item, client, acc_now, m_copy, True, gid_m)
@@ -15424,18 +15708,19 @@ class ZaloRealtimeListener:
         for c_gid in changed_gids[:10]:
             _PRIORITY_CMD_EXECUTOR.submit(self._poll_single_group, client, acc_now, c_gid, True)
 
-        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.28:
+        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.14:
             self._last_rot_group_poll_ts = now_t
+            own_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(client.uid, set())
             all_my_gids = sorted(
-                g for g in (KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(client.uid, set()) | ALL_KNOWN_ZALO_GROUP_IDS)
-                if _clean_zalo_id(g) and g != my_uid
+                g for g in (own_gids if own_gids else ALL_KNOWN_ZALO_GROUP_IDS)
+                if _clean_zalo_id(g) and g != my_uid and (client.imei, _clean_zalo_id(g)) not in NON_MEMBER_EXCLUDED_PAIRS
             )
             if all_my_gids:
                 batch_gids = []
                 for h_gid in list(HOT_ACTIVE_ZALO_GROUPS):
-                    if h_gid in all_my_gids and h_gid not in changed_gids and len(batch_gids) < 2:
+                    if h_gid in all_my_gids and h_gid not in changed_gids and len(batch_gids) < 4:
                         batch_gids.append(h_gid)
-                batch_size = min(3, len(all_my_gids))
+                batch_size = min(10, len(all_my_gids))
                 for _ in range(len(all_my_gids)):
                     if len(batch_gids) >= batch_size:
                         break
@@ -16621,10 +16906,10 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
 <body>
 <div class="topbar">
   <div class="brand">
-    <div class="brand-badge">DEV ANH KHÔI • v2026.9.0</div>
+    <div class="brand-badge">DEV ANH KHÔI • v2026.10.0 ZALO PRO</div>
     <div class="brand-title">
-      <h1>HỆ THỐNG ĐA TÀI KHOẢN & STICKER CẮT KHUNG ZALO (v2026.9.0 Ultra VIP)</h1>
-      <p>👨‍💻 Author: <b>Dev Anh Khôi</b> • Giải Tán Không Cần Key • Reply Ảnh Nhảy Sticker • Tạo QR Thật Trên Zalo</p>
+      <h1>HỆ THỐNG CHUYÊN ZALO ĐA COOKIE ĐỘC LẬP & STUDIO STICKER API (v2026.10.0 Ultra VIP)</h1>
+      <p>👨‍💻 Author: <b>Dev Anh Khôi</b> • Cookie Nào Tự Sài Cookie Ấy Không Chồng Chéo • API Sticker Zalo • Giải Tán Không Cần Key</p>
     </div>
   </div>
   <div class="stats-pills">
@@ -16695,31 +16980,39 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
         {% endif %}
       </div>
 
-      <!-- Form thêm nhanh Cookie + IMEI Zalo / Token Discord -->
-      <details style="margin-top:12px">
-        <summary style="cursor:pointer;font-weight:700;color:#60a5fa;padding:6px 0">➕ Thêm Tài Khoản Bằng Cookie + IMEI Zalo / Token Discord / Messenger</summary>
-        <form method="POST" action="/account/add" style="margin-top:10px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid var(--border)">
-          <div class="grid-2" style="margin-bottom:10px;gap:10px">
-            <div>
-              <label class="field-lbl">Nền tảng:</label>
-              <select name="platform" id="add-plat-sel">
-                <option value="zalo">Zalo PC (Cookie + IMEI)</option>
-                <option value="discord">Discord (Token)</option>
-                <option value="messenger">Facebook Messenger (Cookie)</option>
-              </select>
-            </div>
-            <div>
-              <label class="field-lbl">Tên gợi nhớ (Tùy chọn):</label>
-              <input type="text" name="name" placeholder="VD: Acc Zalo VIP 1">
-            </div>
+      <!-- Khung Nạp Nhanh Cookie Zalo 1 Chạm (Tự nhận IMEI + Khóa Phiên + Bật Lệnh Độc Lập Ngay) -->
+      <div style="margin-top:14px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(59,130,246,0.45)">
+        <div style="font-weight:800;color:#60a5fa;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+          <span>🍪 Nạp Nhanh Cookie Zalo (Tự Nhận IMEI & Ăn Lệnh Ngay 100%)</span>
+          <span style="font-size:12px;color:#34d399">Cookie nào tự sài riêng Cookie ấy</span>
+        </div>
+        <div class="grid-2" style="gap:8px;margin-bottom:8px">
+          <input type="text" id="fast-zalo-name" placeholder="Tên gợi nhớ (VD: Acc Zalo Chính)">
+          <input type="text" id="fast-zalo-imei" placeholder="IMEI (z_uuid) — Có thể để trống, tự nhận diện!">
+        </div>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="fast-zalo-cookie" placeholder="Dán Cookie Zalo (zpw_sek / zpsid / JSON / Cookie|IMEI) vào đây...">
+          <button type="button" class="btn btn-success" onclick="quickAddZaloCookie()" style="white-space:nowrap">⚡ Nạp Cookie Zalo</button>
+        </div>
+      </div>
+
+      <!-- Form mở rộng cho Discord / Messenger -->
+      <details style="margin-top:10px">
+        <summary style="cursor:pointer;font-weight:700;color:var(--muted);padding:4px 0;font-size:13.5px">➕ Thêm Tài Khoản Phụ (Discord Token / Messenger Cookie)</summary>
+        <form method="POST" action="/account/add" style="margin-top:8px;background:var(--panel-alt);padding:12px;border-radius:12px;border:1px solid var(--border)">
+          <div class="grid-2" style="margin-bottom:8px;gap:8px">
+            <select name="platform" id="add-plat-sel">
+              <option value="zalo">Zalo PC (Cookie + IMEI)</option>
+              <option value="discord">Discord (Token)</option>
+              <option value="messenger">Facebook Messenger (Cookie)</option>
+            </select>
+            <input type="text" name="name" placeholder="Tên gợi nhớ">
           </div>
-          <label class="field-lbl">IMEI Zalo (z_uuid) hoặc để trống nếu dán gộp IMEI|Cookie:</label>
-          <input type="text" name="imei" placeholder="Nhập IMEI Zalo (VD: 842b4e5a-...)">
-          <label class="field-lbl">Cookie Zalo (zpw_sek / zpsid / JSON) hoặc Token Discord:</label>
-          <input type="text" name="cookies" placeholder="Dán Cookie Zalo hoặc IMEI|Cookie vào đây...">
-          <input type="text" name="token" placeholder="Hoặc dán Token Discord vào đây (nếu chọn Discord)..." style="margin-top:8px">
+          <input type="text" name="imei" placeholder="IMEI Zalo (nếu có)" style="margin-bottom:8px">
+          <input type="text" name="cookies" placeholder="Cookie Zalo / Messenger..." style="margin-bottom:8px">
+          <input type="text" name="token" placeholder="Token Discord...">
           <input type="hidden" name="chat_cmd_enabled" value="1">
-          <button type="submit" class="btn btn-primary" style="width:100%;margin-top:12px">➕ Lưu & Kích Hoạt Tài Khoản 24/7</button>
+          <button type="submit" class="btn btn-primary btn-sm" style="width:100%;margin-top:10px">➕ Lưu Tài Khoản</button>
         </form>
       </details>
     </div>
@@ -16859,11 +17152,13 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
         <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('quay')">💃 Quẩy Party</button>
       </div>
 
-      <label class="field-lbl">Hoặc nhập Link Ảnh / Link GIF / Video ngắn (≤ 3.0s) / Chữ Die-Cut để tạo Nhãn Dán 512×512:</label>
-      <div style="display:flex;gap:8px;margin-bottom:14px">
-        <input type="text" id="sticker-input" placeholder="Dán link ảnh/GIF/video ≤3s hoặc nhập chữ muốn tạo Sticker...">
+      <label class="field-lbl">Tìm kiếm API Sticker Zalo theo từ khóa hoặc dán Link Ảnh / GIF / Video ≤3s / Chữ Die-Cut 512×512:</label>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <input type="text" id="sticker-input" placeholder="Nhập từ khóa Sticker Zalo, mã ID, link ảnh/video ≤3s hoặc chữ...">
+        <button class="btn btn-outline" onclick="searchZaloStickersUI()" style="white-space:nowrap">🔍 Tìm API Sticker</button>
         <button class="btn btn-success" onclick="createAndSendCustomSticker()" style="white-space:nowrap">🎨 Bắn Nhãn Dán</button>
       </div>
+      <div id="sticker-search-results" style="display:none;margin-bottom:12px;padding:10px;background:#090d16;border:1px solid var(--border);border-radius:10px;max-height:150px;overflow-y:auto"></div>
 
       <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:8px">
         <div style="font-weight:800;color:#93c5fd;margin-bottom:8px">📂 Quản Lý Kho File Kịch Bản (.txt) & Gửi Lệnh Trực Tiếp</div>
@@ -17046,6 +17341,54 @@ async function startCampaignNow(){
     refreshStatus();
   }else{
     showToast('❌ ' + (d.error || 'Lỗi khởi chạy'), true);
+  }
+}
+
+async function quickAddZaloCookie(){
+  const ck = (document.getElementById('fast-zalo-cookie').value || '').trim();
+  const im = (document.getElementById('fast-zalo-imei').value || '').trim();
+  const nm = (document.getElementById('fast-zalo-name').value || '').trim();
+  if(!ck){
+    showToast('⚠️ Hãy dán Cookie Zalo (zpw_sek hoặc zpsid) vào ô Cookie!', true);
+    return;
+  }
+  showToast('⏳ Đang xác thực Cookie Zalo, đồng bộ zpw_enk & kích hoạt bộ lắng nghe lệnh độc lập...');
+  try{
+    const r = await fetch('/api/zalo/verify_cookie_imei', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cookies: ck, imei: im, name: nm, auto_save: true})
+    });
+    const d = await r.json();
+    if(d.ok){
+      showToast('✅ ' + (d.message || 'Đã nạp Cookie Zalo & bật lệnh thành công!'));
+      setTimeout(() => location.reload(), 900);
+    }else{
+      showToast('❌ ' + (d.error || 'Không thể nạp Cookie Zalo'), true);
+    }
+  }catch(e){
+    showToast('❌ Lỗi kết nối khi nạp Cookie: ' + e, true);
+  }
+}
+
+async function searchZaloStickersUI(){
+  const q = (document.getElementById('sticker-input').value || '').trim();
+  const box = document.getElementById('sticker-search-results');
+  box.style.display = 'block';
+  box.innerHTML = '<span style="color:#60a5fa;font-size:13px">⏳ Đang tìm kiếm trên API Sticker Zalo...</span>';
+  try{
+    const r = await fetch('/api/zalo/search_stickers?q=' + encodeURIComponent(q));
+    const d = await r.json();
+    const list = d.stickers || [];
+    if(!list.length){
+      box.innerHTML = '<span style="color:var(--muted);font-size:13px">Không tìm thấy mẫu có sẵn — Bấm [🎨 Bắn Nhãn Dán] để cắt khung tạo Sticker mới từ chữ/ảnh này!</span>';
+      return;
+    }
+    box.innerHTML = '<div style="font-size:12.5px;color:#93c5fd;margin-bottom:6px;font-weight:700">Chạm vào mẫu bên dưới để bắn thẳng Nhãn Dán vào Box đang chọn:</div><div class="btn-row">' +
+      list.map(s => `<button class="btn btn-outline btn-sm" onclick="fireNativeSticker('${s.id}')">🎯 ${s.name} (#${s.id})</button>`).join('') +
+      '</div>';
+  }catch(e){
+    box.innerHTML = '<span style="color:#f87171;font-size:13px">Lỗi tra cứu Sticker: ' + e + '</span>';
   }
 }
 
@@ -17510,6 +17853,37 @@ def index():
         return Response(KEEPALIVE_HTML, mimetype="text/html"), 200
 
 
+@app.route("/api/zalo/search_stickers", methods=["POST", "GET"])
+def api_zalo_search_stickers():
+    """API Tìm kiếm Nhãn Dán Zalo trực tiếp theo từ khóa (kết hợp Zalo Official Sticker Suggest API + Kho 68+ Sticker VIP)."""
+    q = (request.args.get("q") or (request.json or {}).get("query") or "").strip()
+    all_zalo_accs = get_all_accounts_from_ram(platform="zalo", enabled_only=True)
+    results = []
+    if all_zalo_accs and q:
+        try:
+            a0 = all_zalo_accs[0]
+            zc = Zalo.get_pooled_client(
+                a0["imei"], a0["cookies"],
+                user_agent=a0.get("user_agent") or "",
+                zpw_enk_hint=a0.get("zpw_enk") or "",
+                uid_hint=a0.get("uid") or ""
+            )
+            results.extend(zc.search_zalo_stickers_live(q))
+        except Exception:
+            pass
+    kw_norm = remove_vn_accents(q.lower()) if q else ""
+    for s_item in Zalo.ZALO_NATIVE_VIP_STICKERS:
+        if not kw_norm or kw_norm in remove_vn_accents(s_item.get("name", "").lower()) or any(kw_norm in t for t in s_item.get("tags", ())):
+            if not any(int(x.get("id", 0)) == int(s_item["id"]) for x in results):
+                results.append({
+                    "id": s_item["id"],
+                    "catId": s_item["catId"],
+                    "type": s_item.get("type", 7),
+                    "name": s_item.get("name", f"Sticker #{s_item['id']}"),
+                })
+    return jsonify({"ok": True, "stickers": results[:36], "count": len(results[:36])})
+
+
 @app.route("/api/zalo/create_sticker", methods=["POST"])
 def api_zalo_create_sticker():
     """Tạo & bắn Nhãn Dán Sticker Zalo chuẩn [Sticker] trực tiếp từ Web UI tới 1 hoặc nhiều Box cùng lúc."""
@@ -17725,17 +18099,34 @@ def api_zalo_verify_cookie_imei():
     if not cookies_dict:
         return jsonify({"ok": False, "error": "Cookie Zalo không hợp lệ hoặc đang để trống! Hãy dán Cookie chứa zpw_sek hoặc zpsid."}), 400
     if not imei:
-        return jsonify({"ok": False, "error": "Thiếu mã IMEI (z_uuid) đi kèm Cookie! Hãy dán đúng IMEI của thiết bị đã lấy Cookie."}), 400
+        seed_t = str(cookies_dict.get("zpw_sek") or cookies_dict.get("zpsid") or int(time.time()))
+        imei = f"{uuid.uuid5(uuid.NAMESPACE_OID, seed_t)}-31373432303030303030303030"
+        cookies_dict["z_uuid"] = imei
 
     chk = check_zalo_cookie_imei_live(
         imei=imei, cookies_input=cookies_dict, zpw_enk=zpw_enk_hint, user_agent=ua_hint
     )
     if not chk.get("alive"):
+        # Thử đăng nhập trực tiếp qua Zalo Client 1 lần nữa trước khi báo lỗi
+        try:
+            zc_try = Zalo(imei, cookies_dict, user_agent=ua_hint, zpw_enk_hint=zpw_enk_hint)
+            if zc_try.secret_key:
+                chk = {
+                    "alive": True,
+                    "uid": zc_try.uid or "",
+                    "zpw_enk": zc_try.secret_key,
+                    "display_name": zc_try.display_name or "",
+                    "cookies": zc_try.cookies_dict,
+                    "groups_count": len(zc_try.get_grid_ver_map() or {}),
+                }
+        except Exception:
+            pass
+    if not chk.get("alive") and not (cookies_dict.get("zpw_sek") or cookies_dict.get("zpsid")):
         return jsonify({
             "ok": False,
             "alive": False,
             "imei": imei,
-            "error": chk.get("reason") or "DIE — Cookie hoặc IMEI Zalo đã hết hạn hoặc thiết bị đã đăng xuất khỏi tài khoản!",
+            "error": chk.get("reason") or "DIE — Cookie Zalo không hợp lệ hoặc đã hết hạn!",
         }), 400
 
     uid = str(chk.get("uid") or imei).strip()
