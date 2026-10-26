@@ -1,10 +1,10 @@
 # ==============================================================================
 # HỆ THỐNG ĐĂNG NHẬP QR ZALO PC & GIỮ SỐNG PHIÊN 24/7 (ZALO LOGIN ENGINE)
 # Author : Dev Anh Khôi
-# Version: v2026.9.0 Ultra VIP
+# Version: v2026.11.0 Ultra VIP
 # ==============================================================================
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.10.0 Ultra VIP"
+APP_VERSION = "v2026.11.0 Ultra VIP"
 
 import os
 import re
@@ -3019,24 +3019,11 @@ class ZaloPCSessionKeeper:
                     if not tk_st.get("alive", True):
                         continue
                     now = time.time()
-                    if now - tk_st.get("last_ping_ts", 0.0) >= 45.0:
+                    if now - tk_st.get("last_ping_ts", 0.0) >= 180.0:
+                        # Anti-Hack-Flag Discord: Tuyệt đối KHÔNG gọi REST API thiếu X-Super-Properties!
+                        # Giữ trạng thái sống thông qua Gateway WebSocket chính chủ trong app.py.
                         tk_st["last_ping_ts"] = now
                         tk_st["ping_count"] = tk_st.get("ping_count", 0) + 1
-                        try:
-                            r = sess.get(
-                                "https://discord.com/api/v9/users/@me/affinities/users",
-                                headers={
-                                    "Authorization": tk_st["token"],
-                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                                    "Origin": "https://discord.com",
-                                    "Referer": "https://discord.com/channels/@me",
-                                },
-                                timeout=6,
-                            )
-                            if r.status_code == 401:
-                                tk_st["alive"] = False
-                        except Exception:
-                            pass
             except Exception:
                 pass
             time.sleep(25.0)
