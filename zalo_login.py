@@ -1,3 +1,11 @@
+# ==============================================================================
+# HỆ THỐNG ĐĂNG NHẬP QR ZALO PC & GIỮ SỐNG PHIÊN 24/7 (ZALO LOGIN ENGINE)
+# Author : Dev Anh Khôi
+# Version: v2026.9.0 Ultra VIP
+# ==============================================================================
+APP_AUTHOR = "Dev Anh Khôi"
+APP_VERSION = "v2026.9.0 Ultra VIP"
+
 import os
 import re
 import ssl
