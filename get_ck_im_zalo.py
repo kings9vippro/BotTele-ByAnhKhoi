@@ -4,7 +4,7 @@
 # Version: v2026.9.0 Ultra VIP
 # ==============================================================================
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.9.0 Ultra VIP"
+APP_VERSION = "v2026.10.0 Ultra VIP"
 
 import os
 import re
