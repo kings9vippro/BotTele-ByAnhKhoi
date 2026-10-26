@@ -1,3 +1,11 @@
+# ==============================================================================
+# BỘ ĐIỀU KHIỂN TRUNG TÂM BOT TREO ĐA TÀI KHOẢN 4APP VIP 🇻🇳
+# Author : Dev Anh Khôi
+# Version: v2026.9.0 Ultra VIP
+# ==============================================================================
+APP_AUTHOR = "Dev Anh Khôi"
+APP_VERSION = "v2026.9.0 Ultra VIP"
+
 import os
 import re
 import io
@@ -1392,8 +1400,9 @@ class DirectTelegramBotRunner:
         notice_block = f"\n<blockquote>{extra_notice}</blockquote>" if extra_notice else ""
 
         return (
-            f"<b>HỆ THỐNG ĐIỀU PHỐI ĐA ACC 4APP VIP 🇻🇳 — CHÀO {name_clean.upper()}</b> {tg_anim('sparkle', '✨')}\n\n"
+            f"<b>HỆ THỐNG ĐA ACC 4APP VIP 🇻🇳 ({APP_VERSION}) — CHÀO {name_clean.upper()}</b> {tg_anim('sparkle', '✨')}\n\n"
             f"<blockquote>"
+            f"👨‍💻 <b>Author:</b> <code>{APP_AUTHOR}</code>  |  🔖 <b>Version:</b> <code>{APP_VERSION}</code>\n"
             f"👑 <b>Quản Trị Viên:</b> <a href=\"tg://user?id={ROOT_ADMIN_ID}\">@{ROOT_ADMIN_ID} ↗️</a>  |  🎖️ <b>{role_str}</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"🟢 <b>{scope_lbl}:</b> <code>{acc_cnt} Acc Online</code>   •   🚀 <b>Đang chạy:</b> <code>{running_cnt} chiến dịch</code>\n"
