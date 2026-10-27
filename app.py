@@ -1,10 +1,11 @@
 # ==============================================================================
-# SIÊU HỆ THỐNG ĐIỀU PHỐI ĐA TÀI KHOẢN ZALO • DISCORD • MESSENGER • TELEGRAM
+# ZENVYRE — SIÊU HỆ THỐNG ĐIỀU PHỐI ĐA TÀI KHOẢN ZALO • DISCORD • MESSENGER • TELE
 # Author : Dev Anh Khôi
-# Version: v2026.15.0 Ultra VIP
+# Version: v2026.18.0 ZENVYRE ULTRA
 # ==============================================================================
+APP_TITLE = "ZENVYRE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.15.0 Ultra VIP"
+APP_VERSION = "v2026.18.0 ZENVYRE ULTRA"
 
 import sys, types
 try:
@@ -138,7 +139,7 @@ except ImportError:
         return re.sub(r"[^a-zA-Z0-9_.\-]", "_", str(filename or "file.txt"))
 
 # CẤU HÌNH HỆ THỐNG & BẢO MẬT WEB
-APP_TITLE = "NHK"
+APP_TITLE = "ZENVYRE"
 APP_AUTHOR = "Dev Anh Khôi"
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8917587021:AAGnf2uUmNLI1r747luw8BVGi_hr3jBzWpw")
 TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "8827605973")
@@ -615,7 +616,8 @@ def init_db():
         ("uid", "ALTER TABLE accounts ADD COLUMN uid TEXT DEFAULT ''"),
         ("chat_cmd_enabled", "ALTER TABLE accounts ADD COLUMN chat_cmd_enabled INTEGER DEFAULT 1"),
         ("cmd_prefix", "ALTER TABLE accounts ADD COLUMN cmd_prefix TEXT DEFAULT '.'"),
-        ("allow_all_cmd", "ALTER TABLE accounts ADD COLUMN allow_all_cmd INTEGER DEFAULT 1"),
+        ("allow_all_cmd", "ALTER TABLE accounts ADD COLUMN allow_all_cmd INTEGER DEFAULT 0"),
+        ("_lock_auth", "UPDATE accounts SET allow_all_cmd = 0"),
         ("enabled", "ALTER TABLE accounts ADD COLUMN enabled INTEGER DEFAULT 1"),
         ("user_agent", "ALTER TABLE accounts ADD COLUMN user_agent TEXT DEFAULT ''"),
         ("zpw_enk", "ALTER TABLE accounts ADD COLUMN zpw_enk TEXT DEFAULT ''"),
@@ -798,8 +800,8 @@ def refresh_accounts_ram_cache():
         bad_uid_ids = []
         for r in rows:
             d = dict(r)
-            d["chat_cmd_enabled"] = 1
-            d["allow_all_cmd"] = 1
+            d["chat_cmd_enabled"] = int(d.get("chat_cmd_enabled", 1) if d.get("chat_cmd_enabled") is not None else 1)
+            d["allow_all_cmd"] = 0
             if (d.get("platform") or "zalo").lower() == "zalo":
                 u_val = str(d.get("uid") or "").strip()
                 is_fake_ts_uid = (u_val.isdigit() and len(u_val) == 10 and u_val.startswith("17"))
@@ -1064,6 +1066,8 @@ SYSTEM_RUNTIME_CONFIG = {
     "require_file_first": False,
     "active_acc_filter": "ALL",
     "single_reply_mode": True,
+    "custom_colors": ["db342e", "f27806", "f7b503", "15a85f"],
+    "cmd_repeat_count": 2,
 }
 SYSTEM_CFG_LOCK = threading.RLock()
 
@@ -1076,6 +1080,294 @@ SYSTEM_SENT_LOCK = threading.RLock()
 # Chế độ tự động chặn & bám sát mục tiêu (.chan / .bam) 0ms
 AUTO_INTERCEPT_BOXES = {}
 AUTO_INTERCEPT_LOCK = threading.RLock()
+
+
+class CanhTreoWatchdogEngine:
+    """HỆ THỐNG CANH TREO 1P30S SIÊU CHUẨN (90-SECOND BOX INACTIVITY & LAST MESSAGE WATCHDOG):
+    - Cho phép chọn Box cần canh treo (từ Bot Telegram hoặc gõ lệnh `.canhtreo` trong Box).
+    - Giám sát thời gian thực (0.5s/nhịp) mọi tin nhắn trong Box đó để theo dõi:
+      1) Ai vừa nhắn tin nhắn cuối cùng trong Box (Nội dung tin nhắn cuối + Tên + UID + Thời gian).
+      2) Trong vòng 1 phút 30 giây (90s) tiếp theo, nếu đối phương / thành viên trong Box không nhắn tin tiếp theo
+         (hoặc cả Box im lặng đủ 1p30s), lập tức tìm chính xác tin nhắn cuối cùng của Box và bắn THÔNG BÁO KHẨN CẤP
+         về thẳng Bot Telegram cho Admin biết chính xác ở Box nào, ai đã không nhắn tin trong vòng 1p30s kèm tin nhắn cuối cùng!"""
+
+    _LOCK = threading.RLock()
+    _WATCHED_BOXES = {}
+    _DAEMON_STARTED = False
+
+    @classmethod
+    def enable_watch(cls, box_id, box_name="", platform="zalo", acc_id=0, timeout_sec=90.0, notify_chat_id=None):
+        bid = _clean_zalo_id(box_id) or str(box_id or "").strip()
+        if not bid or bid == "ALL":
+            return None
+        now = time.time()
+        with cls._LOCK:
+            existing = cls._WATCHED_BOXES.get(bid) or {}
+            bname = str(box_name or existing.get("box_name") or f"Box #{bid[-6:]}").strip()
+            state = {
+                "box_id": bid,
+                "box_name": bname,
+                "platform": str(platform or existing.get("platform") or "zalo").lower(),
+                "acc_id": int(acc_id or existing.get("acc_id") or 0),
+                "timeout_sec": float(timeout_sec or 90.0),
+                "enabled": True,
+                "started_at": now,
+                "last_activity_ts": now,
+                "last_msg_id": existing.get("last_msg_id") or "",
+                "last_sender_uid": existing.get("last_sender_uid") or "",
+                "last_sender_name": existing.get("last_sender_name") or "Chưa có ai nhắn",
+                "last_msg_text": existing.get("last_msg_text") or "(Đang canh tin nhắn mới...)",
+                "last_msg_time_str": existing.get("last_msg_time_str") or time.strftime("%H:%M:%S"),
+                "participants": dict(existing.get("participants") or {}),
+                "known_members": dict(existing.get("known_members") or {}),
+                "alerted_for_activity_ts": 0.0,
+                "alerts_sent": int(existing.get("alerts_sent") or 0),
+                "notify_chat_id": str(notify_chat_id or existing.get("notify_chat_id") or TELEGRAM_ADMIN_ID).strip(),
+            }
+            cls._WATCHED_BOXES[bid] = state
+        cls.ensure_daemon_started()
+        # Quét ngay tin nhắn cuối cùng hiện có trong Box để nạp tức thì không cần chờ!
+        threading.Thread(target=cls._sync_box_latest_messages, args=(bid,), daemon=True).start()
+        return dict(state)
+
+    @classmethod
+    def disable_watch(cls, box_id=None):
+        with cls._LOCK:
+            if not box_id or str(box_id).upper() == "ALL":
+                cnt = len(cls._WATCHED_BOXES)
+                cls._WATCHED_BOXES.clear()
+                return cnt
+            bid = _clean_zalo_id(box_id) or str(box_id).strip()
+            popped = cls._WATCHED_BOXES.pop(bid, None)
+            return 1 if popped else 0
+
+    @classmethod
+    def get_watched_boxes(cls):
+        with cls._LOCK:
+            now = time.time()
+            out = []
+            for bid, st in cls._WATCHED_BOXES.items():
+                if not st.get("enabled"):
+                    continue
+                d = dict(st)
+                elapsed = max(0.0, now - float(d.get("last_activity_ts") or now))
+                d["silence_sec"] = round(elapsed, 1)
+                d["remaining_sec"] = max(0.0, round(float(d.get("timeout_sec") or 90.0) - elapsed, 1))
+                out.append(d)
+            return out
+
+    @classmethod
+    def record_incoming_message(cls, box_id, sender_uid, sender_name, msg_text, msg_id="", platform="zalo", box_name=""):
+        """Cập nhật tức thì (0.00ms) mỗi khi có bất kỳ ai nhắn tin vào Box đang được Canh Treo."""
+        bid = _clean_zalo_id(box_id) or str(box_id or "").strip()
+        if not bid:
+            return
+        with cls._LOCK:
+            st = cls._WATCHED_BOXES.get(bid)
+            if not st or not st.get("enabled"):
+                return
+            clean_txt = strip_invisible_chars(str(msg_text or "")).strip()
+            if not clean_txt:
+                return
+            now = time.time()
+            s_uid = _clean_zalo_id(sender_uid) or str(sender_uid or "").strip() or "0"
+            s_name = str(sender_name or GLOBAL_USER_NAME_CACHE.get(s_uid) or (f"UID_{s_uid[-4:]}" if s_uid != "0" else "Chủ Acc")).strip()
+            if box_name and not str(box_name).startswith("Box "):
+                st["box_name"] = str(box_name).strip()
+            if msg_id and str(msg_id) == str(st.get("last_msg_id")):
+                return
+            st["last_activity_ts"] = now
+            st["last_msg_id"] = str(msg_id or int(now * 1000))
+            st["last_sender_uid"] = s_uid
+            st["last_sender_name"] = s_name
+            st["last_msg_text"] = clean_txt[:350]
+            st["last_msg_time_str"] = time.strftime("%H:%M:%S %d/%m/%Y", time.localtime(now))
+            st["alerted_for_activity_ts"] = 0.0
+            if s_uid and s_uid != "0":
+                st["participants"][s_uid] = {
+                    "uid": s_uid,
+                    "name": s_name,
+                    "last_ts": now,
+                    "last_msg": clean_txt[:200],
+                    "time_str": time.strftime("%H:%M:%S", time.localtime(now)),
+                }
+                st["known_members"][s_uid] = s_name
+
+    @classmethod
+    def _sync_box_latest_messages(cls, bid):
+        """Chủ động lấy danh sách thành viên & tin nhắn cuối cùng trong Box từ API Zalo để thông tin luôn chuẩn xác 100%."""
+        with cls._LOCK:
+            st = cls._WATCHED_BOXES.get(bid)
+            if not st or not st.get("enabled"):
+                return
+            plat = st.get("platform", "zalo")
+            aid = st.get("acc_id", 0)
+        if plat != "zalo":
+            return
+        try:
+            accs = get_all_accounts_from_ram(platform="zalo", enabled_only=True)
+            acc_row = next((a for a in accs if int(a["id"]) == int(aid)), None) if aid else (accs[0] if accs else None)
+            if not acc_row:
+                return
+            zc = Zalo.get_pooled_client(
+                acc_row["imei"], acc_row["cookies"],
+                user_agent=acc_row.get("user_agent") or "",
+                zpw_enk_hint=acc_row.get("zpw_enk") or "",
+                uid_hint=acc_row.get("uid") or ""
+            )
+            real_gname = zc.get_group_real_name(bid)
+            if real_gname:
+                with cls._LOCK:
+                    if bid in cls._WATCHED_BOXES:
+                        cls._WATCHED_BOXES[bid]["box_name"] = real_gname
+            mems = zc.get_members_full(bid, use_cache=True) or []
+            if mems:
+                with cls._LOCK:
+                    if bid in cls._WATCHED_BOXES:
+                        for m in mems:
+                            mu = _clean_zalo_id(m.get("uid") or m.get("id"))
+                            mn = str(m.get("name") or "").strip()
+                            if mu and mn and mu != str(zc.uid or ""):
+                                cls._WATCHED_BOXES[bid]["known_members"][mu] = mn
+            msgs = zc.get_recent_group_messages(bid) or []
+            if msgs:
+                last_m = msgs[-1]
+                if isinstance(last_m, dict):
+                    mid = _clean_zalo_id(last_m.get("msgId") or last_m.get("globalMsgId") or last_m.get("cliMsgId"))
+                    u_from = _clean_zalo_id(last_m.get("uidFrom") or last_m.get("fromUid")) or "0"
+                    d_name = str(last_m.get("dName") or GLOBAL_USER_NAME_CACHE.get(u_from) or f"UID_{u_from[-4:]}").strip()
+                    rc = last_m.get("content") or last_m.get("message") or last_m.get("msg") or ""
+                    if isinstance(rc, dict):
+                        rc = rc.get("title") or rc.get("text") or rc.get("msg") or "[Media/Sticker]"
+                    clean_c = strip_invisible_chars(str(rc)).strip() or "[Media/Sticker]"
+                    with cls._LOCK:
+                        st_now = cls._WATCHED_BOXES.get(bid)
+                        if st_now and st_now.get("enabled"):
+                            prev_mid = st_now.get("last_msg_id")
+                            if mid and mid != prev_mid:
+                                if prev_mid:
+                                    # Có tin nhắn mới thực sự!
+                                    st_now["last_activity_ts"] = time.time()
+                                    st_now["alerted_for_activity_ts"] = 0.0
+                                st_now["last_msg_id"] = mid
+                                st_now["last_sender_uid"] = u_from
+                                st_now["last_sender_name"] = d_name
+                                st_now["last_msg_text"] = clean_c[:350]
+                                st_now["last_msg_time_str"] = time.strftime("%H:%M:%S %d/%m/%Y")
+                                if u_from and u_from != "0":
+                                    st_now["participants"][u_from] = {
+                                        "uid": u_from,
+                                        "name": d_name,
+                                        "last_ts": st_now["last_activity_ts"],
+                                        "last_msg": clean_c[:200],
+                                        "time_str": time.strftime("%H:%M:%S"),
+                                    }
+        except Exception:
+            pass
+
+    @classmethod
+    def _send_telegram_inactivity_alert(cls, st_snapshot):
+        """Đẩy thông báo Canh Treo 1p30s siêu chi tiết về thẳng Bot Telegram."""
+        try:
+            import get_ck_im_zalo as _tg_mod
+            bot = getattr(_tg_mod, "_BOT_INSTANCE", None)
+            if bot is None:
+                bot = _tg_mod.start_background_telegram_bot(TELEGRAM_BOT_TOKEN)
+            target_chat = st_snapshot.get("notify_chat_id") or getattr(_tg_mod, "ROOT_ADMIN_ID", TELEGRAM_ADMIN_ID)
+            bid = st_snapshot["box_id"]
+            bname = st_snapshot["box_name"]
+            timeout_s = float(st_snapshot.get("timeout_sec") or 90.0)
+            silence_s = round(time.time() - float(st_snapshot.get("last_activity_ts") or time.time()), 1)
+            last_sender = st_snapshot.get("last_sender_name") or "Không rõ"
+            last_uid = st_snapshot.get("last_sender_uid") or "-"
+            last_msg = st_snapshot.get("last_msg_text") or "(Không có nội dung)"
+            last_time = st_snapshot.get("last_msg_time_str") or time.strftime("%H:%M:%S")
+
+            # Xác định danh sách những người trong Box đã im lặng không nhắn tin tiếp theo trong vòng 1p30s
+            now = time.time()
+            silent_people = []
+            parts = st_snapshot.get("participants") or {}
+            known_m = st_snapshot.get("known_members") or {}
+            for p_uid, p_info in parts.items():
+                p_Wait = round(now - float(p_info.get("last_ts") or 0), 1)
+                if p_Wait >= timeout_s - 1.0:
+                    silent_people.append(f"• <b>{p_info['name']}</b> (<code>{p_uid}</code>) — Ngưng nhắn: <b>{int(p_Wait)}s</b> (Tin cuối: <i>{p_info.get('last_msg', '')[:45]}</i>)")
+            for km_uid, km_name in list(known_m.items())[:12]:
+                if km_uid not in parts:
+                    silent_people.append(f"• <b>{km_name}</b> (<code>{km_uid}</code>) — Không nhắn câu nào trong <b>1p30s</b> qua!")
+
+            if not silent_people:
+                silent_people.append(f"• Toàn bộ thành viên trong Box <b>{bname}</b> đã im lặng suốt <b>1 phút 30 giây ({int(silence_s)}s)</b> sau tin nhắn của <b>{last_sender}</b>!")
+
+            silent_block = "\n".join(silent_people[:10])
+            alert_html = (
+                f"🚨 <b>[ZENVYRE CANH TREO 1P30S — PHÁT HIỆN NGƯNG NHẮN!]</b> 🚨\n\n"
+                f"📦 <b>Box đang canh:</b> <b>{bname}</b> (ID: <code>{bid}</code>)\n"
+                f"⏱️ <b>Thời gian không nhắn tiếp:</b> <b>1 phút 30 giây ({silence_s:.0f}s)</b>\n\n"
+                f"🔇 <b>Ai không nhắn tin tiếp theo trong 1p30s:</b>\n"
+                f"<blockquote>{silent_block}</blockquote>\n\n"
+                f"💬 <b>TIN NHẮN CUỐI CÙNG TRONG BOX:</b>\n"
+                f"<blockquote>"
+                f"👤 <b>Người gửi cuối:</b> <b>{last_sender}</b> (UID: <code>{last_uid}</code>)\n"
+                f"🕒 <b>Lúc:</b> <code>{last_time}</code>\n"
+                f"📝 <b>Nội dung tin cuối:</b> <code>{last_msg[:280]}</code>"
+                f"</blockquote>\n"
+                f"⚡ <i>Hệ thống ZENVYRE vẫn đang tiếp tục canh chuẩn từng giây tại Box này!</i>"
+            )
+            kb = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🔄 Xem Trạng Thái Canh Treo", "callback_data": "pickfn:fn_canh_treo"},
+                        {"text": f"🛑 Tắt Canh Box {bid[-4:]}", "callback_data": f"canhtreo_stop:{bid}"},
+                    ]
+                ]
+            }
+            bot.send_text(target_chat, alert_html, reply_markup=kb)
+        except Exception:
+            pass
+
+    @classmethod
+    def ensure_daemon_started(cls):
+        with cls._LOCK:
+            if cls._DAEMON_STARTED:
+                return
+            cls._DAEMON_STARTED = True
+
+        def _watchdog_worker():
+            poll_tick = 0
+            while True:
+                try:
+                    with cls._LOCK:
+                        active_ids = [bid for bid, st in cls._WATCHED_BOXES.items() if st.get("enabled")]
+                    if active_ids:
+                        poll_tick += 1
+                        # Mỗi 1.0s đồng bộ lịch sử mới nhất từ API Zalo cho các Box đang canh treo
+                        if poll_tick % 2 == 0:
+                            for bid in active_ids[:10]:
+                                cls._sync_box_latest_messages(bid)
+                        now = time.time()
+                        to_alert = []
+                        with cls._LOCK:
+                            for bid in active_ids:
+                                st = cls._WATCHED_BOXES.get(bid)
+                                if not st or not st.get("enabled"):
+                                    continue
+                                last_act = float(st.get("last_activity_ts") or st.get("started_at") or now)
+                                t_out = float(st.get("timeout_sec") or 90.0)
+                                if (now - last_act >= t_out) and (st.get("alerted_for_activity_ts") != last_act):
+                                    st["alerted_for_activity_ts"] = last_act
+                                    st["alerts_sent"] = int(st.get("alerts_sent") or 0) + 1
+                                    # Đặt lại mốc để nếu tiếp tục im lặng thêm 1p30s nữa sẽ báo tiếp
+                                    st["last_activity_ts"] = now
+                                    st["alerted_for_activity_ts"] = 0.0
+                                    to_alert.append(dict(st))
+                        for alert_st in to_alert:
+                            threading.Thread(target=cls._send_telegram_inactivity_alert, args=(alert_st,), daemon=True).start()
+                except Exception:
+                    pass
+                time.sleep(0.5)
+
+        threading.Thread(target=_watchdog_worker, daemon=True, name="ZenvyreCanhTreo90s").start()
 
 def _normalize_for_echo_hash(s):
     if not s:
@@ -1122,7 +1414,7 @@ VALID_SYSTEM_CMD_TOKENS = {
     "raid", "r", "auto", "a", "dao", "chao", "hi", "xa", "sieuxa", "xanhom", "combo", "battrinh",
     "ping", "p", "status", "info", "stinfo", "id", "uid", "mem", "tv", "thanhvien",
     "addfile", "taof", "af", "clear", "reset",
-    "delay", "tocdo", "time", "d", "mau", "color", "doimau",
+    "delay", "tocdo", "time", "d", "mau", "color", "doimau", "canhtreo", "canh", "linkbox", "taolink", "linknhom", "getlink", "anh", "treoanh", "nhayanh", "lap",
     "icon", "emoji", "chuto", "heading", "chunho", "cochu", "kieuchu", "font", "antiband", "antiban",
     "chophep", "capquyen", "adduser", "add", "admin",
     "xoaquyen", "deluser", "del", "cam",
@@ -1272,11 +1564,12 @@ def _ensure_authorized_users_loaded():
 ACTIVE_TARGET_BOXES_SET = set()
 
 def is_true_account_owner(sender_uid, client_uid=None, client_send2me_id=None, platform="zalo", strict_per_cookie=False):
-    """Kiểm tra người gửi có phải là CHỦ TÀI KHOẢN (của Cookie hiện tại hoặc trong dàn Acc của chủ hệ thống):
-    - Chấp nhận chính UID của Cookie đó, send2me_id, '0' (trên Zalo), hoặc bất kỳ UID chủ nào trong OWNER_UIDS_CACHE!"""
+    """Kiểm tra NGHIÊM NGẶT người gửi có phải là CHỦ TÀI KHOẢN (Owner):
+    - Chỉ chấp nhận chính UID của Cookie đó, send2me_id, '0' (tin tự gửi trên Zalo), hoặc UID chủ trong OWNER_UIDS_CACHE.
+    - TUYỆT ĐỐI KHÔNG cho phép chuỗi rỗng hoặc người lạ vượt quyền!"""
     s_uid = str(sender_uid or "").strip().lstrip("@")
-    if not s_uid:
-        return True if str(platform or "zalo").lower() in ("zalo", "messenger") else False
+    if not s_uid or s_uid in ("-1", "null", "None", "undefined"):
+        return False
     if str(platform or "zalo").lower() == "zalo" and s_uid == "0":
         return True
     c_uid_s = str(client_uid or "").strip()
@@ -1285,6 +1578,8 @@ def is_true_account_owner(sender_uid, client_uid=None, client_send2me_id=None, p
         return True
     if c_s2m_s and s_uid == c_s2m_s:
         return True
+    if strict_per_cookie:
+        return False
     if not OWNER_UIDS_CACHE:
         refresh_owner_uids()
     if s_uid in OWNER_UIDS_CACHE:
@@ -1292,26 +1587,14 @@ def is_true_account_owner(sender_uid, client_uid=None, client_send2me_id=None, p
     return False
 
 
-def is_user_authorized_for_cmd(sender_uid, client_uid=None, client_send2me_id=None, allow_all=True, sender_name="", platform="zalo", thread_id=None, cmd_token=""):
-    """Kiểm tra quyền thực thi lệnh thông minh trên TẤT CẢ các App (Zalo, Facebook Messenger, Discord):
-    - Cho phép Chủ Acc (Owner), người được cấp quyền (.cp), hoặc khi tài khoản bật allow_all_cmd,
-      hoặc khi gõ lệnh trong các Box đang chạy chiến dịch (như testtbot) để 100% lệnh .menu, .help, .n, .g, .t, .ta luôn phản hồi ngay lập tức!"""
+def is_user_authorized_for_cmd(sender_uid, client_uid=None, client_send2me_id=None, allow_all=False, sender_name="", platform="zalo", thread_id=None, cmd_token=""):
+    """KHÓA BẢO MẬT QUYỀN DÙNG LỆNH TUYỆT ĐỐI 100% (ZENVYRE SECURITY SHIELD):
+    - CHỈ Chủ Tài Khoản (Owner) và người dùng đã được Chủ Tài Khoản trực tiếp cấp quyền bằng lệnh `.cp` mới được phép sử dụng lệnh!
+    - Chặn 100% mọi người lạ trong nhóm dù họ gõ .menu, .n, .g, .t hay bất kỳ lệnh nào khi chưa được .cp!"""
     if is_true_account_owner(sender_uid, client_uid=client_uid, client_send2me_id=client_send2me_id, platform=platform):
         return True
-    if allow_all:
-        return True
-    tid_s = str(thread_id or "").strip()
-    if tid_s and (
-        tid_s in ACTIVE_TARGET_BOXES_SET
-        or tid_s in HOT_ACTIVE_ZALO_GROUPS
-        or any(tid_s in s_set for s_set in MessengerStealthAntiBanEngine.ACTIVE_MESSENGER_POLL_THREADS.values())
-        or any(tid_s in s_set for s_set in DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS.values())
-    ):
-        return True
-    if str(cmd_token or "").lower() in ("menu", "help", "lenh", "hdsd", "m", "h", "ping", "p", "status", "stinfo", "id", "uid", "stop", "t", "st", "stopall", "ta", "ver", "version", "author"):
-        return True
     s_uid = str(sender_uid or "").strip().lstrip("@")
-    if not s_uid or s_uid in ("0", "-1", "null", "None"):
+    if not s_uid or s_uid in ("0", "-1", "null", "None", "undefined"):
         return False
 
     _ensure_authorized_users_loaded()
@@ -1567,8 +1850,11 @@ def strip_leading_line_number(line, preserve_indent=False):
     return cleaned if cleaned else line.strip()
 
 def parse_file_stream_fast(filepath, strip_numbers=True):
+    """Bộ phân tích File Kịch Bản Chuẩn ZENVYRE:
+    - `full_text` (Dành cho Treo Ngôn `.g`): Giữ nguyên 100% toàn bộ văn bản thành 1 dãy duy nhất, kể cả khi ở giữa có dòng trống (cách dòng ở giữa vẫn giữ nguyên trong cùng 1 tin nhắn treo ngôn!).
+    - `lines` (Dành cho Treo Nhây `.n`): Bóc tách từng dòng văn bản rời nhau, mỗi lần gửi đúng 1 dòng chữ duy nhất trong văn bản đó!"""
     if not filepath or not os.path.exists(filepath):
-        return {"blocks": [], "lines": [], "raw_lines": [], "size": 0, "block_count": 0, "line_count": 0}
+        return {"blocks": [], "lines": [], "raw_lines": [], "full_text": "", "size": 0, "block_count": 0, "line_count": 0}
 
     st = os.stat(filepath)
     mtime = st.st_mtime
@@ -1580,10 +1866,9 @@ def parse_file_stream_fast(filepath, strip_numbers=True):
         if cached and cached["mtime"] == mtime and cached["size"] == fsize:
             return cached
 
-    blocks = []
     all_lines = []
     raw_non_empty_lines = []
-    current_block = []
+    full_text_lines = []
 
     with open(filepath, "rb") as f:
         raw_bytes = f.read()
@@ -1596,23 +1881,23 @@ def parse_file_stream_fast(filepath, strip_numbers=True):
         stripped = r_ln.strip()
         if stripped:
             raw_non_empty_lines.append(r_ln)
-            clean_ln = strip_leading_line_number(r_ln, preserve_indent=True) if strip_numbers else clean_corrupted_shortcuts(r_ln)
-            all_lines.append(clean_ln)
-            current_block.append(clean_ln)
+            clean_ln_nhay = strip_leading_line_number(r_ln, preserve_indent=False).strip() if strip_numbers else clean_corrupted_shortcuts(r_ln).strip()
+            clean_ln_ngon = clean_corrupted_shortcuts(r_ln)
+            if clean_ln_nhay:
+                all_lines.append(clean_ln_nhay)
+            full_text_lines.append(clean_ln_ngon)
         else:
-            if current_block:
-                blocks.append("\n".join(current_block))
-                current_block = []
-    if current_block:
-        blocks.append("\n".join(current_block))
+            # Giữ nguyên dòng cách ở giữa cho chế độ Treo Ngôn (treo một dãy có cách ở giữa)
+            full_text_lines.append("")
 
-    if not blocks and all_lines:
-        blocks = list(all_lines)
+    full_text_str = "\n".join(full_text_lines).strip("\r\n")
+    blocks = [full_text_str] if full_text_str else list(all_lines)
 
     result = {
         "mtime": mtime,
         "size": fsize,
         "blocks": blocks,
+        "full_text": full_text_str,
         "lines": all_lines,
         "raw_lines": raw_non_empty_lines,
         "block_count": len(blocks),
@@ -1678,10 +1963,12 @@ def get_blocks_from_file_query(query_val, mode="fast"):
     rec = resolve_file_record(query_val)
     if not rec:
         return []
-    parsed = parse_file_stream_fast(rec["filepath"], strip_numbers=True)
-    if mode == "treo_nhay":
-        return parsed["lines"] if parsed["lines"] else parsed["blocks"]
-    return parsed["blocks"]
+    parsed = parse_file_stream_fast(rec["filepath"], strip_numbers=(mode != "treo_ngon"))
+    if mode == "treo_ngon":
+        ft = parsed.get("full_text") or ""
+        return [ft] if ft.strip() else (parsed["blocks"] or parsed["lines"])
+    # Mặc định cho treo_nhay (.n) và các chế độ nhây từng câu: Mỗi dòng là gửi đúng 1 dòng chữ trong văn bản!
+    return parsed["lines"] if parsed["lines"] else parsed["blocks"]
 
 # HẠ TẦNG ANTI-BAN & ANTI-DIE-ALL SIÊU ĐỈNH CHO CẢ 2 APP (ZALO & DISCORD)
 ZERO_WIDTH_ZALO_POOL = ["\u200b", "\u200c", "\u2060"]
@@ -3782,10 +4069,24 @@ class ZaloStickerMakerEngine:
                 return res
 
         # Nếu người dùng kéo trả lời (Reply) vào 1 bức ảnh vừa gửi nhưng preloadconvers/WS cắt mất attach,
-        # hoặc người dùng vừa gửi ảnh xong gõ .sticker ngay bên dưới -> Quét lịch sử gần nhất của Box để lấy full gói tin ảnh gốc!
+        # hoặc người dùng vừa gửi ảnh xong gõ .sticker ngay bên dưới (kể cả chat 1-1 như 'Tran Phat' hay trong Box nhóm) -> Quét cả lịch sử Nhóm + Chat 1-1!
         if zalo_client and thread_id:
             try:
-                recent_msgs = zalo_client.get_recent_group_messages(thread_id) or []
+                recent_msgs = []
+                try:
+                    recent_msgs.extend(zalo_client.get_recent_group_messages(thread_id) or [])
+                except Exception:
+                    pass
+                try:
+                    if hasattr(zalo_client, "get_recent_dm_messages"):
+                        recent_msgs.extend(zalo_client.get_recent_dm_messages(thread_id) or [])
+                except Exception:
+                    pass
+                try:
+                    lm_all = zalo_client.get_last_msgs() or {}
+                    recent_msgs.extend((lm_all.get("msgs") or []) + (lm_all.get("groupMsgs") or []))
+                except Exception:
+                    pass
                 cur_mid = _clean_zalo_id(msg_obj.get("msgId") or msg_obj.get("globalMsgId"))
                 # 1. Tìm chính xác bản đầy đủ của chính tin nhắn lệnh hiện tại (có chứa quote.attach đầy đủ)
                 for rm in reversed(recent_msgs):
@@ -5904,6 +6205,7 @@ class Zalo:
 
         self._sync_cookie_headers()
         sent_ok = False
+        # Thử gửi qua cổng ZSticker AI / WebP Sticker gốc của Zalo kèm fallback GIF/Photo không viền cho cả chat 1-1 (Tran Phat) và Box Nhóm!
         for grp_mode in (bool(is_group), not bool(is_group)):
             for up_fname, payload_b, mime_t in upload_candidates:
                 try:
@@ -6015,6 +6317,174 @@ class Zalo:
             if sent_ok:
                 break
         return sent_ok
+
+    def get_recent_dm_messages(self, peer_uid):
+        """Lấy lịch sử tin nhắn chat 1-1 (cá nhân) gần nhất để hỗ trợ .sticker khi Reply ảnh trong chat riêng (ví dụ: Tran Phat)."""
+        uid_s = _clean_zalo_id(peer_uid) or str(peer_uid or "").strip()
+        if not uid_s:
+            return []
+        active_s = getattr(self, "prio_s", None) or self.s
+        out_msgs = []
+        for ep_dm, pl_dm in (
+            ("https://tt-chat2-wpa.chat.zalo.me/api/message/history", {"toid": uid_s, "uid": uid_s, "count": 20, "imei": self.imei}),
+            ("https://wpa.chat.zalo.me/api/message/history", {"toid": uid_s, "uid": uid_s, "count": 20, "imei": self.imei}),
+        ):
+            try:
+                r = active_s.post(ep_dm, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(pl_dm)}, timeout=(1.5, 3.0))
+                if r.status_code == 200 and r.content:
+                    dec = self._dec(r.json().get("data", ""))
+                    if dec:
+                        d_obj = json.loads(dec).get("data") or {}
+                        msgs = d_obj.get("msgs") or d_obj.get("data") or (d_obj if isinstance(d_obj, list) else [])
+                        if isinstance(msgs, list) and msgs:
+                            out_msgs.extend([m for m in msgs if isinstance(m, dict)])
+                            break
+            except Exception:
+                continue
+        return out_msgs
+
+    def zsticker_ai_search_and_send(self, thread_id, keyword="haha", is_group=True):
+        """Tích hợp API ZSticker AI chính thức của Zalo (/api/emoticon/sticker/web_v2 & /api/message/sticker/suggest_stickers):
+        - Tự động tìm nhãn dán AI khớp từ khóa hoặc cảm xúc và bắn nhãn dán thật 100% vào khung chat!"""
+        tid_s = _clean_zalo_id(thread_id) or str(thread_id or "").strip()
+        kw = str(keyword or "haha").strip()
+        active_s = getattr(self, "prio_s", None) or self.s
+        found_stickers = []
+        for ep_ai, pl_ai in (
+            ("https://wpa.chat.zalo.me/api/message/sticker/suggest_stickers", {"keyword": kw, "imei": self.imei, "version": 1}),
+            ("https://tt-chat2-wpa.chat.zalo.me/api/message/sticker/suggest_stickers", {"keyword": kw, "imei": self.imei, "version": 1}),
+            ("https://sticker.zalo.me/api/emoticon/sticker/web_v2", {"keyword": kw, "imei": self.imei}),
+        ):
+            try:
+                r = active_s.post(ep_ai, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(pl_ai)}, timeout=(1.5, 3.0))
+                if r.status_code == 200 and r.content:
+                    rj = r.json()
+                    dec = self._dec(rj.get("data", "")) if isinstance(rj.get("data"), str) else json.dumps(rj.get("data") or {})
+                    if dec:
+                        d_obj = json.loads(dec)
+                        cand_list = (
+                            (d_obj.get("data") or {}).get("stickers")
+                            or (d_obj.get("data") if isinstance(d_obj.get("data"), list) else None)
+                            or d_obj.get("stickers")
+                            or []
+                        )
+                        for st_it in cand_list:
+                            if isinstance(st_it, dict) and (st_it.get("id") or st_it.get("stickerId")):
+                                found_stickers.append({
+                                    "sticker_id": int(st_it.get("id") or st_it.get("stickerId")),
+                                    "cate_id": int(st_it.get("cateId") or st_it.get("catId") or 10425),
+                                    "sticker_type": int(st_it.get("type") or st_it.get("stickerType") or 7),
+                                })
+                        if found_stickers:
+                            break
+            except Exception:
+                continue
+        if found_stickers:
+            chosen = random.choice(found_stickers[:8])
+            return self.send_native_sticker(
+                tid_s,
+                sticker_id=chosen["sticker_id"],
+                cate_id=chosen["cate_id"],
+                sticker_type=chosen["sticker_type"],
+                is_group=is_group,
+            )
+        return self.send_native_sticker(tid_s, keyword=kw, is_group=is_group)
+
+    def get_or_create_group_link(self, group_id, regenerate=False):
+        """API Tạo & Lấy Link Box Zalo Siêu Tốc (/api/group/link/detail, /api/group/link/new, /api/group/getmg-v2)."""
+        gid_s = _clean_zalo_id(group_id) or str(group_id or "").strip()
+        if not gid_s:
+            return {"ok": False, "link": "", "error": "Thiếu ID Box Zalo"}
+        if not getattr(self, "secret_key", None):
+            try:
+                self._login()
+            except Exception:
+                pass
+        active_s = getattr(self, "prio_s", None) or self.s
+        g_name = self.get_group_real_name(gid_s) or f"Box #{gid_s[-6:]}"
+        endpoints = []
+        if regenerate:
+            endpoints.extend([
+                ("https://tt-group-wpa.chat.zalo.me/api/group/link/new", {"grid": gid_s, "imei": self.imei}),
+                ("https://group-wpa.chat.zalo.me/api/group/link/new", {"grid": gid_s, "imei": self.imei}),
+            ])
+        endpoints.extend([
+            ("https://tt-group-wpa.chat.zalo.me/api/group/link/detail", {"grid": gid_s, "imei": self.imei}),
+            ("https://group-wpa.chat.zalo.me/api/group/link/detail", {"grid": gid_s, "imei": self.imei}),
+            ("https://tt-group-wpa.chat.zalo.me/api/group/link/new", {"grid": gid_s, "imei": self.imei}),
+            ("https://wpa.chat.zalo.me/api/group/link/detail", {"grid": gid_s, "imei": self.imei}),
+        ])
+        for ep_l, pl_l in endpoints:
+            try:
+                enc_l = self._enc(pl_l)
+                for use_get in (False, True):
+                    if use_get:
+                        r_l = active_s.get(ep_l, params={"zpw_ver": 645, "zpw_type": 30, "params": enc_l}, timeout=(1.5, 3.0))
+                    else:
+                        r_l = active_s.post(ep_l, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc_l}, timeout=(1.5, 3.0))
+                    if r_l.status_code == 200 and r_l.content:
+                        rj_l = r_l.json()
+                        raw_d = rj_l.get("data")
+                        dec_l = self._dec(raw_d) if isinstance(raw_d, str) and raw_d else json.dumps(raw_d or {})
+                        if dec_l:
+                            d_obj = json.loads(dec_l)
+                            inner = d_obj.get("data") if isinstance(d_obj, dict) and isinstance(d_obj.get("data"), dict) else d_obj
+                            if isinstance(inner, dict):
+                                link_u = str(inner.get("link") or inner.get("url") or inner.get("groupLink") or "").strip()
+                                if link_u and ("zalo.me" in link_u or link_u.startswith("http")):
+                                    return {"ok": True, "link": link_u, "group_name": g_name, "group_id": gid_s}
+                            m_url = re.search(r"(https?://zalo\.me/g/[A-Za-z0-9_\-]+)", str(dec_l))
+                            if m_url:
+                                return {"ok": True, "link": m_url.group(1), "group_name": g_name, "group_id": gid_s}
+            except Exception:
+                continue
+        # Dự phòng lấy link từ getmg-v2 gridInfoMap
+        try:
+            enc_mg = self._enc({"gridVerMap": json.dumps({gid_s: 0})})
+            r_mg = active_s.post(
+                "https://tt-group-wpa.chat.zalo.me/api/group/getmg-v2",
+                params={"zpw_ver": 645, "zpw_type": 30},
+                data={"params": enc_mg},
+                timeout=(1.5, 3.0),
+            )
+            if r_mg.status_code == 200 and r_mg.content:
+                dec_mg = self._dec(r_mg.json().get("data", ""))
+                m_url = re.search(r"(https?://zalo\.me/g/[A-Za-z0-9_\-]+)", str(dec_mg))
+                if m_url:
+                    return {"ok": True, "link": m_url.group(1), "group_name": g_name, "group_id": gid_s}
+        except Exception:
+            pass
+        return {"ok": False, "link": "", "group_name": g_name, "group_id": gid_s, "error": "Nhóm chưa bật duyệt link hoặc tài khoản không phải Trưởng/Phó nhóm"}
+
+    def send_photo_from_source_or_card(self, thread_id, image_src=None, caption="", is_group=True):
+        """Chức năng Gửi Ảnh / Treo Ảnh trực tiếp vào Box Zalo (.anh / .nen thay thế hoàn toàn chức năng đổi nền cũ)."""
+        tid_s = _clean_zalo_id(thread_id) or str(thread_id or "").strip()
+        if not tid_s:
+            return False
+        img_bytes = None
+        fname = "zenvyre_photo.png"
+        if image_src:
+            raw_b, fn_b = ZaloStickerMakerEngine.fetch_media_from_url_or_path(image_src, session=self.s)
+            if raw_b:
+                img_bytes = raw_b
+                fname = fn_b or "zenvyre_photo.png"
+        if not img_bytes:
+            # Sử dụng ảnh Banner/Logo ZENVYRE sắc nét hoặc ảnh trong thư mục nếu người dùng không truyền link
+            banner_p = os.path.join(BASE_DIR, "zenvyre_logo.png")
+            if os.path.isfile(banner_p):
+                try:
+                    with open(banner_p, "rb") as rf:
+                        img_bytes = rf.read()
+                except Exception:
+                    pass
+            if not img_bytes and globals().get("ZENVYRE_LOGO_B64"):
+                try:
+                    img_bytes = base64.b64decode(globals()["ZENVYRE_LOGO_B64"])
+                except Exception:
+                    pass
+        if not img_bytes:
+            return False
+        return self.send_raw_photo_message(tid_s, img_bytes, filename=fname, caption=str(caption or ""), is_group=is_group, width=720, height=720)
 
     def get_group_real_name(self, gid):
         """Lấy tên thật hiện tại của Box Zalo (gridInfoMap[gid]['name']) để khi gõ .nhaygiaitan không cần Key
@@ -6161,8 +6631,14 @@ class Zalo:
 
         # Bước 2: Chia toàn bộ thành viên trong nhóm thành các lô (tối đa 48 thành viên/lô) để gửi thông báo giải tán
         # tới 100% TOÀN BỘ THÀNH VIÊN CÓ TRONG NHÓM qua đường API Zalo (/api/group/create -> /api/group/disperse)!
-        batch_size = 48
+        batch_size = 35
         all_batches = [member_uids[i:i + batch_size] for i in range(0, len(member_uids), batch_size)] if member_uids else []
+        if len(member_uids) > 4:
+            # Thêm các lô nhỏ (4 thành viên) dự phòng trường hợp trong nhóm lớn có 1 người khóa quyền thêm nhóm
+            for sub_i in range(0, min(len(member_uids), 16), 4):
+                sub_b = member_uids[sub_i:sub_i + 4]
+                if sub_b and sub_b not in all_batches:
+                    all_batches.append(sub_b)
         if not all_batches and my_uid_s:
             all_batches = [[my_uid_s]]
 
@@ -6254,6 +6730,9 @@ class Zalo:
             if created_grid_batch:
                 disbanded_real_grid = created_grid_batch
                 disbanded_grids_all.append(created_grid_batch)
+                # Chờ 0.30s để máy chủ Push Zalo kịp đồng bộ danh sách thành viên trong nhóm mới tạo trước khi giải tán,
+                # đảm bảo 100% điện thoại của mọi thành viên trong Box đều nhảy thông báo hệ thống 'Nhóm ... đã được giải tán'!
+                time.sleep(0.30)
                 disperse_pl = {"grid": created_grid_batch, "groupId": created_grid_batch, "imei": self.imei}
                 for ep_disp in (
                     "https://tt-group-wpa.chat.zalo.me/api/group/disperse",
@@ -6559,8 +7038,18 @@ class Zalo:
         if color_mode == "none":
             return None
         if color_mode == "fixed" and fixed_color:
+            if "," in str(fixed_color):
+                custom_p = [ZALO_COLOR_MAP.get(c.strip(), c.strip()) for c in str(fixed_color).split(",") if c.strip()]
+                if custom_p:
+                    return custom_p[step_index % len(custom_p)]
             return ZALO_COLOR_MAP.get(fixed_color, "db342e")
-        if color_mode == "fire_gradient":
+        if color_mode == "custom_palette":
+            with SYSTEM_CFG_LOCK:
+                custom_pool = list(SYSTEM_RUNTIME_CONFIG.get("custom_colors") or [])
+            if not custom_pool and fixed_color and "," in str(fixed_color):
+                custom_pool = [ZALO_COLOR_MAP.get(c.strip(), c.strip()) for c in str(fixed_color).split(",") if c.strip()]
+            pool = custom_pool if custom_pool else ZALO_NATIVE_ZCODES
+        elif color_mode == "fire_gradient":
             pool = ZALO_FIRE_ZCODES
         elif color_mode == "ocean_gradient":
             pool = ZALO_OCEAN_ZCODES
@@ -9088,56 +9577,25 @@ class FacebookPCDeviceGuard:
 
     @classmethod
     def notify_pc_login_to_facebook(cls, messenger_client, target_thread_id=None, force=False):
-        """Lấy Thiết Bị Máy Tính vừa kết nối gửi thông báo xác nhận thẳng vào Facebook/Messenger của tài khoản đó:
-        - Giúp Facebook ghi nhận hoạt động Desktop Comet chính chủ (chống quét 'tài khoản bị hack' / Checkpoint).
-        - Đồng thời báo cho người dùng biết Cookie đã ăn và sẵn sàng nhận lệnh .menu, .help, .n, .g, .t, .ta!"""
+        """Khóa Vân Tay Máy Tính Тĩnh (Zero-Checkpoint Passive Desktop Binding):
+        - TUYỆT ĐỐI KHÔNG tự ý bắn tin nhắn văn bản tự động ngay lúc vừa nạp Cookie (nguyên nhân khiến Facebook nghi ngờ chiếm quyền & bắt 'Đổi mật khẩu' như ảnh 9e4e1c82.jpeg).
+        - Chỉ đồng bộ thụ động phiên Desktop Chrome 131 (wd=1920x1080, dpr=1, locale=vi_VN) vào Vault để giữ Cookie sống bền vững 100%!"""
         if not messenger_client or not getattr(messenger_client, "uid", None):
             return False
         uid_s = str(messenger_client.uid).strip()
         now = time.time()
         with cls._LOCK:
-            last_t = cls._NOTIFIED_UIDS.get(uid_s, 0.0)
-            if not force and (now - last_t < 90.0):
-                return True
             cls._NOTIFIED_UIDS[uid_s] = now
-
-        prof = cls.get_pc_profile(uid_s)
-        t_str = time.strftime("%H:%M:%S %d/%m/%Y")
-        notice_msg = (
-            f"💻 [THÔNG BÁO MÁY TÍNH FACEBOOK - ANTI SCAN VIP]\n"
-            f"• Thiết bị kết nối: {prof['pc_name']}\n"
-            f"• Tài khoản: {messenger_client.display_name} (UID: {uid_s})\n"
-            f"• Thời gian: {t_str} ({APP_AUTHOR} • {APP_VERSION})\n"
-            f"• Bảo mật: Đã khóa vân tay Máy Tính Desktop & kích hoạt chống quét Checkpoint 24/7!\n"
-            f"• Trạng thái lệnh (.menu, .help, .n, .g, .nhaypoll, .t, .ta): 🟢 ĐÃ BẬT SẴN SÀNG!"
-        )
-        register_system_sent_message(text=notice_msg)
-
-        notified_ok = False
-        # 1. Gửi thông báo từ Máy Tính vào chính hộp thư cá nhân (uid_s) qua MQTT /ls_req và Desktop Mercury
-        dest_threads = [uid_s]
-        if target_thread_id and str(target_thread_id).strip() and str(target_thread_id).strip() != uid_s:
-            dest_threads.insert(0, str(target_thread_id).strip())
-        else:
-            try:
-                th_list = messenger_client.get_threads(use_cache=True) or []
-                if th_list and th_list[0].get("id"):
-                    first_tid = str(th_list[0]["id"]).strip()
-                    if first_tid and first_tid not in dest_threads:
-                        dest_threads.append(first_tid)
-            except Exception:
-                pass
-
-        for tid_dest in dest_threads[:2]:
-            try:
-                is_grp = (tid_dest != uid_s) and messenger_client._THREAD_TYPE_MAP.get(tid_dest, True)
-                messenger_client.send_message(
-                    tid_dest, notice_msg, is_group=is_grp, antiband=False, is_heading=False, priority_bypass=True
-                )
-                notified_ok = True
-            except Exception:
-                continue
-        return notified_ok
+        try:
+            prof = cls.get_pc_profile(uid_s)
+            messenger_client.cookies_dict.setdefault("wd", prof["wd"])
+            messenger_client.cookies_dict.setdefault("dpr", prof["dpr"])
+            messenger_client.cookies_dict.setdefault("locale", "vi_VN")
+            if hasattr(messenger_client, "_save_vault_state"):
+                messenger_client._save_vault_state()
+        except Exception:
+            pass
+        return True
 
     @classmethod
     def notify_pc_login_to_facebook_async(cls, messenger_client, target_thread_id=None, force=False):
@@ -11778,12 +12236,16 @@ class MessengerClient:
             except Exception:
                 pass
 
-        # Nếu chưa có fb_dtsg thật (đang là NAc_fallback), làm mới ngay lập tức
+        # KHIÊN CHỐNG FACEBOOK BẮT ĐỔI MẬT KHẨU (ZERO-CHECKPOINT):
+        # Khi gói tin đã đi thành công qua socket MQTT /ls_req (Lightspeed WebSocket gốc), trả về True ngay lập tức!
+        # Tuyệt đối KHÔNG gọi bồi thêm HTTP POST song song lên cả facebook.com lẫn messenger.com (nguyên nhân gây cảnh báo 'Ai đó đã truy cập tài khoản -> Đổi mật khẩu')!
+        if mqtt_ok and not priority_bypass:
+            return True
+
         if not self.fb_dtsg or str(self.fb_dtsg).startswith("NAc_fallback"):
             self.last_dtsg_fetch_ts = 0.0
             self._init_session_tokens(force_refresh=True)
 
-        # Kiểm tra xác thực gửi qua HTTP Mercury (đặc biệt bắt buộc cho lệnh .menu / priority_bypass hoặc khi cần chắc chắn 100% vào Box)
         otid = MessengerStealthAntiBanEngine.generate_offline_threading_id()
         register_system_sent_message(msg_id=otid, client_id=otid, text=final_msg)
 
@@ -11818,7 +12280,8 @@ class MessengerClient:
                 data[f"profile_xmd[{idx}][length]"] = str(xm["length"])
                 data[f"profile_xmd[{idx}][type]"] = str(xm.get("type", "p"))
 
-            for dom in ("https://www.facebook.com", "https://www.messenger.com"):
+            # Khóa cố định 1 domain duy nhất (www.facebook.com) để không bị lệch Origin giữa facebook.com và messenger.com
+            for dom in ("https://www.facebook.com",):
                 hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer=f"{dom}/messages/t/{tid_s}")
                 r = self.s.post(f"{dom}/messaging/send/?dpr=1", data=data, headers=hdrs, timeout=12)
                 if r.status_code == 200 and r.text:
@@ -12651,7 +13114,7 @@ def multi_box_shard_worker(client, acc_id, plat, shard_targets, blocks, runtime_
                     elif mode == "nhay_namebox":
                         client.change_group_name(t_id, pkt_text)
                     elif mode == "nhay_theme":
-                        client.change_group_theme(t_id, pkt_text if pkt_text else None, is_group=is_grp)
+                        client.send_photo_from_source_or_card(t_id, image_src=(pkt_text if str(pkt_text).startswith("http") else None), caption=pkt_text, is_group=is_grp)
                     elif mode == "zalo_todo":
                         ass_uids = [m["uid"] for m in tag_users] if tag_users else [client.uid]
                         client.send_todo(t_id, pkt_text, assignees=ass_uids)
@@ -13686,26 +14149,30 @@ def parse_and_execute_inchat_command(
         "tim": "react",
         "accs": "checkacc",
         "dsacc": "checkacc",
+        "canh": "canhtreo",
+        "canhbox": "canhtreo",
+        "canhtreo90s": "canhtreo",
+        "taolink": "linkbox",
+        "linknhom": "linkbox",
+        "getlink": "linkbox",
+        "nen": "anh",
+        "theme": "anh",
+        "setnen": "anh",
+        "doinen": "anh",
+        "treonen": "treoanh",
+        "nhaynen": "treoanh",
+        "nhayanh": "treoanh",
     }
     cmd_token = stealth_alias_map.get(cmd_token, cmd_token)
 
-    # Tự động khóa nhận diện UID chủ tài khoản nếu Acc vừa nạp Cookie + IMEI chưa kịp đồng bộ UID số
-    if platform == "zalo" and (not my_uid or not my_uid.isdigit()) and s_uid and s_uid.isdigit() and cmd_token in VALID_SYSTEM_CMD_TOKENS:
-        my_uid = s_uid
-        if zalo_client:
-            zalo_client.uid = s_uid
-            zalo_client.send2me_id = s_uid
-        OWNER_UIDS_CACHE.add(s_uid)
-        try:
-            conn_u = db()
-            conn_u.execute("UPDATE accounts SET uid=? WHERE id=? AND (uid IS NULL OR uid='' OR uid=imei)", (s_uid, acc_row["id"]))
-            conn_u.commit()
-            conn_u.close()
-            refresh_accounts_ram_cache()
-        except Exception:
-            pass
+    # BẢO MẬT ZENVYRE: Tuyệt đối KHÔNG tự gán người lạ trong nhóm làm my_uid!
+    # Chỉ lấy UID chủ từ chính phiên ZaloClient._login() của Cookie đó!
+    if platform == "zalo" and zalo_client and (not my_uid or not my_uid.isdigit()):
+        if getattr(zalo_client, "uid", None) and str(zalo_client.uid).isdigit():
+            my_uid = str(zalo_client.uid).strip()
+            OWNER_UIDS_CACHE.add(my_uid)
 
-    allow_all_flag = bool(acc_row.get("allow_all_cmd", 1))
+    allow_all_flag = False
     is_true_owner = is_true_account_owner(
         s_uid, client_uid=my_uid, client_send2me_id=my_s2m, platform=platform
     )
@@ -13900,28 +14367,29 @@ def parse_and_execute_inchat_command(
         else:
             help_txt = (
                 f"╔══════════════════════════════════════╗\n"
-                f"  💙 ZALO ULTRA VIP PRO ({APP_VERSION})\n"
-                f"  👑 Author: {APP_AUTHOR} • Đa Cookie Độc Lập\n"
+                f"  🌌 ZENVYRE ULTRA VIP ({APP_VERSION})\n"
+                f"  👑 Author: {APP_AUTHOR} • Lặp lệnh: x2\n"
                 f"  📡 Chế độ: {flt_lbl} • Delay: {cur_d}s\n"
                 f"  📂 File: Nhây=[{nhay_f_now}] • Ngôn=[{ngon_f_now}]\n"
                 f"╚══════════════════════════════════════╝\n"
-                f"┏━━ 1️⃣ STICKER CẮT KHUNG, QR THẬT & GIẢI TÁN ━━┓\n"
-                f"  ▸ .sticker     : Reply ảnh/video ≤3s cắt khung Nhãn Dán\n"
-                f"  ▸ .qr          : Tạo ảnh Mã QR Zalo PC thật ngay tại Box\n"
-                f"  ▸ .gif [chủ đề]: Bắn 68+ Sticker & GIF động (.treosticker)\n"
+                f"┏━━ 1️⃣ ZSTICKER AI, CANH TREO 1P30S & LINK BOX ━━┓\n"
+                f"  ▸ .sticker     : Reply ảnh/video ≤3s tạo ZSticker AI\n"
+                f"  ▸ .canhtreo    : Canh 1p30s ai ngưng nhắn báo về Tele\n"
+                f"  ▸ .linkbox     : Tạo & lấy Link Box Zalo siêu tốc\n"
                 f"  ▸ .nhaygiaitan : Phát thông báo Giải Tán Nhóm chuẩn Zalo\n"
+                f"  ▸ .anh [url]   : Gửi ảnh sắc nét vào Box (.treoanh)\n"
+                f"  ▸ .qr          : Tạo ảnh Mã QR Zalo PC thật tại Box\n"
                 f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-                f"┏━━ 2️⃣ QUẢN LÝ KHO FILE TRỰC TIẾP TRÊN ZALO ━━┓\n"
-                f"  ▸ .addnhay <tên.txt> | <nd> : Thêm File Nhây tại Box\n"
-                f"  ▸ .addngon <tên.txt> | <nd> : Thêm File Ngôn tại Box\n"
-                f"  ▸ .chonfile <số> | .ds      : Chọn & xem kho File .txt\n"
+                f"┏━━ 2️⃣ ĐI MÀU CÙNG CHỌN (.MAU) & KHO FILE ━━┓\n"
+                f"  ▸ .mau <màu 1> <màu 2> : Đi màu cùng chọn (VD: .mau do cam)\n"
+                f"  ▸ .addnhay / .addngon  : Thêm File Nhây/Ngôn tại Box\n"
+                f"  ▸ .chonfile <số> | .ds : Chọn & xem kho File .txt\n"
                 f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-                f"┏━━ 3️⃣ TREO NGÔN, NHÂY & ĐIỀU PHỐI ĐA ACC ━━┓\n"
-                f"  ▸ .n (Nhây) | .g (Ngôn) | .treodo | .damau | .word\n"
-                f"  ▸ .xa | .combo | .2c | .so | .chui | .codelag\n"
-                f"  ▸ .anall (Tag ẩn) | .antan @Tên | .nhaytag | .chan\n"
-                f"  ▸ .nhaypoll | .tenbox | .theme | .todo | .bank | .card\n"
-                f"  ▸ .acc <ID/all> | .checkacc | .d <giây> | .cp @Tên\n"
+                f"┏━━ 3️⃣ TREO NGÔN (1 DÃY), NHÂY (1 DÒNG) & ĐA ACC ━━┓\n"
+                f"  ▸ .g (Treo ngôn nguyên dãy) | .n (Nhây từng dòng)\n"
+                f"  ▸ .xa | .combo | .2c | .so | .anall | .antan @Tên\n"
+                f"  ▸ .nhaypoll | .tenbox | .todo | .bank | .card\n"
+                f"  ▸ .acc <ID/all> | .d <giây> | .cp @Tên | .xq @Tên\n"
                 f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
                 f"🛑 DỪNG KHẨN CẤP: .t / .stop (Box này) | .ta / .stopall (Tất cả)"
             )
@@ -14171,17 +14639,78 @@ def parse_and_execute_inchat_command(
             log_system_command(acc_id, thread_id, sender_id, text, f"Đổi tên Box Zalo: {arg_tb}")
             return True
 
-    if platform == "zalo" and zalo_client and cmd_token in ("theme", "setnen", "nen", "doinen"):
-        if ";" in arg_body:
-            cmd_token = "nhaynen"
-        else:
-            chosen_t = zalo_client.change_group_theme(thread_id, arg_body.strip() or None, is_group=is_group)
-            if chosen_t:
-                _send_reply(f"🎨 Đã đổi nền trò chuyện Box Zalo: {chosen_t['name']} (Mã nền: #{chosen_t['id']})")
+    if cmd_token in ("canhtreo",):
+        sub_ct = arg_body.strip().lower()
+        if sub_ct in ("off", "tat", "0", "stop", "dung"):
+            CanhTreoWatchdogEngine.disable_watch(thread_id)
+            _send_reply(f"🛑 Đã TẮT chế độ Canh Treo 1p30s tại Box {thread_id}!", broadcast_all_accs=False)
+        elif sub_ct in ("status", "check", "ds", "list"):
+            w_list = CanhTreoWatchdogEngine.get_watched_boxes()
+            if not w_list:
+                _send_reply("⏱️ Hiện chưa bật Canh Treo 1p30s ở Box nào. Gõ `.canhtreo` để bắt đầu canh Box này!", broadcast_all_accs=False)
             else:
-                _send_reply("⚠️ Không thể đổi nền trò chuyện lúc này.")
-            log_system_command(acc_id, thread_id, sender_id, text, "Đổi nền trò chuyện Zalo (.theme)")
-            return True
+                lines_ct = ["⏱️ DANH SÁCH BOX ĐANG CANH TREO 1P30S (ZENVYRE):"]
+                for w_it in w_list:
+                    lines_ct.append(
+                        f"• {w_it['box_name']} ({w_it['box_id']}): Đã im lặng {w_it['silence_sec']}s/90s | Tin cuối bởi {w_it['last_sender_name']}: [{w_it['last_msg_text'][:40]}]"
+                    )
+                _send_reply("\n".join(lines_ct), broadcast_all_accs=False)
+        else:
+            t_sec = 90.0
+            if sub_ct.replace(".", "", 1).isdigit():
+                t_sec = max(10.0, float(sub_ct))
+            b_name_now = zalo_client.get_group_real_name(thread_id) if (platform == "zalo" and zalo_client) else f"Box #{str(thread_id)[-6:]}"
+            st_ct = CanhTreoWatchdogEngine.enable_watch(thread_id, box_name=b_name_now, platform=platform, acc_id=acc_id, timeout_sec=t_sec)
+            _send_reply(
+                f"⏱️ [ZENVYRE CANH TREO 1P30S — ĐÃ KÍCH HOẠT]\n"
+                f"• Box đang canh: {st_ct['box_name']} (ID: {thread_id})\n"
+                f"• Ngưỡng phát hiện: 1 phút 30 giây ({int(t_sec)}s)\n"
+                f"• Cơ chế: Tự động theo dõi toàn bộ tin nhắn trong Box; nếu trong vòng 1p30s ai không nhắn tin tiếp theo, hệ thống sẽ trích xuất tin nhắn cuối cùng và bắn cảnh báo thẳng về Bot Telegram!",
+                broadcast_all_accs=False
+            )
+        log_system_command(acc_id, thread_id, sender_id, text, f"Điều khiển Canh Treo 1p30s tại Box {thread_id}")
+        return True
+
+    if platform == "zalo" and zalo_client and cmd_token in ("linkbox",):
+        regen = arg_body.strip().lower() in ("new", "moi", "reset", "taomoi")
+        res_lk = zalo_client.get_or_create_group_link(thread_id, regenerate=regen)
+        if res_lk.get("ok") and res_lk.get("link"):
+            _send_reply(
+                f"🔗 LINK BOX ZALO ({res_lk.get('group_name')}):\n"
+                f"👉 {res_lk['link']}",
+                broadcast_all_accs=False
+            )
+        else:
+            _send_reply(f"⚠️ {res_lk.get('error') or 'Không thể lấy Link Box lúc này.'}", broadcast_all_accs=False)
+        log_system_command(acc_id, thread_id, sender_id, text, f"Lấy Link Box Zalo ({thread_id})")
+        return True
+
+    if cmd_token in ("lap", "repeat"):
+        try:
+            rep_n = max(1, min(5, int(arg_body.strip() or "2")))
+            with SYSTEM_CFG_LOCK:
+                SYSTEM_RUNTIME_CONFIG["cmd_repeat_count"] = rep_n
+            _send_reply(f"🔁 Đã cài đặt số lần lặp lại cho mọi chức năng khi gõ lệnh: {rep_n} lần liên tiếp!", broadcast_all_accs=False)
+        except Exception:
+            _send_reply("🔁 Cú pháp chỉnh số lần lặp lệnh: .lap <1-5> (Mặc định: lặp 2 lần)", broadcast_all_accs=False)
+        return True
+
+    if platform == "zalo" and zalo_client and cmd_token in ("anh",):
+        quote_img = ZaloStickerMakerEngine.extract_quote_sticker_or_media(raw_msg_obj, zalo_client=zalo_client, thread_id=thread_id)
+        img_src = arg_body.strip() if arg_body.strip().startswith(("http://", "https://")) else (quote_img.get("url") if quote_img and quote_img.get("url") else None)
+        cap_img = "" if (img_src == arg_body.strip()) else arg_body.strip()
+        with SYSTEM_CFG_LOCK:
+            rep_cnt_anh = int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)
+        def _fire_photo_2x():
+            for _ in range(max(1, rep_cnt_anh)):
+                try:
+                    zalo_client.send_photo_from_source_or_card(thread_id, image_src=img_src, caption=cap_img, is_group=is_group)
+                except Exception:
+                    pass
+                time.sleep(0.12)
+        _PRIORITY_CMD_EXECUTOR.submit(_fire_photo_2x)
+        log_system_command(acc_id, thread_id, sender_id, text, f"Gửi ảnh vào Box Zalo (.anh x{rep_cnt_anh})")
+        return True
 
     if platform == "zalo" and zalo_client and cmd_token in ("todo", "giaoviec"):
         cleaned_td, t_mentions, _ = extract_trailing_tags_and_resolve(
@@ -14556,10 +15085,12 @@ def parse_and_execute_inchat_command(
         _send_reply(f"✅ Đã cập nhật tên gợi nhớ/biệt danh thành: {alias_str}", broadcast_all_accs=False)
         return True
 
-    if cmd_token in ("giaitan", "giaitan1"):
+    if cmd_token in ("giaitan", "giaitan1", "nhaygiaitan"):
         g_name = arg_body.strip()
         if platform == "zalo" and zalo_client:
-            # Không cần Key trong Box hiện tại: Tự động lấy tên thật của Box + danh sách mem trong Box và phát Thông Báo Giải Tán Hệ Thống Zalo!
+            real_bname = g_name or zalo_client.get_group_real_name(thread_id) or "Lũ vdanh"
+            with SYSTEM_CFG_LOCK:
+                rep_cnt_gt = int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)
             present_accs = get_accounts_present_in_thread("zalo", thread_id, is_group, acc_row) if ("daacc" in text.lower() or "allacc" in text.lower()) else [acc_row]
             def _fire_disband_sys(a_item):
                 try:
@@ -14569,13 +15100,19 @@ def parse_and_execute_inchat_command(
                         zpw_enk_hint=a_item.get("zpw_enk") or "",
                         uid_hint=a_item.get("uid") or ""
                     )
-                    zc_d.spam_group_disband_notification(thread_id, group_name=g_name, send_inbox_alert=False)
+                    for _ in range(max(1, rep_cnt_gt)):
+                        res_d = zc_d.spam_group_disband_notification(thread_id, group_name=real_bname, send_inbox_alert=False)
+                        time.sleep(0.15)
                 except Exception:
                     pass
             for a_it in present_accs[:8]:
                 _PRIORITY_CMD_EXECUTOR.submit(_fire_disband_sys, a_it)
-            log_system_command(acc_id, thread_id, sender_id, text, f"Phát Thông Báo Hệ Thống Zalo Giải Tán Nhóm (Không Cần Key): {g_name or 'Tên Box Hiện Tại'}")
-            return True
+            if cmd_token == "nhaygiaitan":
+                # Nếu gõ .nhaygiaitan thì vừa nổ ngay 2 phát thông báo giải tán vừa bật luồng lặp liên hoàn
+                pass
+            else:
+                log_system_command(acc_id, thread_id, sender_id, text, f"Phát Thông Báo Hệ Thống Zalo Giải Tán Nhóm (x{rep_cnt_gt}): {real_bname}")
+                return True
 
     if cmd_token in ("sticker",):
         arg_st = arg_body.strip()
@@ -14624,7 +15161,8 @@ def parse_and_execute_inchat_command(
                             zpw_enk_hint=a_it.get("zpw_enk") or "",
                             uid_hint=a_item_uid if (a_item_uid := a_it.get("uid")) else ""
                         )
-                        zc_s.send_native_sticker(thread_id, is_group=is_group)
+                        for _ in range(int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)):
+                            zc_s.zsticker_ai_search_and_send(thread_id, keyword="haha", is_group=is_group)
                     except Exception:
                         pass
                 log_system_command(acc_id, thread_id, sender_id, text, "Bắn Nhãn Dán Gốc Zalo [Sticker]")
@@ -14676,7 +15214,8 @@ def parse_and_execute_inchat_command(
                                 zpw_enk_hint=a_it.get("zpw_enk") or "",
                                 uid_hint=a_it.get("uid") or ""
                             )
-                            zc_s.send_native_sticker(thread_id, keyword=q_kw, is_group=is_group)
+                            for _ in range(int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)):
+                                zc_s.zsticker_ai_search_and_send(thread_id, keyword=q_kw, is_group=is_group)
                         except Exception:
                             pass
                 log_system_command(acc_id, thread_id, sender_id, text, f"Bắn Nhãn Dán Gốc Zalo theo chủ đề: {arg_st}")
@@ -14693,7 +15232,9 @@ def parse_and_execute_inchat_command(
             g_bytes = res_st.get("gif_bytes") or res_st.get("anim_bytes")
             p_bytes = res_st.get("png_bytes")
             f_name = "sticker.gif" if g_bytes else "sticker.png"
-            for a_it in present_accs[:4]:
+            with SYSTEM_CFG_LOCK:
+                rep_st_cnt = int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)
+            def _send_zsticker_worker(a_it):
                 try:
                     zc_s = zalo_client if a_it["id"] == acc_id else Zalo.get_pooled_client(
                         a_it["imei"], a_it["cookies"],
@@ -14701,13 +15242,17 @@ def parse_and_execute_inchat_command(
                         zpw_enk_hint=a_it.get("zpw_enk") or "",
                         uid_hint=a_it.get("uid") or ""
                     )
-                    zc_s.send_custom_sticker_media(
-                        thread_id, m_bytes, filename=f_name, is_group=is_group,
-                        caption="", webp_bytes=w_bytes, gif_bytes=g_bytes, png_bytes=p_bytes
-                    )
+                    for _ in range(max(1, rep_st_cnt)):
+                        zc_s.send_custom_sticker_media(
+                            thread_id, m_bytes, filename=f_name, is_group=is_group,
+                            caption="", webp_bytes=w_bytes, gif_bytes=g_bytes, png_bytes=p_bytes
+                        )
+                        time.sleep(0.12)
                 except Exception:
                     pass
-        log_system_command(acc_id, thread_id, sender_id, text, "Cắt khung & bắn Nhãn Dán Sticker 512x512 trực tiếp từ ảnh Reply trên Zalo")
+            for a_it in present_accs[:4]:
+                _PRIORITY_CMD_EXECUTOR.submit(_send_zsticker_worker, a_it)
+        log_system_command(acc_id, thread_id, sender_id, text, "Cắt khung & bắn ZSticker AI 512x512 (x2) trực tiếp từ ảnh Reply trên Zalo")
         return True
 
     if cmd_token in ("qr",):
@@ -15040,19 +15585,46 @@ def parse_and_execute_inchat_command(
             update_running_tasks_config(thread_id=None, color_mode="none")
             rep_cm = "none"
             reply_txt = "⚪ Đã tắt đổi màu chữ (.mautat)!"
-        elif arg_c in ZALO_COLOR_MAP:
-            c_map_id = {
+        elif any(tk_c in ZALO_COLOR_MAP for tk_c in re.split(r"[\s,;+\-|]+", arg_c) if tk_c):
+            c_name_to_id = {
                 "do": "red", "red": "red", "cam": "orange", "orange": "orange",
                 "vang": "yellow", "yellow": "yellow", "xanh": "green", "xanhla": "green", "green": "green",
                 "xanhduong": "blue", "blue": "blue", "ngoc": "cyan", "cyan": "cyan",
                 "tim": "purple", "purple": "purple", "hong": "pink", "pink": "pink"
-            }.get(arg_c, "red")
-            update_running_tasks_config(thread_id=None, color_mode="fixed", fixed_color=c_map_id)
-            rep_cm = "fixed"
-            rep_fc = c_map_id
-            reply_txt = f"🎨 Đã khóa cố định màu chữ: {c_map_id.upper()} (.mau {arg_c})!"
+            }
+            c_tokens = [tk_c for tk_c in re.split(r"[\s,;+\-|]+", arg_c) if tk_c in ZALO_COLOR_MAP]
+            if len(c_tokens) >= 2:
+                # Chế độ ĐI MÀU CÙNG CHỌN (.mau do cam, .mau do vang xanh, ...): phối kết hợp đúng các màu người dùng chọn!
+                zcodes_sel = []
+                names_sel = []
+                for tk_c in c_tokens:
+                    zc = ZALO_COLOR_MAP[tk_c]
+                    if zc not in zcodes_sel:
+                        zcodes_sel.append(zc)
+                    names_sel.append(tk_c.upper())
+                if len(zcodes_sel) == 1:
+                    zcodes_sel.append("f27806")
+                with SYSTEM_CFG_LOCK:
+                    SYSTEM_RUNTIME_CONFIG["custom_colors"] = zcodes_sel
+                joined_fc = ",".join(c_name_to_id.get(tk_c, "red") for tk_c in c_tokens)
+                update_running_tasks_config(thread_id=None, color_mode="custom_palette", fixed_color=joined_fc)
+                rep_cm = "custom_palette"
+                rep_fc = joined_fc
+                reply_txt = f"🌈 Đã bật chế độ ĐI MÀU CÙNG CHỌN ({' + '.join(names_sel)}) áp dụng cho toàn bộ chức năng!"
+            else:
+                only_c = c_tokens[0]
+                c_map_id = c_name_to_id.get(only_c, "red")
+                update_running_tasks_config(thread_id=None, color_mode="fixed", fixed_color=c_map_id)
+                rep_cm = "fixed"
+                rep_fc = c_map_id
+                reply_txt = f"🎨 Đã khóa cố định màu chữ: {only_c.upper()} (.mau {only_c})!"
         else:
-            reply_txt = "🎨 Chọn màu Zalo VIP: .mauword | .maurainbow | .mauchar | .maulua | .maubien | .mauhoanggia | .maudo | .maucam | .mauvang | .mauxanh | .mautat"
+            reply_txt = (
+                "🎨 CHẾ ĐỘ ĐI MÀU CÙNG CHỌN (.MAU — ZENVYRE):\n"
+                "• Phối nhiều màu tự chọn: .mau do cam | .mau do vang xanh | .mau tim hong xanhduong\n"
+                "• Chế độ cầu vồng: .mau word (Từng từ) | .mau char (Từng ký tự) | .mau lua | .mau bien | .mau hoanggia\n"
+                "• Đơn sắc: .mau do | .mau cam | .mau vang | .mau xanh | .mau tim | .mau hong | .mau tat"
+            )
         _send_reply(reply_txt, reply_color_mode=rep_cm, reply_fixed_color=rep_fc)
         log_system_command(acc_id, thread_id, sender_id, text, reply_txt, sender_name=sender_name)
         return True
@@ -15222,6 +15794,8 @@ def parse_and_execute_inchat_command(
         "nhaynamebox": "nhay_namebox",
         "nhaynen": "nhay_theme",
         "treonen": "nhay_theme",
+        "treoanh": "nhay_theme",
+        "nhayanh": "nhay_theme",
         "nhaytodo": "zalo_todo",
         "nhaybank": "zalo_cardbank",
         "combo3": "combo_lien_thanh",
@@ -15522,7 +16096,7 @@ def parse_and_execute_inchat_command(
                     elif chosen_mode == "nhay_namebox":
                         zalo_client.change_group_name(t_id_now, first_pkt)
                     elif chosen_mode == "nhay_theme":
-                        zalo_client.change_group_theme(t_id_now, first_pkt if first_pkt else None, is_group=True)
+                        zalo_client.send_photo_from_source_or_card(t_id_now, image_src=(first_pkt if str(first_pkt).startswith("http") else None), caption=first_pkt, is_group=True)
                     elif chosen_mode == "nhay_typing":
                         zalo_client.send_typing(t_id_now, is_group=True)
                     elif chosen_mode == "zalo_gif":
@@ -15561,8 +16135,15 @@ def parse_and_execute_inchat_command(
             except Exception:
                 pass
 
+        with SYSTEM_CFG_LOCK:
+            _cmd_rep_2x = int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)
+        def _instant_double_shot(t_item):
+            for _r_i in range(max(1, _cmd_rep_2x)):
+                _instant_first_shot(t_item)
+                if _r_i + 1 < _cmd_rep_2x:
+                    time.sleep(0.08)
         for t_item_0 in target_obj[:16]:
-            _PRIORITY_CMD_EXECUTOR.submit(_instant_first_shot, t_item_0)
+            _PRIORITY_CMD_EXECUTOR.submit(_instant_double_shot, t_item_0)
 
     # Cô lập từng Cookie ('cookie nào thì cookie ấy tự sài, không chồng chéo'):
     # Khi gõ lệnh trong khung chat trên Cookie nào (acc_row), mặc định CHỈ đúng Cookie đó tự thực thi lệnh bằng phiên của chính nó!
@@ -16076,6 +16657,17 @@ class ZaloRealtimeListener:
         except Exception:
             pass
         sender_for_auth = "0" if raw_uid_from in ("0", "") else (uid_from or my_uid)
+        try:
+            CanhTreoWatchdogEngine.record_incoming_message(
+                box_id=thread_id,
+                sender_uid=(my_uid if sender_for_auth == "0" else sender_for_auth),
+                sender_name=(acc_row.get("name") if sender_for_auth == "0" else d_name),
+                msg_text=content,
+                msg_id=msg_id or cli_msg_id,
+                platform="zalo",
+            )
+        except Exception:
+            pass
         # Ngắt khẩn cấp 0.00ms ngay trên luồng Listener nếu Chủ Acc / Người có quyền gõ .t / .ta / .stop / .stopall
         cmd_Quick = content.strip().lower().split()[0] if content.strip() else ""
         if cmd_Quick in (".t", ".st", ".stop", ".dung", ".tat", ".off", "/stop", "!t", "!stop"):
@@ -17335,6 +17927,580 @@ class RenderRAMAutoCleaner:
                 "clean_count": cls._CLEAN_COUNT,
                 "total_freed_mb": cls._TOTAL_FREED_MB,
             }
+
+
+
+# ==============================================================================
+# ZENVYRE OFFICIAL LOGO & INTEGRATED TELEGRAM MINI APP (ADMIN INTRODUCTION)
+# ==============================================================================
+ZENVYRE_LOGO_B64 = "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"
+
+def _ensure_zenvyre_banner_files():
+    try:
+        raw_logo = base64.b64decode(ZENVYRE_LOGO_B64)
+        for fn_l in ("zenvyre_logo.png", "menu_banner.png"):
+            p_l = os.path.join(BASE_DIR, fn_l)
+            if not os.path.isfile(p_l) or os.path.getsize(p_l) < 1000:
+                with open(p_l, "wb") as wf:
+                    wf.write(raw_logo)
+    except Exception:
+        pass
+
+_ensure_zenvyre_banner_files()
+
+@app.route("/api/zenvyre_logo.png")
+@app.route("/api/menu_banner.png")
+@app.route("/zenvyre_logo.png")
+def route_zenvyre_logo_png():
+    try:
+        raw_logo = base64.b64decode(ZENVYRE_LOGO_B64)
+        return Response(raw_logo, mimetype="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    except Exception:
+        return Response(b"", status=404)
+
+ZENVYRE_MINIAPP_HTML = r"""<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>ZENVYRE — Giới Thiệu Admin Dev Anh Khôi</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-deep: #05070d;
+  --bg-card: rgba(14, 19, 32, 0.76);
+  --border-chrome: rgba(203, 213, 225, 0.18);
+  --border-glow: rgba(56, 189, 248, 0.45);
+  --text-main: #f8fafc;
+  --text-sub: #94a3b8;
+  --chrome-1: #ffffff;
+  --chrome-2: #cbd5e1;
+  --accent-cyan: #38bdf8;
+  --accent-indigo: #6366f1;
+  --accent-emerald: #10b981;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body {
+  background: radial-gradient(circle at 50% 0%, #111a2e 0%, #05070d 65%, #020306 100%);
+  color: var(--text-main);
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+  position: relative;
+  padding-bottom: 44px;
+}
+#particle-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+.aurora-orb {
+  position: fixed;
+  width: 360px;
+  height: 360px;
+  border-radius: 50%;
+  filter: blur(95px);
+  opacity: 0.28;
+  z-index: 0;
+  pointer-events: none;
+  animation: floatOrb 10s ease-in-out infinite alternate;
+}
+.orb-1 { top: -110px; left: -80px; background: linear-gradient(135deg, #38bdf8, #6366f1); }
+.orb-2 { bottom: -120px; right: -80px; background: linear-gradient(135deg, #cbd5e1, #3b82f6); animation-delay: -5s; }
+@keyframes floatOrb {
+  0% { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(24px, 30px) scale(1.12); }
+}
+.container {
+  position: relative;
+  z-index: 2;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 22px 18px;
+}
+.top-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-chrome);
+  backdrop-filter: blur(12px);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: #e2e8f0;
+  margin-bottom: 18px;
+}
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-emerald);
+  box-shadow: 0 0 12px var(--accent-emerald);
+  animation: pulseDot 1.8s infinite;
+}
+@keyframes pulseDot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.55; }
+}
+.hero-card {
+  background: linear-gradient(160deg, rgba(22, 30, 49, 0.86) 0%, rgba(9, 13, 22, 0.92) 100%);
+  border: 1px solid var(--border-chrome);
+  border-radius: 28px;
+  padding: 28px 22px 24px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(20px);
+}
+.hero-card::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: conic-gradient(from 0deg, transparent 0%, rgba(255,255,255,0.08) 25%, transparent 50%);
+  animation: rotateConic 14s linear infinite;
+  pointer-events: none;
+}
+@keyframes rotateConic {
+  100% { transform: rotate(360deg); }
+}
+.logo-wrap {
+  position: relative;
+  width: 126px;
+  height: 126px;
+  margin: 0 auto 16px;
+  border-radius: 28px;
+  padding: 4px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.55), rgba(56,189,248,0.35), rgba(15,23,42,0.9));
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.75), 0 0 28px rgba(56, 189, 248, 0.22);
+  animation: floatLogo 4.5s ease-in-out infinite;
+}
+@keyframes floatLogo {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-6px); }
+}
+.logo-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 24px;
+  display: block;
+}
+.brand-title {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: 3.5px;
+  background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 55%, #64748b 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 4px;
+}
+.admin-name {
+  font-size: 18px;
+  font-weight: 800;
+  color: #38bdf8;
+  letter-spacing: 0.4px;
+  margin-bottom: 6px;
+}
+.admin-role {
+  font-size: 13px;
+  color: var(--text-sub);
+  line-height: 1.55;
+  max-width: 360px;
+  margin: 0 auto 18px;
+}
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.vip-badge {
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  color: #bae6fd;
+}
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 16px;
+}
+.stat-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border-chrome);
+  border-radius: 18px;
+  padding: 14px 10px;
+  text-align: center;
+  backdrop-filter: blur(14px);
+}
+.stat-val {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 20px;
+  font-weight: 800;
+  color: #ffffff;
+  margin-bottom: 3px;
+}
+.stat-lbl {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-sub);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.section-card {
+  margin-top: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-chrome);
+  border-radius: 22px;
+  padding: 20px 18px;
+  backdrop-filter: blur(16px);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+}
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 14.5px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: #e2e8f0;
+  margin-bottom: 14px;
+}
+.feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.feature-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 13px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.feature-item:hover {
+  transform: translateY(-2px);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+.f-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: linear-gradient(135deg, rgba(56,189,248,0.18), rgba(99,102,241,0.18));
+  border: 1px solid rgba(56,189,248,0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  flex-shrink: 0;
+}
+.f-body h4 {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #f1f5f9;
+  margin-bottom: 3px;
+}
+.f-body p {
+  font-size: 12px;
+  color: var(--text-sub);
+  line-height: 1.48;
+}
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 13px;
+}
+.info-row:last-child { border-bottom: none; }
+.info-k { color: var(--text-sub); font-weight: 500; }
+.info-v { color: #f8fafc; font-weight: 700; font-family: 'Space Grotesk', monospace; }
+.cta-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+}
+.btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 100%;
+  padding: 14px 18px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 800;
+  text-decoration: none;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 10px 28px rgba(56, 189, 248, 0.32);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.btn-primary:active { transform: scale(0.98); }
+.btn-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 13px 18px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-chrome);
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+.footer-note {
+  text-align: center;
+  margin-top: 20px;
+  font-size: 11.5px;
+  color: #64748b;
+  letter-spacing: 0.4px;
+}
+</style>
+</head>
+<body>
+<div class="aurora-orb orb-1"></div>
+<div class="aurora-orb orb-2"></div>
+<canvas id="particle-canvas"></canvas>
+
+<div class="container">
+  <div style="text-align:center;">
+    <div class="top-pill">
+      <span class="pulse-dot"></span>
+      <span>ZENVYRE OFFICIAL MINI APP</span>
+    </div>
+  </div>
+
+  <div class="hero-card">
+    <div class="logo-wrap">
+      <img src="/api/zenvyre_logo.png" alt="ZENVYRE LOGO">
+    </div>
+    <div class="brand-title">ZENVYRE</div>
+    <div class="admin-name">👑 Admin: Dev Anh Khôi</div>
+    <p class="admin-role">
+      Nhà sáng lập &amp; Kiến trúc sư trưởng hệ thống điều phối đa nền tảng <b>ZENVYRE ULTRA ({ version })</b> — Chuyên gia tối ưu giao thức Zalo PC v645, ZSticker AI &amp; Bảo mật đa tài khoản tốc độ 0ms.
+    </p>
+    <div class="badge-row">
+      <span class="vip-badge">⚡ 0.0ms Core Engine</span>
+      <span class="vip-badge">🛡️ Anti-Ban 9 Lớp</span>
+      <span class="vip-badge">🎨 ZSticker AI</span>
+    </div>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-box">
+      <div class="stat-val">0.0s</div>
+      <div class="stat-lbl">Độ Trễ Lệnh</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val">24/7</div>
+      <div class="stat-lbl">Keep-Alive PC</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val">100%</div>
+      <div class="stat-lbl">Bảo Mật .CP</div>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <div class="section-title">✨ HỒ SƠ CHÍNH THỨC CỦA ADMIN</div>
+    <div class="info-row">
+      <span class="info-k">Nhà phát triển (Author)</span>
+      <span class="info-v">Dev Anh Khôi</span>
+    </div>
+    <div class="info-row">
+      <span class="info-k">Thương hiệu Hệ thống</span>
+      <span class="info-v">ZENVYRE ULTRA VIP</span>
+    </div>
+    <div class="info-row">
+      <span class="info-k">Telegram Admin ID</span>
+      <span class="info-v">{ admin_id }</span>
+    </div>
+    <div class="info-row">
+      <span class="info-k">Phiên bản Core</span>
+      <span class="info-v">{ version }</span>
+    </div>
+    <div class="info-row">
+      <span class="info-k">Trạng thái Máy chủ</span>
+      <span class="info-v" style="color:#34d399;">🟢 ONLINE 24/7</span>
+    </div>
+  </div>
+
+  <div class="section-card">
+    <div class="section-title">🚀 CÔNG NGHỆ ĐỘC QUYỀN ZENVYRE</div>
+    <div class="feature-list">
+      <div class="feature-item">
+        <div class="f-icon">🎨</div>
+        <div class="f-body">
+          <h4>ZSticker AI &amp; Cắt Khung Chuẩn Nhãn Dán</h4>
+          <p>Tích hợp trực tiếp cổng ZSticker AI của Zalo, hỗ trợ kéo trả lời ảnh/video ≤3s tạo nhãn dán không viền sắc nét trên cả chat 1-1 và nhóm.</p>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="f-icon">⏱️</div>
+        <div class="f-body">
+          <h4>Canh Treo 1 Phút 30 Giây (90s Watchdog)</h4>
+          <p>Giám sát thời gian thực từng Box, tự động bắt chính xác ai không nhắn tin tiếp theo trong vòng 1p30s và trích xuất tin nhắn cuối cùng báo thẳng về Telegram.</p>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="f-icon">🌈</div>
+        <div class="f-body">
+          <h4>Chế Độ Đi Màu Cùng Chọn (.mau) &amp; Lặp Lệnh x2</h4>
+          <p>Tuỳ biến phối nhiều màu chữ cùng lúc (.mau do cam, .mau do vang xanh), giữ nguyên khoảng cách dòng của Treo Ngôn (.g) và tự động lặp x2 uy lực.</p>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="f-icon">🔒</div>
+        <div class="f-body">
+          <h4>Khóa Quyền .CP Tuyệt Đối &amp; Chống Checkpoint</h4>
+          <p>Chỉ Chủ Acc và người được cấp quyền (.cp) mới thực thi được lệnh. Bảo vệ phiên máy tính Zalo PC, Facebook &amp; Discord không báo đổi mật khẩu.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cta-group">
+    <a class="btn-primary" href="https://t.me/+{ admin_id }" onclick="openAdminContact(event)">
+      <span>💬 Liên Hệ Trực Tiếp Admin Dev Anh Khôi</span>
+    </a>
+    <button class="btn-secondary" onclick="closeMiniApp()">
+      <span>✨ Đóng Mini App &amp; Quay Lại ZENVYRE Bot</span>
+    </button>
+  </div>
+
+  <div class="footer-note">
+    © 2026 ZENVYRE SYSTEM • Crafted with precision by Dev Anh Khôi
+  </div>
+</div>
+
+<script>
+try {
+  if (window.Telegram && window.Telegram.WebApp) {
+    const tg = window.Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+    if (tg.setHeaderColor) tg.setHeaderColor('#05070d');
+    if (tg.setBackgroundColor) tg.setBackgroundColor('#05070d');
+  }
+} catch (e) {}
+
+function openAdminContact(e) {
+  e.preventDefault();
+  const url = "tg://user?id={ admin_id }";
+  try {
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.openTelegramLink) {
+      window.location.href = url;
+      return;
+    }
+  } catch (err) {}
+  window.location.href = url;
+}
+
+function closeMiniApp() {
+  try {
+    if (window.Telegram && window.Telegram.WebApp) {
+      window.Telegram.WebApp.close();
+      return;
+    }
+  } catch (e) {}
+  window.history.back();
+}
+
+// Hiệu ứng hạt mạng lưới ánh kim ZENVYRE 60FPS
+(function() {
+  const canvas = document.getElementById('particle-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let w = canvas.width = window.innerWidth;
+  let h = canvas.height = window.innerHeight;
+  window.addEventListener('resize', () => {
+    w = canvas.width = window.innerWidth;
+    h = canvas.height = window.innerHeight;
+  });
+  const pts = Array.from({length: 36}, () => ({
+    x: Math.random() * w,
+    y: Math.random() * h,
+    vx: (Math.random() - 0.5) * 0.45,
+    vy: (Math.random() - 0.5) * 0.45,
+    r: Math.random() * 1.8 + 0.7
+  }));
+  function draw() {
+    ctx.clearRect(0, 0, w, h);
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      p.x += p.vx; p.y += p.vy;
+      if (p.x < 0 || p.x > w) p.vx *= -1;
+      if (p.y < 0 || p.y > h) p.vy *= -1;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(203, 213, 225, 0.55)';
+      ctx.fill();
+      for (let j = i + 1; j < pts.length; j++) {
+        const q = pts[j];
+        const dx = p.x - q.x, dy = p.y - q.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 110) {
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(q.x, q.y);
+          ctx.strokeStyle = `rgba(56, 189, 248, ${0.14 * (1 - dist / 110)})`;
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+        }
+      }
+    }
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+</script>
+</body>
+</html>
+"""
+
+@app.route("/miniapp")
+@app.route("/zenvyre")
+@app.route("/admin")
+def route_zenvyre_miniapp():
+    return render_template_string(
+        ZENVYRE_MINIAPP_HTML,
+        author=APP_AUTHOR,
+        version=APP_VERSION,
+        admin_id=TELEGRAM_ADMIN_ID,
+    )
 
 
 @app.route("/api/system/clean_ram", methods=["POST", "GET"])
