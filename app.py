@@ -1,11 +1,11 @@
 # ==============================================================================
 # ZENVYRE — SIÊU HỆ THỐNG ĐIỀU PHỐI ĐA TÀI KHOẢN ZALO • DISCORD • MESSENGER • TELE
 # Author : Dev Anh Khôi
-# Version: v2026.18.0 ZENVYRE ULTRA
+# Version: v2026.20.0 ZENVYRE ULTRA
 # ==============================================================================
 APP_TITLE = "ZENVYRE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.18.0 ZENVYRE ULTRA"
+APP_VERSION = "v2026.20.0 ZENVYRE ULTRA"
 
 import sys, types
 try:
@@ -126,7 +126,11 @@ except ImportError:
         json = {}
     request = _DummyReq()
     redirect = lambda u: u
-    render_template_string = lambda s, **kw: s
+    def render_template_string(s, **kw):
+        out = str(s)
+        for k, v in kw.items():
+            out = out.replace("{{ " + str(k) + " }}", str(v)).replace("{{" + str(k) + "}}", str(v)).replace("{ " + str(k) + " }", str(v))
+        return out
     session = {}
     jsonify = lambda *a, **kw: dict(*a, **kw) if a else kw
     send_from_directory = lambda *a, **kw: ""
@@ -1436,7 +1440,11 @@ VALID_SYSTEM_CMD_TOKENS = {
     "maubien", "mauocean", "mauhoanggia", "mauroyal", "maucyber", "mauneon", "maurandom", "mautat", "mauoff",
     "addnhay", "themnhay", "taonhay", "addngon", "themngon", "taongon", "themfile", "upfile",
     "chonnhay", "setnhay", "filenhay", "chonngon", "setngon", "filengon", "chedochonfile",
-    "giaitan", "gtan", "nhaygiaitan", "spamgiaitan", "giaitan1", "giaitannhom",
+    "giaitan", "gtan", "nhaygiaitan", "spamgiaitan", "giaitan1", "giaitannhom", "giaitanall", "disbandall",
+    "xoakey", "cleankey", "undomsg", "xoatin",
+    "kickall", "xoatoanbo", "kickhet",
+    "floodbox", "lagbox",
+
     "sticker", "nhandan", "stkr", "taosticker", "treosticker", "nhaysticker", "stickerloop",
     "qr", "taoqr", "qrzalo", "getqr", "thaicon", "tim", "checkacc", "accs", "dsacc",
     "acc", "chonacc", "setacc", "accmode", "ver", "version", "author",
@@ -1849,68 +1857,732 @@ def strip_leading_line_number(line, preserve_indent=False):
     cleaned = clean_corrupted_shortcuts(cleaned)
     return cleaned if cleaned else line.strip()
 
+# ==============================================================================
+#  ZENVYRE ULTRA V9 — TÍCH HỢP 6 ĐỘNG CƠ SIÊU CẤP (MMAP FILE, 12-LAYER ANTIBAN,
+#  DISBAND TROLLER VÔ HẠN, UNDO NON-KEY, KICK ALL, FLOOD/LAG BOX)
+# ==============================================================================
+import mmap as _mmap_mod
+
+
+class UltraFileLoader:
+    """Bộ nạp file kịch bản .txt tốc độ cao (mmap + 2-layer RAM cache + pre-warm):
+    - Giữ nguyên 100% `full_text` (cách dòng ở giữa vẫn là 1 dãy cho Treo Ngôn `.g`).
+    - Bóc tách chuẩn `lines` (từng dòng rời cho Treo Nhây `.n`).
+    - An toàn tuyệt đối với cả file rỗng (0 byte) và file lớn hàng chục MB."""
+
+    _CACHE = {}
+    _LOCK = threading.RLock()
+
+    @classmethod
+    def load(cls, filepath, strip_numbers=True):
+        if not filepath or not os.path.exists(filepath):
+            return {
+                "mtime": 0, "size": 0, "blocks": [], "lines": [], "raw_lines": [],
+                "full_text": "", "block_count": 0, "line_count": 0,
+            }
+        try:
+            st = os.stat(filepath)
+            mtime, fsize = st.st_mtime, st.st_size
+        except OSError:
+            return {
+                "mtime": 0, "size": 0, "blocks": [], "lines": [], "raw_lines": [],
+                "full_text": "", "block_count": 0, "line_count": 0,
+            }
+        ck = (filepath, bool(strip_numbers))
+        with cls._LOCK:
+            cached = cls._CACHE.get(ck)
+            if cached and cached["mtime"] == mtime and cached["size"] == fsize:
+                return cached
+
+        if fsize == 0:
+            empty_res = {
+                "mtime": mtime, "size": 0, "blocks": [], "lines": [], "raw_lines": [],
+                "full_text": "", "block_count": 0, "line_count": 0,
+            }
+            with cls._LOCK:
+                cls._CACHE[ck] = empty_res
+            return empty_res
+
+        raw_bytes = b""
+        try:
+            with open(filepath, "rb") as f:
+                if fsize >= 4096:
+                    with _mmap_mod.mmap(f.fileno(), 0, access=_mmap_mod.ACCESS_READ) as mm:
+                        raw_bytes = mm.read()
+                else:
+                    raw_bytes = f.read()
+        except Exception:
+            try:
+                with open(filepath, "rb") as f:
+                    raw_bytes = f.read()
+            except Exception:
+                return {
+                    "mtime": 0, "size": 0, "blocks": [], "lines": [], "raw_lines": [],
+                    "full_text": "", "block_count": 0, "line_count": 0,
+                }
+
+        text = raw_bytes.decode("utf-8", errors="ignore").replace("\r\n", "\n").replace("\r", "\n")
+        raw_split = text.split("\n")
+        all_lines = []
+        raw_non_empty_lines = []
+        full_text_lines = []
+
+        for ln in raw_split:
+            r_ln = ln.rstrip("\r\n")
+            s = r_ln.strip()
+            if s:
+                raw_non_empty_lines.append(r_ln)
+                if strip_numbers:
+                    clean_nhay = strip_leading_line_number(r_ln, preserve_indent=False).strip()
+                else:
+                    clean_nhay = clean_corrupted_shortcuts(r_ln).strip()
+                clean_ngon = clean_corrupted_shortcuts(r_ln)
+                if clean_nhay:
+                    all_lines.append(clean_nhay)
+                full_text_lines.append(clean_ngon)
+            else:
+                full_text_lines.append("")
+
+        full_text_str = "\n".join(full_text_lines).strip("\r\n")
+        blocks = [full_text_str] if full_text_str else list(all_lines)
+
+        result = {
+            "mtime": mtime,
+            "size": fsize,
+            "blocks": blocks,
+            "full_text": full_text_str,
+            "lines": all_lines,
+            "raw_lines": raw_non_empty_lines,
+            "block_count": len(blocks),
+            "line_count": len(all_lines),
+        }
+        with cls._LOCK:
+            if len(cls._CACHE) > 256:
+                oldest = min(cls._CACHE.keys(), key=lambda k: cls._CACHE[k]["mtime"])
+                cls._CACHE.pop(oldest, None)
+            cls._CACHE[ck] = result
+        with FILE_CACHE_LOCK:
+            FILE_MEMORY_CACHE[ck] = result
+        return result
+
+    @classmethod
+    def get_random_line(cls, filepath, strip_numbers=True):
+        d = cls.load(filepath, strip_numbers)
+        lines = d.get("lines") or []
+        return random.choice(lines) if lines else ""
+
+    @classmethod
+    def get_line_by_index(cls, filepath, idx, strip_numbers=True):
+        d = cls.load(filepath, strip_numbers)
+        lines = d.get("lines") or []
+        return lines[idx % len(lines)] if lines else ""
+
+    @classmethod
+    def invalidate(cls, filepath=None):
+        with cls._LOCK:
+            if filepath is None:
+                cls._CACHE.clear()
+            else:
+                for k in [k for k in cls._CACHE if k[0] == filepath]:
+                    cls._CACHE.pop(k, None)
+        with FILE_CACHE_LOCK:
+            if filepath is None:
+                FILE_MEMORY_CACHE.clear()
+            else:
+                for k in [k for k in FILE_MEMORY_CACHE if k[0] == filepath]:
+                    FILE_MEMORY_CACHE.pop(k, None)
+
+    @classmethod
+    def preload_directory(cls, dir_path):
+        if not dir_path or not os.path.isdir(dir_path):
+            return 0
+        cnt = 0
+        for fn in os.listdir(dir_path):
+            if fn.endswith(".txt"):
+                cls.load(os.path.join(dir_path, fn))
+                cnt += 1
+        return cnt
+
+
 def parse_file_stream_fast(filepath, strip_numbers=True):
-    """Bộ phân tích File Kịch Bản Chuẩn ZENVYRE:
-    - `full_text` (Dành cho Treo Ngôn `.g`): Giữ nguyên 100% toàn bộ văn bản thành 1 dãy duy nhất, kể cả khi ở giữa có dòng trống (cách dòng ở giữa vẫn giữ nguyên trong cùng 1 tin nhắn treo ngôn!).
-    - `lines` (Dành cho Treo Nhây `.n`): Bóc tách từng dòng văn bản rời nhau, mỗi lần gửi đúng 1 dòng chữ duy nhất trong văn bản đó!"""
-    if not filepath or not os.path.exists(filepath):
-        return {"blocks": [], "lines": [], "raw_lines": [], "full_text": "", "size": 0, "block_count": 0, "line_count": 0}
+    return UltraFileLoader.load(filepath, strip_numbers=strip_numbers)
 
-    st = os.stat(filepath)
-    mtime = st.st_mtime
-    fsize = st.st_size
-    cache_key = (filepath, bool(strip_numbers))
 
-    with FILE_CACHE_LOCK:
-        cached = FILE_MEMORY_CACHE.get(cache_key)
-        if cached and cached["mtime"] == mtime and cached["size"] == fsize:
-            return cached
+class UltimateAntiBan:
+    """Hệ thống 12 lớp Anti-Ban đồng bộ cho Discord, Messenger và Zalo."""
 
-    all_lines = []
-    raw_non_empty_lines = []
-    full_text_lines = []
+    _LOCK = threading.RLock()
+    _STATE = defaultdict(lambda: {
+        "sent": 0, "err_streak": 0, "backoff_until": 0.0,
+        "last_ts": 0.0, "msg_Win": deque(maxlen=60),
+        "Recent_hashes": deque(maxlen=40), "ua_idx": 0,
+        "burst": 0, "cooldown_total": 0,
+    })
 
-    with open(filepath, "rb") as f:
-        raw_bytes = f.read()
+    _ZWC = ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff")
 
-    text = raw_bytes.decode("utf-8", errors="ignore").replace("\r\n", "\n").replace("\r", "\n")
-    raw_lines = text.split("\n")
-
-    for ln in raw_lines:
-        r_ln = ln.rstrip("\r\n")
-        stripped = r_ln.strip()
-        if stripped:
-            raw_non_empty_lines.append(r_ln)
-            clean_ln_nhay = strip_leading_line_number(r_ln, preserve_indent=False).strip() if strip_numbers else clean_corrupted_shortcuts(r_ln).strip()
-            clean_ln_ngon = clean_corrupted_shortcuts(r_ln)
-            if clean_ln_nhay:
-                all_lines.append(clean_ln_nhay)
-            full_text_lines.append(clean_ln_ngon)
-        else:
-            # Giữ nguyên dòng cách ở giữa cho chế độ Treo Ngôn (treo một dãy có cách ở giữa)
-            full_text_lines.append("")
-
-    full_text_str = "\n".join(full_text_lines).strip("\r\n")
-    blocks = [full_text_str] if full_text_str else list(all_lines)
-
-    result = {
-        "mtime": mtime,
-        "size": fsize,
-        "blocks": blocks,
-        "full_text": full_text_str,
-        "lines": all_lines,
-        "raw_lines": raw_non_empty_lines,
-        "block_count": len(blocks),
-        "line_count": len(all_lines),
+    _HOMOGLYPHS = {
+        "a": ("a", "а"), "e": ("e", "е"), "o": ("o", "о"),
+        "i": ("i", "і"), "c": ("c", "с"), "p": ("p", "р"),
     }
 
-    with FILE_CACHE_LOCK:
-        if len(FILE_MEMORY_CACHE) > 40:
-            oldest_key = next(iter(FILE_MEMORY_CACHE))
-            FILE_MEMORY_CACHE.pop(oldest_key, None)
-        FILE_MEMORY_CACHE[cache_key] = result
+    _DISCORD_PROFILES = [
+        {
+            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "xsp": {"os": "Windows", "browser": "Chrome", "device": "", "system_locale": "vi-VN", "browser_version": "131.0.0.0", "os_version": "10", "release_channel": "stable", "client_build_number": 349218},
+        },
+        {
+            "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+            "xsp": {"os": "Mac OS X", "browser": "Chrome", "device": "", "system_locale": "en-US", "browser_version": "130.0.0.0", "os_version": "10.15.7", "release_channel": "stable", "client_build_number": 348901},
+        },
+    ]
 
-    return result
+    _FB_PROFILES = [
+        {"ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", "sec_ch": '"Google Chrome";v="131", "Chromium";v="131"', "plat": '"Windows"'},
+        {"ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36", "sec_ch": '"Google Chrome";v="130", "Chromium";v="130"', "plat": '"macOS"'},
+    ]
+
+    @classmethod
+    def _sanitize_text(cls, text, key_id, platform="zalo"):
+        if not text or not isinstance(text, str):
+            return text or ""
+        s = text.strip()
+        if not s or is_direct_user_command_text(s):
+            return text
+        st = cls._STATE[f"{platform}:{key_id}"]
+        h = hash(s[:80])
+        if h in st["Recent_hashes"]:
+            zwc = random.choice(cls._ZWC) + random.choice(cls._ZWC)
+            words = s.split(" ")
+            if len(words) > 2:
+                pos = random.randint(1, len(words) - 1)
+                words[pos] = zwc + words[pos]
+                s = " ".join(words)
+            else:
+                s = s + zwc
+        st["Recent_hashes"].append(hash(s[:80]))
+        return s
+
+    @classmethod
+    def discord_pre(cls, token_key, channel_id, content, session=None):
+        k = f"dc:{token_key}:{channel_id}"
+        with cls._LOCK:
+            st = cls._STATE[k]
+            now = time.time()
+            if now < st["backoff_until"]:
+                w = st["backoff_until"] - now
+                if w > 0:
+                    time.sleep(min(w, 8.0))
+                now = time.time()
+            win = st["msg_Win"]
+            while win and now - win[0] > 5.0:
+                win.popleft()
+            if len(win) >= 4:
+                Wait = 5.05 - (now - win[0]) + random.uniform(0.08, 0.25)
+                if Wait > 0:
+                    time.sleep(min(Wait, 4.0))
+                now = time.time()
+            gap = now - st["last_ts"]
+            min_gap = 0.22 + (st["err_streak"] * 0.35)
+            if gap < min_gap:
+                time.sleep(min_gap - gap + random.uniform(0.02, 0.08))
+            st["last_ts"] = time.time()
+            st["msg_Win"].append(st["last_ts"])
+            st["sent"] += 1
+            if session and st["sent"] % 25 == 1:
+                prof = cls._DISCORD_PROFILES[st["ua_idx"] % len(cls._DISCORD_PROFILES)]
+                st["ua_idx"] += 1
+                xsp_b64 = base64.b64encode(json.dumps(prof["xsp"], separators=(",", ":")).encode()).decode()
+                session.headers.update({"User-Agent": prof["ua"], "X-Super-Properties": xsp_b64})
+        return cls._sanitize_text(content, token_key, "discord")
+
+    @classmethod
+    def discord_post(cls, token_key, channel_id, status_code, resp_json=None):
+        k = f"dc:{token_key}:{channel_id}"
+        with cls._LOCK:
+            st = cls._STATE[k]
+            if status_code in (200, 201, 204):
+                st["err_streak"] = max(0, st["err_streak"] - 1)
+                return True, 0.0
+            if status_code == 429:
+                st["err_streak"] += 1
+                ra = float((resp_json or {}).get("retry_after", 1.5))
+                Wait = ra + random.uniform(0.15, 0.45)
+                st["backoff_until"] = time.time() + Wait
+                st["cooldown_total"] += 1
+                return False, Wait
+            if status_code in (401, 403):
+                st["err_streak"] += 3
+                st["backoff_until"] = time.time() + 30.0
+                return False, 30.0
+            st["err_streak"] += 1
+            return False, 0.5
+
+    @classmethod
+    def messenger_pre(cls, uid_key, thread_id, content, session=None):
+        k = f"fb:{uid_key}:{thread_id}"
+        with cls._LOCK:
+            st = cls._STATE[k]
+            now = time.time()
+            if now < st["backoff_until"]:
+                w = st["backoff_until"] - now
+                if w > 0:
+                    time.sleep(min(w, 12.0))
+                now = time.time()
+            win = st["msg_Win"]
+            while win and now - win[0] > 60.0:
+                win.popleft()
+            if len(win) >= 28:
+                Wait = 60.0 - (now - win[0]) + random.uniform(0.5, 1.8)
+                if Wait > 0:
+                    time.sleep(min(Wait, 6.0))
+                now = time.time()
+            st["burst"] += 1
+            if st["burst"] >= 14:
+                st["burst"] = 0
+                time.sleep(random.uniform(1.2, 2.5))
+                now = time.time()
+            gap = now - st["last_ts"]
+            min_gap = random.uniform(0.32, 0.58) + (st["err_streak"] * 0.6)
+            if gap < min_gap:
+                time.sleep(min_gap - gap)
+            st["last_ts"] = time.time()
+            st["msg_Win"].append(st["last_ts"])
+            st["sent"] += 1
+            if session and st["sent"] % 18 == 1:
+                prof = cls._FB_PROFILES[st["ua_idx"] % len(cls._FB_PROFILES)]
+                st["ua_idx"] += 1
+                session.headers.update({
+                    "User-Agent": prof["ua"],
+                    "Sec-Ch-Ua": prof["sec_ch"],
+                    "Sec-Ch-Ua-Platform": prof["plat"],
+                })
+        return cls._sanitize_text(content, uid_key, "messenger")
+
+    @classmethod
+    def messenger_post(cls, uid_key, thread_id, ok, err_code=0, body_text=""):
+        k = f"fb:{uid_key}:{thread_id}"
+        with cls._LOCK:
+            st = cls._STATE[k]
+            if ok:
+                st["err_streak"] = max(0, st["err_streak"] - 1)
+                return
+            st["err_streak"] += 1
+            b_low = (body_text or "").lower()
+            if err_code in (1357004, 1357031) or "checkpoint" in b_low or "login" in b_low:
+                st["backoff_until"] = time.time() + 120.0
+            elif err_code in (368, 1609005) or "spam" in b_low or "blocked" in b_low:
+                Wait = min(45.0, (2.0 ** min(5, st["err_streak"])) + random.uniform(2.0, 5.0))
+                st["backoff_until"] = time.time() + Wait
+                st["cooldown_total"] += 1
+            else:
+                st["backoff_until"] = time.time() + min(8.0, st["err_streak"] * 1.2)
+
+    @classmethod
+    def zalo_pre(cls, imei_key, thread_id, content):
+        k = f"zl:{imei_key}:{thread_id}"
+        with cls._LOCK:
+            st = cls._STATE[k]
+            now = time.time()
+            if now < st["backoff_until"]:
+                w = st["backoff_until"] - now
+                if w > 0:
+                    time.sleep(min(w, 4.0))
+            if st["err_streak"] > 0:
+                gap = now - st["last_ts"]
+                need = min(1.5, st["err_streak"] * 0.18)
+                if gap < need:
+                    time.sleep(need - gap)
+            st["last_ts"] = time.time()
+            st["sent"] += 1
+        return cls._sanitize_text(content, imei_key, "zalo")
+
+    @classmethod
+    def zalo_post(cls, imei_key, thread_id, ok, err_code=0):
+        k = f"zl:{imei_key}:{thread_id}"
+        with cls._LOCK:
+            st = cls._STATE[k]
+            if ok:
+                st["err_streak"] = 0
+                return
+            st["err_streak"] += 1
+            if err_code in (-32, 32, -112, 112, 429):
+                st["backoff_until"] = time.time() + min(6.0, 0.4 * (1.7 ** min(5, st["err_streak"])))
+                st["cooldown_total"] += 1
+
+    @classmethod
+    def health(cls):
+        with cls._LOCK:
+            return {
+                "tracked_channels": len(cls._STATE),
+                "total_sent": sum(v["sent"] for v in cls._STATE.values()),
+                "total_cooldowns": sum(v["cooldown_total"] for v in cls._STATE.values()),
+            }
+
+
+class ZaloDisbandTroller:
+    """Module Troll Giải Tán Nhóm Vô Hạn chuẩn thông báo hệ thống Zalo:
+    - Quét toàn bộ thành viên trong nhóm.
+    - Xoay vòng 18 mẫu thông báo hệ thống Zalo kèm tag ẩn @All siêu thực."""
+
+    _VARIANTS = [
+        "📢 [THÔNG BÁO HỆ THỐNG ZALO]\nNhóm «{box}» đã được giải tán bởi Trưởng nhóm.",
+        "⚠️ [ZALO SYSTEM NOTICE]\nTrưởng nhóm đã giải tán nhóm «{box}». Mọi tin nhắn sẽ bị xóa sau 30 giây.",
+        "🔔 Hệ thống Zalo: Nhóm «{box}» đã chính thức giải tán. Bạn không thể gửi thêm tin nhắn vào hội thoại này.",
+        "🛑 [ZALO SECURITY]\nNhóm «{box}» đã bị giải tán do quyết định của Quản trị viên cấp cao.",
+        "📢 Thông báo từ Zalo: Cộng đồng / Nhóm «{box}» đã kết thúc hoạt động và giải tán.",
+        "⚠️ [THÔNG BÁO QUẢN TRỊ]\nNhóm «{box}» đã giải tán hoàn toàn ({count} thành viên đã được đưa ra khỏi phòng chat).",
+        "🔕 [HỆ THỐNG ZALO]\nPhiên hoạt động của nhóm «{box}» đã đóng vĩnh viễn. Nhóm đã giải tán.",
+        "🚨 [ZALO OFFICIAL]\nNhóm «{box}» vừa được giải tán thành công. Lịch sử trò chuyện đang được thu hồi.",
+        "📌 [ZALO NOTIFICATION]\nTrưởng nhóm đã xóa và giải tán nhóm «{box}» khỏi máy chủ Zalo.",
+        "⚡ [THÔNG BÁO TỰ ĐỘNG]\nNhóm «{box}» đã giải tán. Vui lòng thoát khỏi khung trò chuyện này.",
+        "🔒 [ZALO GROUP SYSTEM]\nHội thoại «{box}» đã bị khóa và giải tán bởi người sáng lập nhóm.",
+        "📢 Nhóm «{box}» đã được giải tán. Cảm ơn {count} thành viên đã tham gia!",
+        "🛑 [CẢNH BÁO HỆ THỐNG]\nNhóm «{box}» không còn tồn tại do đã bị giải tán bởi Admin.",
+        "⚠️ [ZALO CLOUD]\nĐồng bộ trạng thái: Nhóm «{box}» -> ĐÃ GIẢI TÁN (DISBANDED).",
+        "🔔 [THÔNG BÁO KHẨN]\nToàn bộ {count} thành viên trong «{box}» đã bị ngắt kết nối do nhóm giải tán.",
+        "📢 [ZALO SERVER]\nYêu cầu giải tán nhóm «{box}» đã được thực thi thành công 100%.",
+        "🚫 [HỆ THỐNG]\nNhóm «{box}» đã giải tán. Mọi quyền gửi tin nhắn, hình ảnh và bình chọn đã bị vô hiệu hóa.",
+        "⚠️ [ZALO ADMIN]\nThông báo cuối cùng: Nhóm «{box}» đã chính thức giải tán!",
+    ]
+
+    @classmethod
+    def scan_full_members(cls, zalo_client, group_id):
+        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
+        members, seen_uids = [], set()
+        my_uid = str(zalo_client.uid or "").strip()
+        try:
+            for m in (zalo_client.get_group_members(gid_s, use_cache=False) or []):
+                u = _clean_zalo_id(m.get("uid"))
+                if u and u not in seen_uids:
+                    seen_uids.add(u)
+                    members.append({"uid": u, "name": m.get("name") or f"User_{u[-4:]}"})
+        except Exception:
+            pass
+        try:
+            active_s = getattr(zalo_client, "prio_s", None) or zalo_client.s
+            enc = zalo_client._enc({"grid": gid_s, "imei": zalo_client.imei})
+            for ep in ("https://tt-group-wpa.chat.zalo.me/api/group/getmg-v2", "https://group-wpa.chat.zalo.me/api/group/getmg-v2"):
+                r = active_s.post(ep, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc}, timeout=(1.5, 3.0))
+                if r.status_code == 200 and r.content:
+                    dec = zalo_client._dec(r.json().get("data", ""))
+                    if dec:
+                        d = (json.loads(dec) or {}).get("data") or {}
+                        g_map = d.get("gridInfoMap") or {}
+                        g_info = g_map.get(gid_s) or (next(iter(g_map.values())) if g_map else d)
+                        if isinstance(g_info, dict):
+                            for mv in (g_info.get("memVerList") or []):
+                                u = _clean_zalo_id(str(mv).split("_")[0])
+                                if u and u not in seen_uids:
+                                    seen_uids.add(u)
+                                    members.append({"uid": u, "name": GLOBAL_USER_NAME_CACHE.get(u) or f"User_{u[-4:]}"})
+                            for adm in (g_info.get("adminIds") or []):
+                                u = _clean_zalo_id(adm)
+                                if u and u not in seen_uids:
+                                    seen_uids.add(u)
+                                    members.append({"uid": u, "name": GLOBAL_USER_NAME_CACHE.get(u) or f"Admin_{u[-4:]}"})
+                        break
+        except Exception:
+            pass
+        return [m for m in members if m["uid"] != my_uid]
+
+    @classmethod
+    def _call_disperse_api(cls, zalo_client, gid_s):
+        active_s = getattr(zalo_client, "prio_s", None) or zalo_client.s
+        enc = zalo_client._enc({"grid": gid_s, "imei": zalo_client.imei})
+        for ep in (
+            "https://tt-group-wpa.chat.zalo.me/api/group/disperse",
+            "https://group-wpa.chat.zalo.me/api/group/disperse",
+            "https://wpa.chat.zalo.me/api/group/disperse",
+        ):
+            try:
+                r = active_s.post(ep, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc}, timeout=(1.0, 2.0))
+                if r.status_code == 200 and r.content:
+                    ok, _ = zalo_client._is_zalo_api_send_ok(r.json())
+                    if ok:
+                        return True
+            except Exception:
+                continue
+        return False
+
+    @classmethod
+    def one_disperse_round(cls, zalo_client, group_id, box_name=None, round_idx=0, cached_members=None):
+        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
+        if not gid_s:
+            return False
+        real_name = box_name or zalo_client.get_group_real_name(gid_s) or f"Box #{gid_s[-5:]}"
+        members = cached_members if cached_members is not None else cls.scan_full_members(zalo_client, gid_s)
+        mem_cnt = max(len(members) + 1, 2)
+        cls._call_disperse_api(zalo_client, gid_s)
+        tpl = cls._VARIANTS[round_idx % len(cls._VARIANTS)]
+        msg_body = tpl.format(box=real_name, count=mem_cnt)
+        mentions = []
+        chunk = members[(round_idx * 40) % max(1, len(members)):][:40] if members else []
+        for m in chunk:
+            mentions.append({"uid": str(m["uid"]), "pos": 0, "len": 1, "type": 0})
+        try:
+            zalo_client.send_adv(
+                msg_body, gid_s,
+                color_mode="fixed", fixed_color="red" if round_idx % 2 == 0 else "orange",
+                is_group=True, mentions=mentions if mentions else None,
+                tag_all=True, is_heading=True, antiband=True,
+                use_emoji=False, icon_count=0, strip_line_num=False,
+                hide_tag_all=True, hide_tag_name=True, priority_bypass=True,
+            )
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def run_infinite(cls, zalo_client, group_id, stop_event=None, delay=0.8, box_name=None):
+        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
+        real_name = box_name or zalo_client.get_group_real_name(gid_s) or f"Box #{gid_s[-5:]}"
+        members = cls.scan_full_members(zalo_client, gid_s)
+        start_global_epoch, start_box_epoch = get_stop_epochs_fast(gid_s)
+        idx = 0
+        while True:
+            if stop_event and stop_event.is_set():
+                break
+            if is_task_stopped_fast(stop_event, start_global_epoch, start_box_epoch, gid_s):
+                break
+            if idx > 0 and idx % 15 == 0:
+                fresh = cls.scan_full_members(zalo_client, gid_s)
+                if fresh:
+                    members = fresh
+            cls.one_disperse_round(zalo_client, gid_s, box_name=real_name, round_idx=idx, cached_members=members)
+            idx += 1
+            eff_d = max(0.25, float(delay or 0.8))
+            if stop_event:
+                if stop_event.wait(eff_d):
+                    break
+            else:
+                time.sleep(eff_d)
+
+
+class ZaloUndoEngine:
+    """Module thu hồi tin nhắn của các thành viên KHÔNG có key (.cp) trong nhóm."""
+
+    @classmethod
+    def undo_single(cls, zalo_client, thread_id, msg_id, cli_msg_id="", is_group=True):
+        tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
+        mid_s = _clean_zalo_id(msg_id)
+        cmid_s = _clean_zalo_id(cli_msg_id) or str(int(time.time() * 1000))
+        if not tid_s or not mid_s:
+            return False
+        active_s = getattr(zalo_client, "prio_s", None) or zalo_client.s
+        pl = {
+            "msgId": str(mid_s),
+            "cliMsgIdUndo": str(cmid_s),
+            "clientId": str(int(time.time() * 1000) + random.randint(1, 99)),
+            "imei": zalo_client.imei,
+        }
+        if is_group:
+            pl["grid"] = tid_s
+            pl["visibility"] = 0
+            eps = (
+                "https://tt-group-wpa.chat.zalo.me/api/group/undomsg",
+                "https://group-wpa.chat.zalo.me/api/group/undomsg",
+                "https://wpa.chat.zalo.me/api/group/undomsg",
+            )
+        else:
+            pl["toid"] = tid_s
+            eps = (
+                "https://tt-chat2-wpa.chat.zalo.me/api/message/undo",
+                "https://wpa.chat.zalo.me/api/message/undo",
+            )
+        enc = zalo_client._enc(pl)
+        for ep in eps:
+            try:
+                r = active_s.post(ep, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc}, timeout=(1.0, 2.2))
+                if r.status_code == 200 and r.content:
+                    if r.json().get("error_code") == 0:
+                        return True
+            except Exception:
+                continue
+        return False
+
+    @classmethod
+    def undo_nonkey(cls, zalo_client, group_id, max_count=50):
+        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
+        if not gid_s:
+            return {"undone": 0, "skipped_key": 0}
+        my_uid = _clean_zalo_id(zalo_client.uid)
+        my_s2m = _clean_zalo_id(getattr(zalo_client, "send2me_id", ""))
+        msgs = zalo_client.get_recent_group_messages(gid_s) or []
+        undone, skipped = 0, 0
+        for m in reversed(msgs):
+            if not isinstance(m, dict):
+                continue
+            u_from = _clean_zalo_id(m.get("uidFrom") or m.get("fromUid"))
+            d_name = str(m.get("dName") or "").strip()
+            mid = _clean_zalo_id(m.get("msgId") or m.get("globalMsgId"))
+            cmid = _clean_zalo_id(m.get("cliMsgId"))
+            if not mid:
+                continue
+            if not u_from or u_from in ("0", my_uid, my_s2m) or u_from in OWNER_UIDS_CACHE:
+                skipped += 1
+                continue
+            if is_user_authorized_for_cmd(u_from, my_uid, my_s2m, sender_name=d_name, platform="zalo", thread_id=gid_s):
+                skipped += 1
+                continue
+            if cls.undo_single(zalo_client, gid_s, mid, cmid, is_group=True):
+                undone += 1
+            else:
+                cls.undo_single(zalo_client, gid_s, mid, cmid, is_group=False)
+                undone += 1
+            if undone >= max_count:
+                break
+            time.sleep(0.06)
+        return {"undone": undone, "skipped_key": skipped}
+
+
+class ZaloKickAllEngine:
+    """Module Kick toàn bộ thành viên khỏi nhóm Zalo (giữ lại chủ Acc & người có key)."""
+
+    @classmethod
+    def kick_all(cls, zalo_client, group_id, keep_owner=True):
+        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
+        if not gid_s:
+            return {"kicked": 0, "total_targets": 0}
+        my_uid = _clean_zalo_id(zalo_client.uid)
+        members = ZaloDisbandTroller.scan_full_members(zalo_client, gid_s)
+        protected = {my_uid} | set(OWNER_UIDS_CACHE)
+        if keep_owner:
+            try:
+                active_s = getattr(zalo_client, "prio_s", None) or zalo_client.s
+                enc = zalo_client._enc({"grid": gid_s, "imei": zalo_client.imei})
+                r = active_s.post("https://tt-group-wpa.chat.zalo.me/api/group/getmg-v2", params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc}, timeout=2.5)
+                if r.status_code == 200 and r.content:
+                    dec = zalo_client._dec(r.json().get("data", ""))
+                    if dec:
+                        d = (json.loads(dec) or {}).get("data") or {}
+                        g_map = d.get("gridInfoMap") or {}
+                        g_info = g_map.get(gid_s) or (next(iter(g_map.values())) if g_map else d)
+                        if isinstance(g_info, dict):
+                            creator = _clean_zalo_id(g_info.get("creatorId"))
+                            if creator:
+                                protected.add(creator)
+            except Exception:
+                pass
+        targets = [m["uid"] for m in members if m["uid"] not in protected]
+        if not targets:
+            return {"kicked": 0, "total_targets": 0}
+        active_s = getattr(zalo_client, "prio_s", None) or zalo_client.s
+        kicked = 0
+        for i in range(0, len(targets), 25):
+            batch = targets[i:i + 25]
+            for pl in (
+                {"grid": gid_s, "members": batch, "imei": zalo_client.imei},
+                {"grid": gid_s, "members": json.dumps(batch), "imei": zalo_client.imei},
+            ):
+                enc = zalo_client._enc(pl)
+                done = False
+                for ep in (
+                    "https://tt-group-wpa.chat.zalo.me/api/group/kickout",
+                    "https://group-wpa.chat.zalo.me/api/group/kickout",
+                    "https://wpa.chat.zalo.me/api/group/kickout",
+                ):
+                    try:
+                        r = active_s.post(ep, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc}, timeout=(1.5, 3.0))
+                        if r.status_code == 200 and r.content and r.json().get("error_code") == 0:
+                            kicked += len(batch)
+                            done = True
+                            break
+                    except Exception:
+                        continue
+                if done:
+                    break
+            time.sleep(0.12)
+        return {"kicked": kicked, "total_targets": len(targets)}
+
+
+class ZaloFloodLagEngine:
+    """Module Flood / Lag Box Zalo: Tạo link nhóm liên hoàn, Bão typing, Bão bình chọn Poll."""
+
+    @classmethod
+    def create_lag_links(cls, zalo_client, group_id, rounds=5, stop_ev=None):
+        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
+        active_s = getattr(zalo_client, "prio_s", None) or zalo_client.s
+        links = []
+        for i in range(max(1, int(rounds))):
+            if stop_ev and stop_ev.is_set():
+                break
+            link_url = ""
+            for ep in (
+                "https://tt-group-wpa.chat.zalo.me/api/group/link/new",
+                "https://group-wpa.chat.zalo.me/api/group/link/new",
+                "https://tt-group-wpa.chat.zalo.me/api/group/link/detail",
+            ):
+                try:
+                    enc = zalo_client._enc({"grid": gid_s, "imei": zalo_client.imei})
+                    r = active_s.post(ep, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc}, timeout=2.0)
+                    if r.status_code == 200 and r.content:
+                        dec = zalo_client._dec(r.json().get("data", ""))
+                        if dec:
+                            d = (json.loads(dec) or {}).get("data") or {}
+                            if isinstance(d, dict):
+                                link_url = str(d.get("link") or d.get("url") or "").strip()
+                                if link_url:
+                                    break
+                except Exception:
+                    continue
+            if not link_url:
+                link_url = f"https://zalo.me/g/{gid_s[-8:]}{random.randint(10, 99)}"
+            links.append(link_url)
+            heavy_title = "⚡ " + ("🔥" * 18) + f" LINK BOX #{i + 1} " + ("⚡" * 18)
+            heavy_desc = ("\u200b\u200c" * 120) + f"Tham gia ngay nhóm Zalo ({i + 1}): {link_url}"
+            pl_link = {
+                "grid": gid_s, "type": 0, "clientId": int(time.time() * 1000) + i,
+                "imei": zalo_client.imei, "ttl": 0, "zsource": 704,
+                "msg": f"{heavy_title}\n{link_url}", "href": link_url, "src": link_url,
+                "title": heavy_title, "desc": heavy_desc, "thumb": "https://stc-zaloprofile.zdn.vn/pc/v1/images/zalo_sharelink.png",
+            }
+            try:
+                active_s.post(
+                    "https://tt-group-wpa.chat.zalo.me/api/group/sendlink",
+                    params={"zpw_ver": 645, "zpw_type": 30},
+                    data={"params": zalo_client._enc(pl_link)}, timeout=2.0
+                )
+            except Exception:
+                pass
+            time.sleep(0.18)
+        return links
+
+    @classmethod
+    def flood_typing(cls, zalo_client, group_id, duration_sec=20, stop_ev=None):
+        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
+        active_s = getattr(zalo_client, "prio_s", None) or zalo_client.s
+        end_t = time.time() + float(duration_sec)
+        enc = zalo_client._enc({"grid": gid_s, "imei": zalo_client.imei})
+        cnt = 0
+        while time.time() < end_t:
+            if stop_ev and stop_ev.is_set():
+                break
+            try:
+                active_s.post("https://tt-group-wpa.chat.zalo.me/api/group/typing", params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc}, timeout=1.0)
+                cnt += 1
+            except Exception:
+                pass
+            time.sleep(0.25)
+        return cnt
+
+    @classmethod
+    def flood_poll(cls, zalo_client, group_id, rounds=5, question_base="💥 ZENVYRE FLOOD BOX 💥", stop_ev=None):
+        gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
+        ok_cnt = 0
+        for i in range(max(1, int(rounds))):
+            if stop_ev and stop_ev.is_set():
+                break
+            q = f"{question_base} [#{i + 1}] " + ("🔥" * 10)
+            opts = [f"⚡ ZENVYRE VIP #{i + 1}.1 ⚡", f"👑 TRÙM BOX #{i + 1}.2 👑", f"🔥 SẬP NGUỒN #{i + 1}.3 🔥"]
+            try:
+                if zalo_client.create_poll(gid_s, q, options=opts):
+                    ok_cnt += 1
+            except Exception:
+                pass
+            time.sleep(0.25)
+        return ok_cnt
+
 
 def get_ordered_files_with_display_num(file_type=None):
     conn = db()
@@ -3917,13 +4589,17 @@ class ZaloParamsEncryptor:
 class ZaloStickerMakerEngine:
     """Động Cơ Tạo Nhãn Dán Sticker Zalo Chuẩn Native 512×512 Ultra-HD (Ảnh Tĩnh, Chữ Die-Cut, Reply Media & Video Ngắn ≤ 3.0 Giây):
     - Tự động tải ảnh/video/GIF từ link HTTP/HTTPS, data URI, đường dẫn file, hoặc bóc tách trực tiếp từ tin nhắn Reply (Quote) trên Zalo.
+    - Lưu đệm tức thì mọi tin nhắn Ảnh / Video / GIF trong cả Chat 1-1 (cá nhân) và Box Nhóm để khi kéo trả lời gõ .sticker luôn lấy được URL gốc 100%.
     - Tự động tách nền viền góc đồng màu + tạo viền Die-Cut Sticker trắng nổi 3D + bóng đổ mềm trên nền trong suốt RGBA (0, 0, 0, 0) 512×512.
-    - Kiểm tra thời lượng Video chính xác tới 0.01 giây (ffprobe + bộ đọc MP4/MOV atom mvhd thuần Python):
-      + Video > 3.0 giây: TỪ CHỐI NGAY LẬP TỨC!
-      + Video ≤ 3.0 giây: Chuyển đổi bằng FFmpeg PaletteGen sang Animated WebP & GIF 512×512 trong suốt sắc nét.
-    - Xuất đồng thời WebP lossless, GIF trong suốt và PNG 512×512 để gửi ra đúng định dạng [Sticker] (Nhãn dán thật) trên Zalo & Telegram."""
+    - Kiểm tra thời lượng Video chuẩn xác (chấp nhận mọi video Zalo hiển thị 00:01 - 00:03 tức ≤ 3.99s và tự động cắt chuẩn ≤ 3.0s).
+    - Xuất đồng thời Animated GIF 2-Frame trong suốt, WebP lossless và PNG 512×512 để gửi ra đúng định dạng Nhãn Dán trên Zalo & Telegram."""
 
-    MAX_VIDEO_STICKER_DURATION_SEC = 3.0
+    MAX_VIDEO_STICKER_DURATION_SEC = 3.99
+    _MEDIA_CACHE_LOCK = threading.RLock()
+    _MEDIA_BY_MSG_ID = {}
+    _MEDIA_BY_CLI_ID = {}
+    _MEDIA_BY_THREAD = defaultdict(lambda: deque(maxlen=50))
+    _MEDIA_GLOBAL_RECENT = deque(maxlen=80)
     _FONT_PATHS = (
         "/usr/share/fonts/opentype/inter/InterDisplay-Black.otf",
         "/usr/share/fonts/opentype/inter/Inter-ExtraBold.otf",
@@ -3949,25 +4625,69 @@ class ZaloStickerMakerEngine:
 
     @classmethod
     def _parse_single_dict_for_media(cls, item):
+        if not item:
+            return None
+        if isinstance(item, str):
+            s_it = item.strip().replace("\\/", "/")
+            if s_it.startswith("{"):
+                try:
+                    item = json.loads(s_it)
+                except Exception:
+                    m_u = re.search(r'(https?://[^\\s"\\\'<>\\\\]+)', s_it)
+                    if m_u:
+                        u_found = m_u.group(1)
+                        is_v = any(x in u_found.lower() for x in (".mp4", ".mov", ".webm", "video"))
+                        return {"kind": "media_url", "url": u_found, "is_video": is_v, "duration": None}
+                    return None
+            elif s_it.startswith(("http://", "https://")):
+                is_v = any(x in s_it.lower() for x in (".mp4", ".mov", ".webm", "video"))
+                return {"kind": "media_url", "url": s_it, "is_video": is_v, "duration": None}
+            else:
+                return None
         if not isinstance(item, dict):
             return None
+
         params_d = {}
-        for pk in ("params", "propertyExt", "extra"):
+        for pk in ("params", "propertyExt", "extra", "attach", "content", "data", "raw", "msgInfo"):
             raw_p = item.get(pk)
             if isinstance(raw_p, dict):
                 params_d.update(raw_p)
+                for sub_k in ("params", "attach", "content", "data"):
+                    sub_v = raw_p.get(sub_k)
+                    if isinstance(sub_v, dict):
+                        params_d.update(sub_v)
+                    elif isinstance(sub_v, str) and sub_v.strip().startswith("{"):
+                        try:
+                            sub_dec = json.loads(sub_v.strip())
+                            if isinstance(sub_dec, dict):
+                                params_d.update(sub_dec)
+                        except Exception:
+                            pass
             elif isinstance(raw_p, str) and raw_p.strip().startswith("{"):
                 try:
                     p_dec = json.loads(raw_p.strip())
                     if isinstance(p_dec, dict):
                         params_d.update(p_dec)
+                        for sub_k in ("params", "attach", "content", "data"):
+                            sub_v = p_dec.get(sub_k)
+                            if isinstance(sub_v, dict):
+                                params_d.update(sub_v)
+                            elif isinstance(sub_v, str) and sub_v.strip().startswith("{"):
+                                try:
+                                    sub_dec = json.loads(sub_v.strip())
+                                    if isinstance(sub_dec, dict):
+                                        params_d.update(sub_dec)
+                                except Exception:
+                                    pass
                 except Exception:
                     pass
 
-        stk_id = item.get("stickerId") or params_d.get("stickerId") or (item.get("id") if ("catId" in item or "cateId" in item) else None)
+        stk_id = item.get("stickerId") or params_d.get("stickerId") or (item.get("id") if ("catId" in item or "cateId" in item or "catId" in params_d or "cateId" in params_d) else None)
         cat_id = item.get("cateId") or item.get("catId") or params_d.get("cateId") or params_d.get("catId")
         stk_type = item.get("type") or params_d.get("type") or 7
-        msg_type = str(item.get("msgType") or item.get("cliMsgType") or "").lower()
+        msg_type = str(item.get("msgType") or item.get("cliMsgType") or params_d.get("msgType") or params_d.get("cliMsgType") or "").lower()
+        msg_txt_hint = str(item.get("msg") or item.get("title") or params_d.get("msg") or params_d.get("title") or "").strip()
+
         if stk_id and cat_id and str(stk_id).isdigit() and str(cat_id).isdigit():
             return {
                 "kind": "native_sticker",
@@ -3976,54 +4696,158 @@ class ZaloStickerMakerEngine:
                 "sticker_type": int(stk_type) if str(stk_type).isdigit() else 7,
             }
 
-        for url_k in ("hdUrl", "rawUrl", "oriUrl", "normalUrl", "hd", "normal", "href", "url", "fileUrl", "thumbUrl", "thumb"):
+        url_keys = (
+            "hdUrl", "rawUrl", "oriUrl", "normalUrl", "videoUrl", "mp4Url", "lvUrl",
+            "hd", "normal", "href", "url", "fileUrl", "src", "previewUrl", "thumbUrl", "thumb"
+        )
+        u_clean = ""
+        thumb_backup = ""
+        for t_k in ("thumbUrl", "thumb", "previewUrl"):
+            tv = item.get(t_k) or params_d.get(t_k)
+            if isinstance(tv, str) and tv.strip().startswith(("http://", "https://")):
+                thumb_backup = tv.strip()
+                break
+
+        for url_k in url_keys:
             u_val = item.get(url_k) or params_d.get(url_k)
             if isinstance(u_val, str) and u_val.strip().startswith(("http://", "https://")):
                 u_clean = u_val.strip()
-                dur_v = (
-                    item.get("duration")
-                    or params_d.get("duration")
-                    or item.get("videoDuration")
-                    or params_d.get("videoDuration")
-                )
-                dur_sec = None
-                if dur_v is not None:
-                    try:
-                        d_f = float(dur_v)
-                        dur_sec = (d_f / 1000.0) if d_f > 60.0 else d_f
-                    except Exception:
-                        pass
-                f_ext = str(item.get("fileExt") or params_d.get("fileExt") or "").lower()
-                title_s = str(item.get("title") or params_d.get("title") or "").strip()
-                is_txt_file = (
-                    f_ext in ("txt", ".txt")
-                    or title_s.lower().endswith(".txt")
-                    or u_clean.lower().split("?")[0].endswith(".txt")
-                    or "share.file" in msg_type
-                )
-                if is_txt_file:
-                    return {
-                        "kind": "file_url",
-                        "url": u_clean,
-                        "filename": title_s if title_s else "zalo_script.txt",
-                    }
-                is_vid = any(
-                    u_clean.lower().split("?")[0].endswith(ext)
-                    for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi")
-                ) or ("video" in msg_type) or (dur_sec is not None and dur_sec > 0)
+                break
+
+        if not u_clean:
+            # Quét sâu bằng Regex nếu URL nằm ẩn trong chuỗi JSON lồng nhau
+            raw_dump = json.dumps({"a": item, "b": params_d}, ensure_ascii=False).replace("\\/", "/")
+            urls_found = re.findall(r'(https?://[^\\s"\\\'<>\\\\]+)', raw_dump)
+            for uf in urls_found:
+                uf_c = uf.rstrip(",;})]")
+                if any(k_cdn in uf_c.lower() for k_cdn in ("zalo", "zadn", "zdns", "photo", "video", "gif", "webp", "png", "jpg", "jpeg", "mp4", "imgur", "giphy", "tenor")):
+                    u_clean = uf_c
+                    break
+            if not u_clean and urls_found:
+                u_clean = urls_found[0].rstrip(",;})]")
+
+        if u_clean:
+            dur_v = (
+                item.get("duration")
+                or params_d.get("duration")
+                or item.get("videoDuration")
+                or params_d.get("videoDuration")
+                or item.get("length")
+                or params_d.get("length")
+            )
+            dur_sec = None
+            if dur_v is not None:
+                try:
+                    d_f = float(dur_v)
+                    dur_sec = (d_f / 1000.0) if d_f > 60.0 else d_f
+                except Exception:
+                    pass
+            if dur_sec is None and msg_txt_hint:
+                m_dur = re.search(r"\[Video\]\s*(\d{1,2}):(\d{2})", msg_txt_hint, re.IGNORECASE)
+                if m_dur:
+                    dur_sec = float(int(m_dur.group(1)) * 60 + int(m_dur.group(2)))
+
+            f_ext = str(item.get("fileExt") or params_d.get("fileExt") or "").lower()
+            title_s = str(item.get("title") or params_d.get("title") or "").strip()
+            is_txt_file = (
+                f_ext in ("txt", ".txt")
+                or title_s.lower().endswith(".txt")
+                or u_clean.lower().split("?")[0].endswith(".txt")
+                or "share.file" in msg_type
+            )
+            if is_txt_file:
                 return {
-                    "kind": "media_url",
+                    "kind": "file_url",
                     "url": u_clean,
-                    "is_video": is_vid,
-                    "duration": dur_sec,
+                    "filename": title_s if title_s else "zalo_script.txt",
                 }
+            is_vid = (
+                any(u_clean.lower().split("?")[0].endswith(ext) for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi"))
+                or ("video" in msg_type)
+                or (msg_type == "5")
+                or ("[video]" in msg_txt_hint.lower())
+                or (dur_sec is not None and dur_sec > 0)
+            )
+            return {
+                "kind": "media_url",
+                "url": u_clean,
+                "thumb_url": thumb_backup or u_clean,
+                "is_video": is_vid,
+                "duration": dur_sec,
+            }
         return None
 
     @classmethod
+    def cache_incoming_media_message(cls, msg_obj, my_uid="", fallback_thread_id=None):
+        """Lưu đệm tức thì mọi tin nhắn có chứa Ảnh / Video / GIF / Sticker vào RAM để khi người dùng kéo trả lời gõ .sticker
+        (kể cả trong Chat 1-1 như 'Hn' hay trong Box Nhóm) đều lấy được link media gốc trong 0.00ms!"""
+        if not isinstance(msg_obj, dict):
+            return None
+        try:
+            parsed = cls._parse_single_dict_for_media(msg_obj)
+            if not parsed:
+                cnt = msg_obj.get("content")
+                parsed = cls._parse_single_dict_for_media(cnt)
+            if not parsed:
+                q_in = msg_obj.get("quote")
+                if isinstance(q_in, dict):
+                    q_parsed = cls._parse_single_dict_for_media(q_in) or cls._parse_single_dict_for_media(q_in.get("attach"))
+                    if q_parsed:
+                        q_mid = _clean_zalo_id(q_in.get("globalMsgId") or q_in.get("msgId") or q_in.get("id"))
+                        q_cmid = _clean_zalo_id(q_in.get("cliMsgId"))
+                        with cls._MEDIA_CACHE_LOCK:
+                            if q_mid:
+                                cls._MEDIA_BY_MSG_ID[q_mid] = q_parsed
+                            if q_cmid:
+                                cls._MEDIA_BY_CLI_ID[q_cmid] = q_parsed
+            if not parsed:
+                return None
+
+            mid = _clean_zalo_id(msg_obj.get("msgId") or msg_obj.get("globalMsgId") or msg_obj.get("id"))
+            cmid = _clean_zalo_id(msg_obj.get("cliMsgId"))
+            uid_from = _clean_zalo_id(msg_obj.get("uidFrom") or msg_obj.get("fromUid"))
+            id_to = _clean_zalo_id(msg_obj.get("idTo") or msg_obj.get("toid"))
+            grid = _clean_zalo_id(msg_obj.get("grid") or msg_obj.get("groupId") or msg_obj.get("_grid_hint") or fallback_thread_id)
+            my_u = _clean_zalo_id(my_uid)
+
+            tid = grid
+            if not tid or tid == my_u:
+                if uid_from and uid_from not in ("0", my_u):
+                    tid = uid_from
+                elif id_to and id_to not in ("0", my_u):
+                    tid = id_to
+                else:
+                    tid = uid_from or id_to
+
+            rec = dict(parsed)
+            rec["msg_id"] = mid
+            rec["cli_msg_id"] = cmid
+            rec["owner_uid"] = uid_from
+            rec["ts"] = time.time()
+
+            with cls._MEDIA_CACHE_LOCK:
+                if len(cls._MEDIA_BY_MSG_ID) > 1500:
+                    cls._MEDIA_BY_MSG_ID.clear()
+                if len(cls._MEDIA_BY_CLI_ID) > 1500:
+                    cls._MEDIA_BY_CLI_ID.clear()
+                if mid:
+                    cls._MEDIA_BY_MSG_ID[mid] = rec
+                if cmid:
+                    cls._MEDIA_BY_CLI_ID[cmid] = rec
+                for k_tid in {str(tid or ""), str(grid or ""), str(uid_from or ""), str(id_to or ""), str(msg_obj.get("_peer_uid") or "")}:
+                    if k_tid and k_tid not in ("", "0", "None", "null"):
+                        cls._MEDIA_BY_THREAD[k_tid].append(rec)
+                cls._MEDIA_GLOBAL_RECENT.append(rec)
+            return rec
+        except Exception:
+            return None
+
+    @classmethod
     def extract_quote_sticker_or_media(cls, msg_obj, zalo_client=None, thread_id=None):
-        """Bóc tách thông tin Nhãn Dán (stickerId, cateId, type), URL Ảnh/GIF/Video hoặc File .txt từ tin nhắn được Kéo Trả Lời (Reply / Quote) trên Zalo:
-        - Hỗ trợ giải mã sâu cả khi get_last_msgs rút gọn trường quote.attach bằng cách tự động truy vấn get_recent_group_messages(thread_id)
-          để tìm đúng tin nhắn gốc theo globalMsgId / cliMsgId hoặc tin nhắn ảnh vừa gửi ngay trước đó!"""
+        """Bóc tách thông tin Nhãn Dán, URL Ảnh/GIF/Video hoặc File .txt từ tin nhắn được Kéo Trả Lời (Reply / Quote) trên Zalo:
+        - Ưu tiên 1: Bóc trực tiếp từ quote / quote.attach / quote.params (hỗ trợ đệ quy JSON & regex URL).
+        - Ưu tiên 2: Tra cứu tức thì trong bộ nhớ RAM (_MEDIA_BY_MSG_ID, _MEDIA_BY_CLI_ID, _MEDIA_BY_THREAD) — 0.00ms!
+        - Ưu tiên 3: Quét lịch sử get_last_msgs() (cả msgs 1-1 lẫn groupMsgs) + get_recent_dm_messages + get_recent_group_messages."""
         if not isinstance(msg_obj, dict):
             msg_obj = {}
 
@@ -4032,16 +4856,26 @@ class ZaloStickerMakerEngine:
         quoted_msg_id = None
         quoted_cli_id = None
         quoted_owner_id = None
+        quoted_wants_video = False
+        quoted_decl_dur = None
+
         if isinstance(q_obj, dict):
             quoted_msg_id = _clean_zalo_id(q_obj.get("globalMsgId") or q_obj.get("msgId") or q_obj.get("id"))
             quoted_cli_id = _clean_zalo_id(q_obj.get("cliMsgId"))
             quoted_owner_id = _clean_zalo_id(q_obj.get("ownerId") or q_obj.get("uidFrom"))
+            q_msg_str = str(q_obj.get("msg") or q_obj.get("title") or "").strip()
+            q_cli_type = str(q_obj.get("cliMsgType") or q_obj.get("msgType") or "").strip().lower()
+            if "[video]" in q_msg_str.lower() or "video" in q_cli_type or q_cli_type == "5":
+                quoted_wants_video = True
+                m_d = re.search(r"(\d{1,2}):(\d{2})", q_msg_str)
+                if m_d:
+                    quoted_decl_dur = float(int(m_d.group(1)) * 60 + int(m_d.group(2)))
             candidates.append(q_obj)
             att = q_obj.get("attach")
             if isinstance(att, dict):
                 candidates.append(att)
             elif isinstance(att, str):
-                att_s = att.strip()
+                att_s = att.strip().replace("\\/", "/")
                 if att_s.startswith("{"):
                     try:
                         att_d = json.loads(att_s)
@@ -4049,10 +4883,14 @@ class ZaloStickerMakerEngine:
                             candidates.append(att_d)
                     except Exception:
                         pass
-                elif "http" in att_s:
-                    m_u = re.search(r'(https?://[^\s"\'<>\\]+)', att_s)
+                if "http" in att_s:
+                    m_u = re.search(r'(https?://[^\\s"\\\'<>\\\\]+)', att_s)
                     if m_u:
-                        candidates.append({"href": m_u.group(1)})
+                        candidates.append({
+                            "href": m_u.group(1).rstrip(",;})]"),
+                            "msg": q_msg_str,
+                            "cliMsgType": q_cli_type,
+                        })
 
         cnt_obj = msg_obj.get("content")
         if isinstance(cnt_obj, dict):
@@ -4066,78 +4904,121 @@ class ZaloStickerMakerEngine:
         for item in candidates:
             res = cls._parse_single_dict_for_media(item)
             if res:
+                if quoted_wants_video:
+                    res["is_video"] = True
+                if res.get("duration") is None and quoted_decl_dur is not None:
+                    res["duration"] = quoted_decl_dur
                 return res
 
-        # Nếu người dùng kéo trả lời (Reply) vào 1 bức ảnh vừa gửi nhưng preloadconvers/WS cắt mất attach,
-        # hoặc người dùng vừa gửi ảnh xong gõ .sticker ngay bên dưới (kể cả chat 1-1 như 'Tran Phat' hay trong Box nhóm) -> Quét cả lịch sử Nhóm + Chat 1-1!
+        # Ưu tiên 2: Tra cứu trong bộ nhớ RAM (_MEDIA_BY_MSG_ID, _MEDIA_BY_CLI_ID, _MEDIA_BY_THREAD)
+        with cls._MEDIA_CACHE_LOCK:
+            if quoted_msg_id and quoted_msg_id in cls._MEDIA_BY_MSG_ID:
+                res_m = dict(cls._MEDIA_BY_MSG_ID[quoted_msg_id])
+                if quoted_wants_video:
+                    res_m["is_video"] = True
+                if res_m.get("duration") is None and quoted_decl_dur is not None:
+                    res_m["duration"] = quoted_decl_dur
+                return res_m
+            if quoted_cli_id and quoted_cli_id in cls._MEDIA_BY_CLI_ID:
+                res_c = dict(cls._MEDIA_BY_CLI_ID[quoted_cli_id])
+                if quoted_wants_video:
+                    res_c["is_video"] = True
+                if res_c.get("duration") is None and quoted_decl_dur is not None:
+                    res_c["duration"] = quoted_decl_dur
+                return res_c
+
+        # Ưu tiên 3: Quét trực tiếp từ Zalo Client (get_last_msgs + DM history + Group history)
         if zalo_client and thread_id:
+            tid_clean = _clean_zalo_id(thread_id) or str(thread_id).strip()
             try:
                 recent_msgs = []
                 try:
-                    recent_msgs.extend(zalo_client.get_recent_group_messages(thread_id) or [])
+                    lm_all = zalo_client.get_last_msgs() or {}
+                    for m_u in (lm_all.get("msgs") or []):
+                        cls.cache_incoming_media_message(m_u, my_uid=zalo_client.uid)
+                        recent_msgs.append(m_u)
+                    for m_g in (lm_all.get("groupMsgs") or []):
+                        cls.cache_incoming_media_message(m_g, my_uid=zalo_client.uid)
+                        recent_msgs.append(m_g)
                 except Exception:
                     pass
                 try:
                     if hasattr(zalo_client, "get_recent_dm_messages"):
-                        recent_msgs.extend(zalo_client.get_recent_dm_messages(thread_id) or [])
+                        for m_d in (zalo_client.get_recent_dm_messages(tid_clean) or []):
+                            cls.cache_incoming_media_message(m_d, my_uid=zalo_client.uid, fallback_thread_id=tid_clean)
+                            recent_msgs.append(m_d)
                 except Exception:
                     pass
                 try:
-                    lm_all = zalo_client.get_last_msgs() or {}
-                    recent_msgs.extend((lm_all.get("msgs") or []) + (lm_all.get("groupMsgs") or []))
+                    for m_gr in (zalo_client.get_recent_group_messages(tid_clean) or []):
+                        cls.cache_incoming_media_message(m_gr, my_uid=zalo_client.uid, fallback_thread_id=tid_clean)
+                        recent_msgs.append(m_gr)
                 except Exception:
                     pass
+
+                # Kiểm tra lại RAM sau khi đã quét và nạp toàn bộ tin nhắn mới nhất
+                with cls._MEDIA_CACHE_LOCK:
+                    if quoted_msg_id and quoted_msg_id in cls._MEDIA_BY_MSG_ID:
+                        res_m = dict(cls._MEDIA_BY_MSG_ID[quoted_msg_id])
+                        if quoted_wants_video:
+                            res_m["is_video"] = True
+                        if res_m.get("duration") is None and quoted_decl_dur is not None:
+                            res_m["duration"] = quoted_decl_dur
+                        return res_m
+                    if quoted_cli_id and quoted_cli_id in cls._MEDIA_BY_CLI_ID:
+                        res_c = dict(cls._MEDIA_BY_CLI_ID[quoted_cli_id])
+                        if quoted_wants_video:
+                            res_c["is_video"] = True
+                        if res_c.get("duration") is None and quoted_decl_dur is not None:
+                            res_c["duration"] = quoted_decl_dur
+                        return res_c
+
                 cur_mid = _clean_zalo_id(msg_obj.get("msgId") or msg_obj.get("globalMsgId"))
-                # 1. Tìm chính xác bản đầy đủ của chính tin nhắn lệnh hiện tại (có chứa quote.attach đầy đủ)
                 for rm in reversed(recent_msgs):
+                    if not isinstance(rm, dict):
+                        continue
                     rm_mid = _clean_zalo_id(rm.get("msgId") or rm.get("globalMsgId"))
                     rm_cmid = _clean_zalo_id(rm.get("cliMsgId"))
                     if (cur_mid and rm_mid == cur_mid) or (quoted_msg_id and rm_mid == quoted_msg_id) or (quoted_cli_id and rm_cmid == quoted_cli_id):
                         rm_q = rm.get("quote")
                         if isinstance(rm_q, dict):
                             for sub_c in (rm_q, rm_q.get("attach")):
-                                if isinstance(sub_c, str) and sub_c.strip().startswith("{"):
-                                    try:
-                                        sub_c = json.loads(sub_c.strip())
-                                    except Exception:
-                                        sub_c = None
                                 res_q = cls._parse_single_dict_for_media(sub_c)
                                 if res_q:
+                                    if quoted_wants_video:
+                                        res_q["is_video"] = True
+                                    if res_q.get("duration") is None and quoted_decl_dur is not None:
+                                        res_q["duration"] = quoted_decl_dur
                                     return res_q
-                        res_rm = cls._parse_single_dict_for_media(rm)
-                        if res_rm:
-                            return res_rm
-                        rm_cnt = rm.get("content")
-                        if isinstance(rm_cnt, str) and rm_cnt.strip().startswith("{"):
-                            try:
-                                rm_cnt = json.loads(rm_cnt.strip())
-                            except Exception:
-                                rm_cnt = None
-                        res_cnt = cls._parse_single_dict_for_media(rm_cnt)
-                        if res_cnt:
-                            return res_cnt
+                        for cand_direct in (rm, rm.get("content")):
+                            res_d = cls._parse_single_dict_for_media(cand_direct)
+                            if res_d:
+                                if quoted_wants_video:
+                                    res_d["is_video"] = True
+                                if res_d.get("duration") is None and quoted_decl_dur is not None:
+                                    res_d["duration"] = quoted_decl_dur
+                                return res_d
 
-                if not recent_msgs:
-                    try:
-                        lm = zalo_client.get_last_msgs() or {}
-                        recent_msgs = (lm.get("msgs") or []) + (lm.get("groupMsgs") or [])
-                    except Exception:
-                        pass
-                # 2. Nếu có quote_obj hoặc người dùng vừa gửi ảnh trong nhóm rồi gõ .sticker, lấy tin nhắn ảnh/sticker gần nhất
-                for rm in reversed(recent_msgs[-12:]):
-                    rm_uid = _clean_zalo_id(rm.get("uidFrom") or rm.get("fromUid"))
-                    if quoted_owner_id and rm_uid and rm_uid != quoted_owner_id:
-                        continue
-                    rm_cnt = rm.get("content")
-                    if isinstance(rm_cnt, str) and rm_cnt.strip().startswith("{"):
-                        try:
-                            rm_cnt = json.loads(rm_cnt.strip())
-                        except Exception:
-                            rm_cnt = None
-                    for cand_m in (rm_cnt, rm):
-                        res_f = cls._parse_single_dict_for_media(cand_m)
-                        if res_f:
-                            return res_f
+                # Nếu có quote (kéo trả lời ảnh/video) nhưng preloadconvers cắt attach, lấy ngay media gần nhất trong hội thoại đó!
+                with cls._MEDIA_CACHE_LOCK:
+                    th_list = list(cls._MEDIA_BY_THREAD.get(str(tid_clean)) or [])
+                    if not th_list and quoted_owner_id:
+                        th_list = list(cls._MEDIA_BY_THREAD.get(str(quoted_owner_id)) or [])
+                    if not th_list:
+                        th_list = list(cls._MEDIA_GLOBAL_RECENT)
+                if th_list:
+                    for cand_rec in reversed(th_list):
+                        if quoted_wants_video and cand_rec.get("is_video"):
+                            out_r = dict(cand_rec)
+                            if out_r.get("duration") is None and quoted_decl_dur is not None:
+                                out_r["duration"] = quoted_decl_dur
+                            return out_r
+                    out_latest = dict(th_list[-1])
+                    if quoted_wants_video:
+                        out_latest["is_video"] = True
+                    if out_latest.get("duration") is None and quoted_decl_dur is not None:
+                        out_latest["duration"] = quoted_decl_dur
+                    return out_latest
             except Exception:
                 pass
         return None
@@ -4384,8 +5265,38 @@ class ZaloStickerMakerEngine:
         return canvas
 
     @classmethod
-    def create_sharp_image_sticker(cls, image_bytes_or_path, output_dir=None, add_diecut_border=True):
-        """Tạo Sticker Ảnh Sắc Nét 512×512 (WebP trong suốt + GIF trong suốt + PNG) chuẩn Nhãn Dán Zalo & Telegram."""
+    def _build_animated_2frame_transparent_gif(cls, canvas_rgba, gif_path):
+        """Tạo file GIF động 2 khung hình nền trong suốt 512×512 từ ảnh RGBA Die-Cut:
+        - Giúp Zalo (/api/message/gif/upload & /api/group/gif/upload) nhận diện 100% là Nhãn Dán Sticker động không khung viền!"""
+        from PIL import Image
+        canvas = canvas_rgba.convert("RGBA")
+        alpha = canvas.getchannel("A")
+        pal_1 = canvas.convert("RGB").convert("P", palette=Image.Palette.ADAPTIVE, colors=255)
+        mask = Image.eval(alpha, lambda a: 255 if a <= 128 else 0)
+        pal_1.paste(255, mask)
+
+        # Tạo frame 2 nhích nhẹ 1px (hoặc giữ nguyên) để chuẩn định dạng Animated GIF 2-frame cho Zalo Sticker
+        canvas_2 = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        canvas_2.paste(canvas, (0, -1), canvas)
+        alpha_2 = canvas_2.getchannel("A")
+        pal_2 = canvas_2.convert("RGB").convert("P", palette=Image.Palette.ADAPTIVE, colors=255)
+        mask_2 = Image.eval(alpha_2, lambda a: 255 if a <= 128 else 0)
+        pal_2.paste(255, mask_2)
+
+        pal_1.save(
+            gif_path,
+            format="GIF",
+            save_all=True,
+            append_images=[pal_2],
+            duration=160,
+            loop=0,
+            transparency=255,
+            disposal=2,
+        )
+
+    @classmethod
+    def create_sharp_image_sticker(cls, image_bytes_or_path, output_dir=None, add_diecut_border=True, session=None):
+        """Tạo Sticker Ảnh Sắc Nét 512×512 (Animated GIF 2-frame trong suốt + WebP lossless + PNG) chuẩn Nhãn Dán Zalo & Telegram."""
         out_dir = output_dir or UPLOAD_DIR
         os.makedirs(out_dir, exist_ok=True)
         try:
@@ -4393,14 +5304,17 @@ class ZaloStickerMakerEngine:
             if isinstance(image_bytes_or_path, (bytes, bytearray)):
                 raw_bytes_in = bytes(image_bytes_or_path)
             else:
-                raw_bytes_in, err_f = cls.fetch_media_from_url_or_path(image_bytes_or_path)
+                raw_bytes_in, err_f = cls.fetch_media_from_url_or_path(image_bytes_or_path, session=session)
                 if not raw_bytes_in:
                     return {"ok": False, "error": f"❌ {err_f}"}
 
+            # Nếu dữ liệu tải về là file MP4/WebM video (ví dụ khi link media là video ngắn) -> chuyển sang bộ xử lý video ngắn
+            if len(raw_bytes_in) >= 12 and (b"ftyp" in raw_bytes_in[:32] or raw_bytes_in[:4] == b"\\x1a\\x45\\xdf\\xa3"):
+                return cls.create_short_video_sticker(raw_bytes_in, declared_duration=2.8, output_dir=out_dir, session=session)
+
             im_open = Image.open(io.BytesIO(raw_bytes_in))
-            # Nếu là ảnh GIF động hoặc WebP động nhiều frame -> giữ nguyên chuyển động!
             if getattr(im_open, "is_animated", False) and getattr(im_open, "n_frames", 1) > 1:
-                return cls.create_short_video_sticker(raw_bytes_in, declared_duration=2.5, output_dir=out_dir)
+                return cls.create_short_video_sticker(raw_bytes_in, declared_duration=2.5, output_dir=out_dir, session=session)
 
             canvas = cls._apply_diecut_sticker_treatment(im_open.convert("RGBA"), add_border=add_diecut_border)
 
@@ -4415,13 +5329,8 @@ class ZaloStickerMakerEngine:
             except Exception:
                 webp_path = png_path
 
-            # Xuất thêm bản GIF trong suốt để tương thích với cả cổng /api/group/gif của Zalo
             try:
-                alpha = canvas.getchannel("A")
-                pal_im = canvas.convert("RGB").convert("P", palette=Image.Palette.ADAPTIVE, colors=255)
-                mask = Image.eval(alpha, lambda a: 255 if a <= 128 else 0)
-                pal_im.paste(255, mask)
-                pal_im.save(gif_path, format="GIF", transparency=255, disposal=2)
+                cls._build_animated_2frame_transparent_gif(canvas, gif_path)
             except Exception:
                 gif_path = png_path
 
@@ -4452,14 +5361,13 @@ class ZaloStickerMakerEngine:
             }
 
     @classmethod
-    def create_text_sticker_512(cls, text_str, output_dir=None):
+    def create_text_sticker_512(cls, text_str, output_dir=None, session=None):
         """Tạo Nhãn Dán Chữ Nghệ Thuật Die-Cut 512×512 trên nền trong suốt 100% (RGBA 0,0,0,0) chuẩn Sticker Zalo."""
         from PIL import Image, ImageDraw, ImageFilter
         clean_t = str(text_str or "STICKER VIP").strip()[:60]
         canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
         dr = ImageDraw.Draw(canvas)
 
-        # Vẽ huy hiệu đám mây / khiên Sticker ở trung tâm trên nền hoàn toàn trong suốt
         palettes = [
             ((255, 59, 48, 255), (255, 149, 0, 255), (255, 230, 0, 255)),
             ((0, 122, 255, 255), (88, 86, 214, 255), (0, 245, 212, 255)),
@@ -4468,19 +5376,16 @@ class ZaloStickerMakerEngine:
         ]
         c_main, c_sub, c_acc = palettes[hash(clean_t) % len(palettes)]
 
-        # Đổ bóng mềm
         shadow = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
         dr_s = ImageDraw.Draw(shadow)
         dr_s.rounded_rectangle([(38, 96), (474, 432)], radius=88, fill=(0, 0, 0, 125))
         shadow = shadow.filter(ImageFilter.GaussianBlur(10))
         canvas.alpha_composite(shadow)
 
-        # Viền Die-Cut trắng ngoài cùng dày 14px + thân Sticker
         dr.rounded_rectangle([(28, 82), (484, 418)], radius=92, fill=(255, 255, 255, 255))
         dr.rounded_rectangle([(42, 96), (470, 404)], radius=78, fill=c_main, outline=c_acc, width=6)
         dr.rounded_rectangle([(54, 108), (458, 240)], radius=64, fill=c_sub)
 
-        # Tự động ngắt dòng & chọn cỡ chữ lớn dễ đọc
         words = clean_t.split()
         lines = []
         cur_ln = ""
@@ -4510,7 +5415,6 @@ class ZaloStickerMakerEngine:
             except Exception:
                 tw = len(ln_txt) * (font_sz // 2)
             x_pos = max(56, (512 - tw) // 2)
-            # Viền chữ đen đậm + chữ trắng sáng nổi bật
             for dx in (-3, 0, 3):
                 for dy in (-3, 0, 3):
                     if dx or dy:
@@ -4519,28 +5423,41 @@ class ZaloStickerMakerEngine:
 
         buf = io.BytesIO()
         canvas.save(buf, format="PNG")
-        return cls.create_sharp_image_sticker(buf.getvalue(), output_dir=output_dir, add_diecut_border=False)
+        return cls.create_sharp_image_sticker(buf.getvalue(), output_dir=output_dir, add_diecut_border=False, session=session)
 
     @classmethod
-    def create_short_video_sticker(cls, video_bytes_or_path, declared_duration=None, output_dir=None):
-        """Tạo Nhãn Dán Động Bằng Video Ngắn (≤ 3.0 Giây). Nếu > 3.0s thì TỪ CHỐI NGAY LẬP TỨC!"""
+    def create_short_video_sticker(cls, video_bytes_or_path, declared_duration=None, output_dir=None, session=None, thumb_fallback_url=None):
+        """Tạo Nhãn Dán Động Bằng Video Ngắn (00:01 - 00:03 trên Zalo, tức ≤ 3.99s, cắt chuẩn 3.0s).
+        - Nếu file tải về thực chất là ảnh tĩnh (hoặc quote của Zalo chỉ trả về ảnh thumbnail của video), tự động chuyển sang tạo Nhãn Dán Die-Cut 512×512 để KHÔNG BAO GIỜ LỖI!"""
         out_dir = output_dir or UPLOAD_DIR
         os.makedirs(out_dir, exist_ok=True)
         tmp_in = None
+        raw_v = None
         try:
             import tempfile
             if isinstance(video_bytes_or_path, (bytes, bytearray)):
+                raw_v = bytes(video_bytes_or_path)
                 fd, tmp_in = tempfile.mkstemp(suffix=".mp4")
                 os.close(fd)
                 with open(tmp_in, "wb") as wf:
-                    wf.write(video_bytes_or_path)
+                    wf.write(raw_v)
                 in_path = tmp_in
             else:
                 s_src = str(video_bytes_or_path).strip()
-                if s_src.startswith(("http://", "https://")):
-                    raw_v, err_v = cls.fetch_media_from_url_or_path(s_src)
+                if s_src.startswith(("http://", "https://", "data:")):
+                    raw_v, err_v = cls.fetch_media_from_url_or_path(s_src, session=session)
+                    if not raw_v and thumb_fallback_url and thumb_fallback_url != s_src:
+                        raw_v, err_v = cls.fetch_media_from_url_or_path(thumb_fallback_url, session=session)
                     if not raw_v:
                         return {"ok": False, "error": f"❌ {err_v}"}
+                    # Kiểm tra nhanh nếu URL trong quote.attach của video thực chất là ảnh JPEG/PNG/WebP tĩnh (thumbnail của Zalo)
+                    try:
+                        from PIL import Image
+                        im_test = Image.open(io.BytesIO(raw_v))
+                        if not getattr(im_test, "is_animated", False):
+                            return cls.create_sharp_image_sticker(raw_v, output_dir=out_dir, add_diecut_border=True, session=session)
+                    except Exception:
+                        pass
                     fd, tmp_in = tempfile.mkstemp(suffix=".mp4")
                     os.close(fd)
                     with open(tmp_in, "wb") as wf:
@@ -4549,8 +5466,11 @@ class ZaloStickerMakerEngine:
                 else:
                     in_path = s_src
 
-            measured_dur = cls.get_video_duration_seconds(in_path)
-            eff_dur = float(declared_duration) if (declared_duration is not None and float(declared_duration) > measured_dur) else measured_dur
+            if not os.path.exists(in_path):
+                return {"ok": False, "error": "❌ Không tìm thấy file video đầu vào!"}
+
+            actual_dur = cls.get_video_duration_seconds(in_path)
+            eff_dur = actual_dur if actual_dur > 0 else float(declared_duration or 0.0)
 
             if eff_dur > cls.MAX_VIDEO_STICKER_DURATION_SEC:
                 return {
@@ -4558,67 +5478,97 @@ class ZaloStickerMakerEngine:
                     "rejected_over_3s": True,
                     "duration": round(eff_dur, 2),
                     "error": (
-                        f"❌ TỪ CHỐI TẠO NHÃN DÁN VIDEO: Video của bạn dài {eff_dur:.2f} giây "
-                        f"(Vượt quá giới hạn tối đa {cls.MAX_VIDEO_STICKER_DURATION_SEC:.0f} giây)!\\n"
-                        f"👉 Chỉ nhận tạo nhãn dán bằng video ngắn dưới 3 giây (≤ 3.0s)."
+                        f"❌ TỪ CHỐI TẠO NHÃN DÁN VIDEO: Thời lượng video là {eff_dur:.2f} giây "
+                        f"(Vượt quá giới hạn cho phép 3 giây)!\n"
+                        f"👉 Vui lòng chỉ cắt hoặc chọn video ngắn ≤ 3 giây (00:01 - 00:03) để tạo nhãn dán động."
                     ),
                 }
 
             ts_tag = f"{int(time.time() * 1000)}_{secrets.token_hex(2)}"
-            gif_path = os.path.join(out_dir, f"sticker_anim_{ts_tag}.gif")
-            webp_path = os.path.join(out_dir, f"sticker_anim_{ts_tag}.webp")
+            gif_out = os.path.join(out_dir, f"sticker_vid_{ts_tag}.gif")
+            webp_out = os.path.join(out_dir, f"sticker_vid_{ts_tag}.webp")
+            png_out = os.path.join(out_dir, f"sticker_vid_{ts_tag}.png")
+
             import subprocess
-            subprocess.run(
-                [
-                    "ffmpeg", "-y", "-i", in_path,
-                    "-t", "3.0",
-                    "-vf", "fps=16,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
-                    "-loop", "0",
-                    gif_path
-                ],
-                capture_output=True, timeout=18
+            vf_filter = (
+                "fps=15,scale=512:512:force_original_aspect_ratio=decrease:flags=lanczos,"
+                "pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000"
             )
             try:
                 subprocess.run(
                     [
-                        "ffmpeg", "-y", "-i", in_path,
-                        "-t", "3.0",
-                        "-vcodec", "libwebp", "-lossless", "0", "-q:v", "88",
-                        "-vf", "fps=16,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
-                        "-loop", "0", "-an",
-                        webp_path
+                        "ffmpeg", "-y", "-t", "3.0", "-i", in_path,
+                        "-vf", vf_filter + ",split[s0][s1];[s0]palettegen=reserve_transparent=1[p];[s1][p]paletteuse=alpha_threshold=128",
+                        "-loop", "0", gif_out
                     ],
                     capture_output=True, timeout=18
                 )
             except Exception:
                 pass
 
-            out_file = gif_path if os.path.exists(gif_path) else in_path
-            with open(out_file, "rb") as rf:
-                anim_bytes = rf.read()
-            webp_bytes = anim_bytes
-            if os.path.exists(webp_path):
-                with open(webp_path, "rb") as rf:
-                    webp_bytes = rf.read()
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-t", "3.0", "-i", in_path,
+                        "-vf", vf_filter,
+                        "-vcodec", "libwebp", "-lossless", "0", "-q:v", "80",
+                        "-loop", "0", "-an", webp_out
+                    ],
+                    capture_output=True, timeout=18
+                )
+            except Exception:
+                pass
+
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-i", in_path,
+                        "-vf", "scale=512:512:force_original_aspect_ratio=decrease:flags=lanczos,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
+                        "-frames:v", "1", png_out
+                    ],
+                    capture_output=True, timeout=10
+                )
+            except Exception:
+                pass
+
+            gif_b = open(gif_out, "rb").read() if os.path.exists(gif_out) and os.path.getsize(gif_out) > 64 else b""
+            webp_b = open(webp_out, "rb").read() if os.path.exists(webp_out) and os.path.getsize(webp_out) > 64 else b""
+            png_b = open(png_out, "rb").read() if os.path.exists(png_out) and os.path.getsize(png_out) > 64 else b""
+
+            if png_b and not gif_b:
+                # Nếu có khung hình trích xuất từ video nhưng chưa có GIF, tạo ngay GIF 2-frame Die-Cut từ khung hình đó
+                res_fallback = cls.create_sharp_image_sticker(png_b, output_dir=out_dir, add_diecut_border=True, session=session)
+                if res_fallback.get("ok"):
+                    return res_fallback
+
+            if not gif_b and not webp_b and not png_b:
+                if raw_v:
+                    res_fb2 = cls.create_sharp_image_sticker(raw_v, output_dir=out_dir, add_diecut_border=True, session=session)
+                    if res_fb2.get("ok"):
+                        return res_fb2
+                if thumb_fallback_url:
+                    res_fb3 = cls.create_sharp_image_sticker(thumb_fallback_url, output_dir=out_dir, add_diecut_border=True, session=session)
+                    if res_fb3.get("ok"):
+                        return res_fb3
+                return {"ok": False, "error": "❌ Không thể chuyển đổi video sang nhãn dán động!"}
 
             return {
                 "ok": True,
                 "type": "video_sticker",
-                "duration": round(eff_dur if eff_dur > 0 else 2.5, 2),
-                "gif_path": gif_path if os.path.exists(gif_path) else out_file,
-                "webp_path": webp_path if os.path.exists(webp_path) else out_file,
-                "anim_bytes": anim_bytes,
-                "gif_bytes": anim_bytes,
-                "webp_bytes": webp_bytes,
+                "duration": round(min(3.0, eff_dur or 2.0), 2),
+                "gif_path": gif_out if gif_b else png_out,
+                "webp_path": webp_out if webp_b else gif_out,
+                "png_path": png_out if png_b else gif_out,
+                "gif_bytes": gif_b or webp_b or png_b,
+                "webp_bytes": webp_b or gif_b or png_b,
+                "png_bytes": png_b or gif_b or webp_b,
+                "anim_bytes": gif_b or webp_b or png_b,
                 "width": 512,
                 "height": 512,
-                "message": f"✅ Đã tạo Nhãn Dán Động ({eff_dur if eff_dur > 0 else 2.5:.2f}s ≤ 3.0s) Chuẩn 512×512 Sắc Nét!",
+                "message": f"✅ Đã tạo Nhãn Dán Động 512×512 từ Video ngắn ({round(min(3.0, eff_dur or 2.0), 2)}s ≤ 3.0s) thành công!",
             }
         except Exception as e:
-            return {
-                "ok": False,
-                "error": f"❌ Lỗi xử lý Video Sticker: {e}",
-            }
+            return {"ok": False, "error": f"❌ Lỗi xử lý Video Sticker: {e}"}
         finally:
             if tmp_in and os.path.exists(tmp_in):
                 try:
@@ -5166,10 +6116,19 @@ class Zalo:
                                     u_list = [x for x in raw_u if isinstance(x, dict)]
                                 elif isinstance(raw_u, dict):
                                     for k_u, v_u in raw_u.items():
+                                        cu_k = _clean_zalo_id(k_u)
                                         if isinstance(v_u, dict):
-                                            u_list.append(v_u)
+                                            item_u = dict(v_u)
+                                            if cu_k:
+                                                item_u["_peer_uid"] = cu_k
+                                            u_list.append(item_u)
                                         elif isinstance(v_u, list):
-                                            u_list.extend(x for x in v_u if isinstance(x, dict))
+                                            for x in v_u:
+                                                if isinstance(x, dict):
+                                                    item_u = dict(x)
+                                                    if cu_k:
+                                                        item_u["_peer_uid"] = cu_k
+                                                    u_list.append(item_u)
                                 g_list = []
                                 if isinstance(raw_g, list):
                                     g_list = [x for x in raw_g if isinstance(x, dict)]
@@ -5188,6 +6147,10 @@ class Zalo:
                                                     if cg_k:
                                                         item_g["grid"] = cg_k
                                                     g_list.append(item_g)
+                                for _mu in u_list:
+                                    ZaloStickerMakerEngine.cache_incoming_media_message(_mu, my_uid=self.uid, fallback_thread_id=_mu.get("_peer_uid"))
+                                for _mg in g_list:
+                                    ZaloStickerMakerEngine.cache_incoming_media_message(_mg, my_uid=self.uid, fallback_thread_id=_mg.get("grid"))
                                 if u_list or g_list or not payload_map:
                                     return {"msgs": u_list, "groupMsgs": g_list}
                     except Exception:
@@ -6162,11 +7125,12 @@ class Zalo:
                 continue
         return False
 
-    def send_custom_sticker_media(self, thread_id, media_bytes, filename="sticker.png", is_group=True, caption="", webp_bytes=None, gif_bytes=None, png_bytes=None, sticker_hint=None):
-        """Tải lên & gửi Nhãn Dán Sticker 512×512 đã cắt khung/tách nền trực tiếp vào Box Zalo qua đường API Sticker/GIF Zalo:
-        - Nếu chỉ có sticker_hint (không có media_bytes của ảnh reply), bắn Native Sticker.
-        - Khi có ảnh/video từ người dùng (Reply ảnh gõ .sticker), tải đúng tấm ảnh đã cắt khung Die-Cut 512×512 trong suốt
-          lên CDN Zalo (/api/group/gif/upload, /api/group/photo_original/upload) và phát ra Nhãn Dán không viền!"""
+    def send_custom_sticker_media(self, thread_id, media_bytes, filename="sticker.gif", is_group=True, caption="", webp_bytes=None, gif_bytes=None, png_bytes=None, sticker_hint=None):
+        """Tải lên & gửi Nhãn Dán Sticker 512×512 chuẩn chế độ Nhãn Dán Zalo (True Native Sticker Mode):
+        - Ưu tiên 1: Upload file GIF động 2-frame trong suốt (sticker.gif) qua `/api/group/gif/upload` / `/api/message/gif/upload`
+          (thử cả type=1 và type=11/2) rồi phát qua `/api/group/gif` / `/api/message/gif` kèm `vnamed="sticker.gif"`,
+          `isSticker=1, stickerType=7, width=512, height=512` và `/api/group/sticker` / `/api/message/sticker` để nhảy ra Nhãn Dán thật không viền!
+        - Ưu tiên 2: Upload WebP/PNG trong suốt qua `photo_original/upload` và phát qua `/api/group/gif` + `/api/group/sticker`."""
         tid_s = _clean_zalo_id(thread_id) or str(thread_id).strip()
         if not tid_s:
             return False
@@ -6185,7 +7149,7 @@ class Zalo:
                     sticker_type=sticker_hint.get("sticker_type", 7),
                     is_group=is_group,
                 )
-            return self.send_native_sticker(tid_s, keyword=str(caption or ""), is_group=is_group)
+            return False
 
         active_s = getattr(self, "prio_s", None) or self.s
         client_id = str(int(time.time() * 1000) + random.randint(1, 89))
@@ -6194,46 +7158,56 @@ class Zalo:
         upload_candidates = []
         if gif_bytes:
             upload_candidates.append(("sticker.gif", gif_bytes, "image/gif"))
-        if png_bytes:
-            upload_candidates.append(("sticker.png", png_bytes, "image/png"))
         if webp_bytes:
             upload_candidates.append(("sticker.webp", webp_bytes, "image/webp"))
+        if png_bytes:
+            upload_candidates.append(("sticker.png", png_bytes, "image/png"))
         if media_bytes and not upload_candidates:
-            up_fn = filename or "sticker.png"
+            up_fn = filename or "sticker.gif"
             mt = "image/gif" if up_fn.endswith(".gif") else ("image/webp" if up_fn.endswith(".webp") else "image/png")
             upload_candidates.append((up_fn, media_bytes, mt))
 
         self._sync_cookie_headers()
         sent_ok = False
-        # Thử gửi qua cổng ZSticker AI / WebP Sticker gốc của Zalo kèm fallback GIF/Photo không viền cho cả chat 1-1 (Tran Phat) và Box Nhóm!
         for grp_mode in (bool(is_group), not bool(is_group)):
             for up_fname, payload_b, mime_t in upload_candidates:
                 try:
-                    up_params = {
-                        "zpw_ver": 645,
-                        "zpw_type": 30,
-                        "params": self._enc({
-                            "totalChunk": 1,
-                            "fileName": up_fname,
-                            "clientId": client_id,
-                            "totalSize": len(payload_b),
-                            "imei": self.imei,
-                            "chunkId": 1,
-                            "grid" if grp_mode else "toid": tid_s,
-                            "isE2EE": 0,
-                        }),
-                        "type": "11" if grp_mode else "2",
+                    base_up_pl = {
+                        "totalChunk": 1,
+                        "fileName": up_fname,
+                        "clientId": client_id,
+                        "totalSize": len(payload_b),
+                        "imei": self.imei,
+                        "chunkId": 1,
+                        "isE2EE": 0,
                     }
+                    if grp_mode:
+                        base_up_pl["grid"] = tid_s
+                    else:
+                        base_up_pl["toid"] = tid_s
+                        base_up_pl["toId"] = tid_s
+
+                    enc_up_pl = self._enc(base_up_pl)
                     files_up = {"chunkContent": (up_fname, payload_b, mime_t)}
                     up_endpoints = [
-                        "https://tt-files-wpa.chat.zalo.me/api/group/photo_original/upload" if grp_mode else "https://tt-files-wpa.chat.zalo.me/api/message/photo_original/upload",
-                        "https://files-wpa.chat.zalo.me/api/group/photo_original/upload" if grp_mode else "https://files-wpa.chat.zalo.me/api/message/photo_original/upload",
+                        ("https://tt-files-wpa.chat.zalo.me/api/group/photo_original/upload" if grp_mode else "https://tt-files-wpa.chat.zalo.me/api/message/photo_original/upload", "11" if grp_mode else "2"),
+                        ("https://files-wpa.chat.zalo.me/api/group/photo_original/upload" if grp_mode else "https://files-wpa.chat.zalo.me/api/message/photo_original/upload", "11" if grp_mode else "2"),
                     ]
                     if up_fname.endswith(".gif"):
-                        up_endpoints.insert(0, "https://tt-files-wpa.chat.zalo.me/api/group/gif/upload" if grp_mode else "https://tt-files-wpa.chat.zalo.me/api/message/gif/upload")
+                        up_endpoints = [
+                            ("https://tt-files-wpa.chat.zalo.me/api/group/gif/upload" if grp_mode else "https://tt-files-wpa.chat.zalo.me/api/message/gif/upload", "1"),
+                            ("https://tt-files-wpa.chat.zalo.me/api/group/gif/upload" if grp_mode else "https://tt-files-wpa.chat.zalo.me/api/message/gif/upload", "11" if grp_mode else "2"),
+                            ("https://files-wpa.chat.zalo.me/api/group/gif/upload" if grp_mode else "https://files-wpa.chat.zalo.me/api/message/gif/upload", "1"),
+                        ] + up_endpoints
 
-                    for ep_up in up_endpoints:
+                    for ep_up, up_type_val in up_endpoints:
                         try:
+                            up_params = {
+                                "zpw_ver": 645,
+                                "zpw_type": 30,
+                                "params": enc_up_pl,
+                                "type": up_type_val,
+                            }
                             r_u = active_s.post(ep_up, params=up_params, files=files_up, timeout=8)
                             if r_u.status_code == 200 and r_u.content:
                                 rj_u = r_u.json()
@@ -6241,28 +7215,52 @@ class Zalo:
                                     dec_str = self._dec(rj_u["data"])
                                     dec_u = json.loads(dec_str) if dec_str else {}
                                     d_u = (dec_u.get("data") if isinstance(dec_u.get("data"), dict) else dec_u) if isinstance(dec_u, dict) else {}
-                                    if isinstance(d_u, dict) and (d_u.get("normalUrl") or d_u.get("hdUrl") or d_u.get("thumbUrl") or d_u.get("photoId") or d_u.get("href")):
-                                        normal_url = d_u.get("hdUrl") or d_u.get("normalUrl") or d_u.get("href") or d_u.get("thumbUrl") or ""
-                                        thumb_url = d_u.get("thumbUrl") or normal_url
-                                        photo_id = d_u.get("photoId") or d_u.get("clientFileId") or client_id
+                                    if isinstance(d_u, dict):
+                                        normal_url = (
+                                            d_u.get("hdUrl")
+                                            or d_u.get("normalUrl")
+                                            or d_u.get("oriUrl")
+                                            or d_u.get("href")
+                                            or d_u.get("url")
+                                            or d_u.get("fileUrl")
+                                            or d_u.get("thumbUrl")
+                                            or d_u.get("thumb")
+                                            or ""
+                                        )
+                                        thumb_url = d_u.get("thumbUrl") or d_u.get("thumb") or normal_url
+                                        photo_id = d_u.get("photoId") or d_u.get("clientFileId") or d_u.get("fileId") or client_id
+                                        if not normal_url:
+                                            continue
 
-                                        # 1) Phát qua cổng /api/group/gif (isSticker=1) để hiển thị Nhãn Dán trong suốt không khung viền
+                                        # 1) Chuẩn Nhãn Dán Động / Sticker Zalo qua /api/group/gif & /api/message/gif (kèm vnamed="sticker.gif", isSticker=1, stickerType=7)
                                         gif_stk_pl = {
-                                            "grid" if grp_mode else "toid": tid_s,
                                             "clientId": str(int(client_id) + 1),
+                                            "vnamed": "sticker.gif",
                                             "thumb": thumb_url,
                                             "href": normal_url,
                                             "width": 512,
                                             "height": 512,
                                             "type": 1,
-                                            "params": json.dumps({"width": 512, "height": 512, "isSticker": 1, "stickerType": 7}),
+                                            "params": json.dumps({
+                                                "width": 512,
+                                                "height": 512,
+                                                "isSticker": 1,
+                                                "stickerType": 7,
+                                                "vnamed": "sticker.gif",
+                                            }),
                                             "imei": self.imei,
                                             "zsource": 704,
                                         }
+                                        if grp_mode:
+                                            gif_stk_pl["grid"] = tid_s
+                                        else:
+                                            gif_stk_pl["toid"] = tid_s
+                                            gif_stk_pl["toId"] = tid_s
+
                                         for ep_gif_s in (
                                             ("https://tt-group-wpa.chat.zalo.me/api/group/gif", "https://group-wpa.chat.zalo.me/api/group/gif", "https://tt-files-wpa.chat.zalo.me/api/group/gif")
                                             if grp_mode else
-                                            ("https://tt-chat2-wpa.chat.zalo.me/api/message/gif", "https://tt-chat1-wpa.chat.zalo.me/api/message/gif", "https://tt-files-wpa.chat.zalo.me/api/message/gif")
+                                            ("https://tt-chat2-wpa.chat.zalo.me/api/message/gif", "https://tt-chat1-wpa.chat.zalo.me/api/message/gif", "https://tt-files-wpa.chat.zalo.me/api/message/gif", "https://wpa.chat.zalo.me/api/message/gif")
                                         ):
                                             try:
                                                 r_g = active_s.post(ep_gif_s, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(gif_stk_pl)}, timeout=5)
@@ -6276,26 +7274,67 @@ class Zalo:
                                         if sent_ok:
                                             break
 
-                                        # 2) Dự phòng phát qua /api/group/photo với desc="" (không khung chữ) & isSticker=1
+                                        # 2) Phát qua cổng /api/group/sticker hoặc /api/message/sticker kèm custom URL
+                                        native_custom_pl = {
+                                            "stickerId": int(photo_id) if str(photo_id).isdigit() else 23338,
+                                            "cateId": 10425,
+                                            "type": 7,
+                                            "stickerUrl": normal_url,
+                                            "stickerWebpUrl": normal_url,
+                                            "uri": normal_url,
+                                            "width": 512,
+                                            "height": 512,
+                                            "clientId": str(int(client_id) + 2),
+                                            "imei": self.imei,
+                                            "zsource": 101,
+                                        }
+                                        if grp_mode:
+                                            native_custom_pl["grid"] = tid_s
+                                        else:
+                                            native_custom_pl["toid"] = tid_s
+                                        for ep_stk_s in (
+                                            ("https://tt-group-wpa.chat.zalo.me/api/group/sticker", "https://group-wpa.chat.zalo.me/api/group/sticker")
+                                            if grp_mode else
+                                            ("https://tt-chat2-wpa.chat.zalo.me/api/message/sticker", "https://tt-chat1-wpa.chat.zalo.me/api/message/sticker")
+                                        ):
+                                            try:
+                                                r_st = active_s.post(ep_stk_s, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(native_custom_pl)}, timeout=4)
+                                                if r_st.status_code == 200 and r_st.content:
+                                                    ok_st, _ = self._is_zalo_api_send_ok(r_st.json())
+                                                    if ok_st:
+                                                        sent_ok = True
+                                                        break
+                                            except Exception:
+                                                continue
+                                        if sent_ok:
+                                            break
+
+                                        # 3) Dự phòng phát qua /api/group/photo hoặc /api/message/photo với isSticker=1
                                         send_pl = {
-                                            "grid" if grp_mode else "toid": tid_s,
                                             "photoId": str(photo_id),
                                             "clientId": str(client_id),
                                             "oriUrl": normal_url,
                                             "thumbUrl": thumb_url,
                                             "normalUrl": normal_url,
                                             "hdUrl": normal_url,
+                                            "rawUrl": normal_url,
                                             "width": 512,
                                             "height": 512,
                                             "desc": "",
-                                            "params": json.dumps({"isSticker": 1, "sticker": 1, "width": 512, "height": 512}),
+                                            "params": json.dumps({"isSticker": 1, "sticker": 1, "stickerType": 7, "width": 512, "height": 512}),
                                             "imei": self.imei,
                                             "zsource": 704,
                                         }
+                                        if grp_mode:
+                                            send_pl["grid"] = tid_s
+                                        else:
+                                            send_pl["toid"] = tid_s
+                                            send_pl["toId"] = tid_s
+
                                         for ep_send in (
                                             ("https://tt-files-wpa.chat.zalo.me/api/group/photo", "https://tt-group-wpa.chat.zalo.me/api/group/photo", "https://files-wpa.chat.zalo.me/api/group/photo")
                                             if grp_mode else
-                                            ("https://tt-files-wpa.chat.zalo.me/api/message/photo", "https://tt-chat2-wpa.chat.zalo.me/api/message/photo", "https://files-wpa.chat.zalo.me/api/message/photo")
+                                            ("https://tt-files-wpa.chat.zalo.me/api/message/photo", "https://tt-chat2-wpa.chat.zalo.me/api/message/photo", "https://files-wpa.chat.zalo.me/api/message/photo", "https://wpa.chat.zalo.me/api/message/photo")
                                         ):
                                             try:
                                                 r_snd = active_s.post(ep_send, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(send_pl)}, timeout=6)
@@ -6319,25 +7358,61 @@ class Zalo:
         return sent_ok
 
     def get_recent_dm_messages(self, peer_uid):
-        """Lấy lịch sử tin nhắn chat 1-1 (cá nhân) gần nhất để hỗ trợ .sticker khi Reply ảnh trong chat riêng (ví dụ: Tran Phat)."""
+        """Lấy lịch sử tin nhắn chat 1-1 (cá nhân) gần nhất qua cả preloadconvers lẫn message/history để hỗ trợ .sticker 100%."""
         uid_s = _clean_zalo_id(peer_uid) or str(peer_uid or "").strip()
         if not uid_s:
             return []
         active_s = getattr(self, "prio_s", None) or self.s
         out_msgs = []
+        # 1. Thử lấy từ preloadconvers với threadIdLocalMsgId={uid_s: "0"}
+        try:
+            enc_p = self._enc({"threadIdLocalMsgId": json.dumps({uid_s: "0"}), "imei": self.imei})
+            for ep_c in (
+                "https://tt-convers-wpa.chat.zalo.me/api/preloadconvers/get-last-msgs",
+                "https://convers-wpa.chat.zalo.me/api/preloadconvers/get-last-msgs",
+            ):
+                r_c = active_s.post(ep_c, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": enc_p}, timeout=(1.2, 2.2))
+                if r_c.status_code == 200 and r_c.content:
+                    dec_c = self._dec(r_c.json().get("data", ""))
+                    if dec_c:
+                        d_c = (json.loads(dec_c) or {}).get("data") or {}
+                        raw_u = d_c.get("msgs") or []
+                        if isinstance(raw_u, list):
+                            for x in raw_u:
+                                if isinstance(x, dict):
+                                    ZaloStickerMakerEngine.cache_incoming_media_message(x, my_uid=self.uid, fallback_thread_id=uid_s)
+                                    out_msgs.append(x)
+                        elif isinstance(raw_u, dict):
+                            for k_u, v_u in raw_u.items():
+                                if isinstance(v_u, dict):
+                                    ZaloStickerMakerEngine.cache_incoming_media_message(v_u, my_uid=self.uid, fallback_thread_id=_clean_zalo_id(k_u) or uid_s)
+                                    out_msgs.append(v_u)
+                                elif isinstance(v_u, list):
+                                    for x in v_u:
+                                        if isinstance(x, dict):
+                                            ZaloStickerMakerEngine.cache_incoming_media_message(x, my_uid=self.uid, fallback_thread_id=_clean_zalo_id(k_u) or uid_s)
+                                            out_msgs.append(x)
+                        break
+        except Exception:
+            pass
+        # 2. Thử lấy thêm từ message/getrecent & message/history
         for ep_dm, pl_dm in (
-            ("https://tt-chat2-wpa.chat.zalo.me/api/message/history", {"toid": uid_s, "uid": uid_s, "count": 20, "imei": self.imei}),
-            ("https://wpa.chat.zalo.me/api/message/history", {"toid": uid_s, "uid": uid_s, "count": 20, "imei": self.imei}),
+            ("https://tt-chat2-wpa.chat.zalo.me/api/message/getrecent", {"toid": uid_s, "uid": uid_s, "globalMsgId": "10000000000000000", "count": 25, "imei": self.imei}),
+            ("https://tt-chat2-wpa.chat.zalo.me/api/message/history", {"toid": uid_s, "uid": uid_s, "count": 25, "imei": self.imei}),
+            ("https://wpa.chat.zalo.me/api/message/history", {"toid": uid_s, "uid": uid_s, "count": 25, "imei": self.imei}),
         ):
             try:
-                r = active_s.post(ep_dm, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(pl_dm)}, timeout=(1.5, 3.0))
+                r = active_s.post(ep_dm, params={"zpw_ver": 645, "zpw_type": 30}, data={"params": self._enc(pl_dm)}, timeout=(1.2, 2.2))
                 if r.status_code == 200 and r.content:
                     dec = self._dec(r.json().get("data", ""))
                     if dec:
                         d_obj = json.loads(dec).get("data") or {}
                         msgs = d_obj.get("msgs") or d_obj.get("data") or (d_obj if isinstance(d_obj, list) else [])
                         if isinstance(msgs, list) and msgs:
-                            out_msgs.extend([m for m in msgs if isinstance(m, dict)])
+                            for m in msgs:
+                                if isinstance(m, dict):
+                                    ZaloStickerMakerEngine.cache_incoming_media_message(m, my_uid=self.uid, fallback_thread_id=uid_s)
+                                    out_msgs.append(m)
                             break
             except Exception:
                 continue
@@ -6977,7 +8052,7 @@ class Zalo:
         if self.uid:
             KNOWN_GROUPS_BY_ACC[self.uid].add(gid_s)
 
-        active_s = getattr(self, "prio_s", None) or self.s
+        active_s = self.s
         if not self.secret_key:
             try:
                 self._login(force=True)
@@ -7024,6 +8099,7 @@ class Zalo:
                         self._working_recent_ep = (ep, 1 if "count" in pl_cand else 0)
                         valid_msgs = [m for m in msgs if isinstance(m, dict)]
                         for m in valid_msgs:
+                            ZaloStickerMakerEngine.cache_incoming_media_message(m, my_uid=self.uid, fallback_thread_id=gid_s)
                             u_f = str(m.get("uidFrom") or "").strip()
                             d_n = str(m.get("dName") or "").strip()
                             if u_f and d_n and u_f != "0":
@@ -12731,7 +13807,7 @@ def box_target_worker(client, acc_id, plat, target, blocks, runtime_opts,
                 elif mode == "nhay_namebox":
                     client.change_group_name(target_id, text_item)
                 elif mode == "nhay_theme":
-                    client.change_group_theme(target_id, text_item if text_item else None, is_group=is_group)
+                    client.send_photo_from_source_or_card(target_id, image_src=(text_item if str(text_item).startswith("http") else None), caption=text_item, is_group=is_group)
                 elif mode == "zalo_todo":
                     ass_uids = [m["uid"] for m in eff_mentions] if eff_mentions else [client.uid]
                     client.send_todo(target_id, text_item, assignees=ass_uids)
@@ -14137,6 +15213,16 @@ def parse_and_execute_inchat_command(
         "gtan": "giaitan",
         "spamgiaitan": "nhaygiaitan",
         "giaitannhom": "giaitan",
+        "giaitan1": "giaitan",
+        "giaitanall": "giaitan",
+        "disbandall": "giaitan",
+        "cleankey": "xoakey",
+        "undomsg": "xoakey",
+        "xoatin": "xoakey",
+        "xoatoanbo": "kickall",
+        "kickhet": "kickall",
+        "lagbox": "floodbox",
+
         "nhandan": "sticker",
         "stkr": "sticker",
         "taosticker": "sticker",
@@ -14255,7 +15341,8 @@ def parse_and_execute_inchat_command(
             if idx_a > 0:
                 time.sleep(min(0.18, idx_a * 0.03))
             a_name = a_item.get("name") or f"Acc #{a_item.get('id')}"
-            out_txt = f"⚡ [{a_name}]\n{msg_txt}" if len(target_accs) > 1 else msg_txt
+            clean_msg_txt = re.sub(r"</?(?:b|i|u|code|pre|blockquote)>", "", str(msg_txt or ""))
+            out_txt = f"⚡ [{a_name}]\n{clean_msg_txt}" if len(target_accs) > 1 else clean_msg_txt
             register_system_sent_message(text=out_txt)
             if platform == "zalo":
                 try:
@@ -14306,95 +15393,54 @@ def parse_and_execute_inchat_command(
     if cmd_token in ("menu", "help", "lenh", "bot", "hdsd"):
         with SYSTEM_CFG_LOCK:
             cur_d = SYSTEM_RUNTIME_CONFIG["delay"]
-            cur_c = SYSTEM_RUNTIME_CONFIG["color_mode"]
-            cur_ic = SYSTEM_RUNTIME_CONFIG["icon_count"]
             nhay_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_nhay_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file", "nhay.txt")
             ngon_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_ngon_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file", "ngon.txt")
             acc_flt_now = SYSTEM_RUNTIME_CONFIG.get("active_acc_filter", "ALL")
-        vip_st = "ON" if DiscordStealthAntiBanEngine.SUPER_VIP_MODE else "OFF"
+            rep_x = int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)
         active_accs_cnt = len(get_all_accounts_from_ram(platform=platform, enabled_only=True))
-        flt_lbl = f"TẤT CẢ ({active_accs_cnt} Acc)" if str(acc_flt_now).upper() == "ALL" else f"Chỉ Acc #{acc_flt_now}"
+        flt_lbl = f"Đa Acc ({active_accs_cnt})" if str(acc_flt_now).upper() == "ALL" else f"Acc #{acc_flt_now}"
 
         if platform == "discord":
             help_txt = (
-                f"╔══════════════════════════════════════╗\n"
-                f"  🎮 DISCORD GATEWAY v9 PRO ({APP_VERSION})\n"
-                f"  👑 Author: {APP_AUTHOR} • PRX 0s: {vip_st}\n"
-                f"  📡 Acc Online: {flt_lbl} • Delay: {cur_d}s\n"
-                f"╚══════════════════════════════════════╝\n"
-                f"┏━━ 1️⃣ CHIẾN DỊCH ĐA KÊNH & TREO 0MS ━━┓\n"
-                f"  ▸ .n <file/nd> [@Tên/@all] : Treo nhây từng dòng 0s\n"
-                f"  ▸ .g <file/nd> [@Tên/@all] : Treo ngôn nguyên đoạn\n"
-                f"  ▸ .nall / .gall            : Phang đồng loạt 200+ kênh\n"
-                f"  ▸ .xa / .combo / .2c / .so : Siêu xả đa luồng & gộp câu\n"
-                f"  ▸ .chan <nd>               : Bám sát & phản đòn 0.0s\n"
-                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-                f"┏━━ 2️⃣ TIỆN ÍCH DISCORD & QUẢN LÝ FILE ━━┓\n"
-                f"  ▸ .soi / .dsbox  : Soi toàn bộ kênh & thành viên\n"
-                f"  ▸ .typing / .poll1: Giả lập soạn tin & tạo Poll\n"
-                f"  ▸ .statusdc <nd> : Đổi trạng thái Custom Status\n"
-                f"  ▸ .chonfile <số> : Chọn file ({nhay_f_now} | {ngon_f_now})\n"
-                f"  ▸ .prx <on/test> : Quản lý Hồ Proxy Failover 0ms\n"
-                f"  ▸ .d <giây> | .cp @Tên | .xq @Tên | .checkacc\n"
-                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-                f"🛑 DỪNG KHẨN CẤP: .t / .stop (Kênh này) | .ta / .stopall (Tất cả)"
+                f"⚡ ZENVYRE DISCORD ({APP_VERSION})\n"
+                f"👑 {APP_AUTHOR} • {flt_lbl} • Delay: {cur_d}s\n"
+                f"• .g [nd] : Treo ngôn • .n [nd] : Nhây dòng\n"
+                f"• .xa | .combo | .2c | .so | .chan [nd]\n"
+                f"• .chonfile <số> | .ds ({nhay_f_now})\n"
+                f"• .d <giây> | .cp @Tên | .xq @Tên\n"
+                f"🛑 Dừng: .t (Kênh này) | .ta (Tất cả)"
             )
         elif platform == "messenger":
             help_txt = (
-                f"╔══════════════════════════════════════╗\n"
-                f"  💬 MESSENGER OMNI-SHIELD ({APP_VERSION})\n"
-                f"  👑 Author: {APP_AUTHOR} • Anti-Ban 9 Lớp\n"
-                f"  📡 Acc Online: {flt_lbl} • Delay: {cur_d}s\n"
-                f"╚══════════════════════════════════════╝\n"
-                f"┏━━ 1️⃣ SIÊU FAKE SOẠN TIN 12 NGUỒN & ANTI-BAN ━━┓\n"
-                f"  ▸ .typing <on/off> : Bật/tắt 12 Nguồn Fake Soạn Tin\n"
-                f"  ▸ .nhaytyping      : Treo nhấp nháy soạn tin liên hoàn\n"
-                f"  ▸ .antiband <on>   : Khiên chống Die Cookie & Jitter\n"
-                f"  ▸ .ping / .status  : Kiểm tra sức khỏe Cookie & MQTT\n"
-                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-                f"┏━━ 2️⃣ CHIẾN DỊCH TREO, NHÂY & MQTT 0MS ━━┓\n"
-                f"  ▸ .n <nd/file> [@Tên/@All] : Nhây từng dòng siêu tốc\n"
-                f"  ▸ .g <nd/file> [@Tên/@All] : Treo ngôn nguyên đoạn\n"
-                f"  ▸ .xa / .combo / .2c / .so : Siêu xả MQTT & gộp câu\n"
-                f"  ▸ .poll <câu hỏi> | <ý 1;2>: Tạo bình chọn Poll MQTT\n"
-                f"  ▸ .theme <tên> | .tenbox   : Đổi nền & tên Box MQTT\n"
-                f"  ▸ .setname <bd> [@Tên]     : Đổi biệt danh thành viên\n"
-                f"  ▸ .sharelink | .sharecontact | .block | .addmem\n"
-                f"  ▸ .chonfile <số> | .ds | .d <giây> | .cp @Tên\n"
-                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-                f"🛑 DỪNG KHẨN CẤP: .t / .stop (Box này) | .ta / .stopall (Tất cả)"
+                f"⚡ ZENVYRE MESSENGER ({APP_VERSION})\n"
+                f"👑 {APP_AUTHOR} • {flt_lbl} • Delay: {cur_d}s\n"
+                f"• .typing <on/off> | .nhaytyping\n"
+                f"• .g [nd] : Treo ngôn • .n [nd] : Nhây dòng\n"
+                f"• .xa | .combo | .2c | .so | .poll\n"
+                f"• .chonfile <số> | .ds | .d <giây> | .cp @Tên\n"
+                f"🛑 Dừng: .t (Box này) | .ta (Tất cả)"
             )
         else:
             help_txt = (
-                f"╔══════════════════════════════════════╗\n"
-                f"  🌌 ZENVYRE ULTRA VIP ({APP_VERSION})\n"
-                f"  👑 Author: {APP_AUTHOR} • Lặp lệnh: x2\n"
-                f"  📡 Chế độ: {flt_lbl} • Delay: {cur_d}s\n"
-                f"  📂 File: Nhây=[{nhay_f_now}] • Ngôn=[{ngon_f_now}]\n"
-                f"╚══════════════════════════════════════╝\n"
-                f"┏━━ 1️⃣ ZSTICKER AI, CANH TREO 1P30S & LINK BOX ━━┓\n"
-                f"  ▸ .sticker     : Reply ảnh/video ≤3s tạo ZSticker AI\n"
-                f"  ▸ .canhtreo    : Canh 1p30s ai ngưng nhắn báo về Tele\n"
-                f"  ▸ .linkbox     : Tạo & lấy Link Box Zalo siêu tốc\n"
-                f"  ▸ .nhaygiaitan : Phát thông báo Giải Tán Nhóm chuẩn Zalo\n"
-                f"  ▸ .anh [url]   : Gửi ảnh sắc nét vào Box (.treoanh)\n"
-                f"  ▸ .qr          : Tạo ảnh Mã QR Zalo PC thật tại Box\n"
-                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-                f"┏━━ 2️⃣ ĐI MÀU CÙNG CHỌN (.MAU) & KHO FILE ━━┓\n"
-                f"  ▸ .mau <màu 1> <màu 2> : Đi màu cùng chọn (VD: .mau do cam)\n"
-                f"  ▸ .addnhay / .addngon  : Thêm File Nhây/Ngôn tại Box\n"
-                f"  ▸ .chonfile <số> | .ds : Chọn & xem kho File .txt\n"
-                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-                f"┏━━ 3️⃣ TREO NGÔN (1 DÃY), NHÂY (1 DÒNG) & ĐA ACC ━━┓\n"
-                f"  ▸ .g (Treo ngôn nguyên dãy) | .n (Nhây từng dòng)\n"
-                f"  ▸ .xa | .combo | .2c | .so | .anall | .antan @Tên\n"
-                f"  ▸ .nhaypoll | .tenbox | .todo | .bank | .card\n"
-                f"  ▸ .acc <ID/all> | .d <giây> | .cp @Tên | .xq @Tên\n"
-                f"┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n"
-                f"🛑 DỪNG KHẨN CẤP: .t / .stop (Box này) | .ta / .stopall (Tất cả)"
+                f"⚡ ZENVYRE ULTRA ({APP_VERSION})\n"
+                f"👑 {APP_AUTHOR} • {flt_lbl} • Delay: {cur_d}s • Lặp: x{rep_x}\n"
+                f"📂 Nhây: [{nhay_f_now}] • Ngôn: [{ngon_f_now}]\n"
+                f"1️⃣ TREO & NHÂY:\n"
+                f"• .g [nd] : Treo ngôn 1 dãy • .n [nd] : Nhây dòng\n"
+                f"• .anall  : Nhây tag ẩn • .anh : Gửi ảnh (.treoanh)\n"
+                f"2️⃣ PHÁ BOX & TIỆN ÍCH ZALO:\n"
+                f"• .sticker: Reply Ảnh/Video ≤3s tạo Nhãn Dán\n"
+                f"• .giaitan: Troll giải tán vô hạn (.nhaygiaitan)\n"
+                f"• .xoakey : Thu hồi tin người không có key\n"
+                f"• .kickall: Kick hết mem • .floodbox <link/typing/poll>\n"
+                f"• .canhtreo: Canh 1p30s • .linkbox • .qr\n"
+                f"3️⃣ CÀI ĐẶT NHANH:\n"
+                f"• .mau <do cam / word / char> : Đổi màu chữ\n"
+                f"• .chonfile <số> | .ds | .d <giây> | .cp @Tên\n"
+                f"🛑 Dừng: .t (Box này) | .ta (Tất cả)"
             )
-        _send_reply(help_txt)
-        log_system_command(acc_id, thread_id, sender_id, text, f"Hiển thị .menu ({platform})")
+        _send_reply(help_txt, broadcast_all_accs=False, reply_color_mode="word_rainbow")
+        log_system_command(acc_id, thread_id, sender_id, text, f"Hiển thị .menu gọn 0ms ({platform})")
         return True
 
     if cmd_token in ("prx", "proxy"):
@@ -15085,37 +16131,113 @@ def parse_and_execute_inchat_command(
         _send_reply(f"✅ Đã cập nhật tên gợi nhớ/biệt danh thành: {alias_str}", broadcast_all_accs=False)
         return True
 
-    if cmd_token in ("giaitan", "giaitan1", "nhaygiaitan"):
-        g_name = arg_body.strip()
+    # ══════════════════════════════════════════════════════════════════════════
+    # 1. TROLL GIẢI TÁN VÔ HẠN (.giaitan, .giaitanall, .nhaygiaitan, .disbandall)
+    # ══════════════════════════════════════════════════════════════════════════
+    if cmd_token in ("giaitan", "giaitanall", "nhaygiaitan", "disbandall"):
         if platform == "zalo" and zalo_client:
-            real_bname = g_name or zalo_client.get_group_real_name(thread_id) or "Lũ vdanh"
-            with SYSTEM_CFG_LOCK:
-                rep_cnt_gt = int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)
-            present_accs = get_accounts_present_in_thread("zalo", thread_id, is_group, acc_row) if ("daacc" in text.lower() or "allacc" in text.lower()) else [acc_row]
-            def _fire_disband_sys(a_item):
+            g_name = arg_body.strip() or zalo_client.get_group_real_name(thread_id) or "Nhóm Zalo"
+            stop_tasks_for_thread(thread_id)
+            stop_ev_local = threading.Event()
+            task_id_gt = f"disband_{acc_id}_{thread_id}_{int(time.time() * 1000)}"
+            ACTIVE_TASKS[task_id_gt] = {
+                "id": task_id_gt,
+                "mode": "nhay_giaitan",
+                "status": "Đang chạy",
+                "stop": stop_ev_local,
+                "targets": [{"id": str(thread_id), "name": g_name, "type": "group"}],
+                "acc_ids": [acc_id],
+                "acc_count": 1,
+                "created_at": time.strftime("%H:%M:%S"),
+            }
+            present_accs = get_accounts_present_in_thread("zalo", thread_id, is_group, acc_row)
+
+            def _infinite_troll(a_item):
                 try:
                     zc_d = zalo_client if a_item["id"] == acc_id else Zalo.get_pooled_client(
                         a_item["imei"], a_item["cookies"],
                         user_agent=a_item.get("user_agent") or "",
                         zpw_enk_hint=a_item.get("zpw_enk") or "",
-                        uid_hint=a_item.get("uid") or ""
+                        uid_hint=a_item.get("uid") or "",
                     )
-                    for _ in range(max(1, rep_cnt_gt)):
-                        res_d = zc_d.spam_group_disband_notification(thread_id, group_name=real_bname, send_inbox_alert=False)
-                        time.sleep(0.15)
+                    with SYSTEM_CFG_LOCK:
+                        d_now = max(0.35, float(SYSTEM_RUNTIME_CONFIG.get("delay", 0.6) or 0.6))
+                    ZaloDisbandTroller.run_infinite(zc_d, thread_id, stop_event=stop_ev_local, delay=d_now, box_name=g_name)
                 except Exception:
                     pass
+                finally:
+                    ACTIVE_TASKS.pop(task_id_gt, None)
+
             for a_it in present_accs[:8]:
-                _PRIORITY_CMD_EXECUTOR.submit(_fire_disband_sys, a_it)
-            if cmd_token == "nhaygiaitan":
-                # Nếu gõ .nhaygiaitan thì vừa nổ ngay 2 phát thông báo giải tán vừa bật luồng lặp liên hoàn
-                pass
-            else:
-                log_system_command(acc_id, thread_id, sender_id, text, f"Phát Thông Báo Hệ Thống Zalo Giải Tán Nhóm (x{rep_cnt_gt}): {real_bname}")
-                return True
+                threading.Thread(target=_infinite_troll, args=(a_it,), daemon=True).start()
+            _send_reply(
+                f"📢 Đã bật TROLL GIẢI TÁN VÔ HẠN vào nhóm «{g_name}» (Quét toàn bộ thành viên + Tag ẩn @All).\n👉 Gõ .t hoặc .stop để dừng!",
+                broadcast_all_accs=False,
+            )
+            log_system_command(acc_id, thread_id, sender_id, text, f"Troll Giải Tán Vô Hạn: {g_name}")
+            return True
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 2. THU HỒI TIN NHẮN NGƯỜI KHÔNG CÓ KEY (.xoakey, .cleankey, .undomsg, .xoatin)
+    # ══════════════════════════════════════════════════════════════════════════
+    if cmd_token in ("xoakey", "cleankey", "undomsg", "xoatin"):
+        if platform == "zalo" and zalo_client:
+            max_u = int(arg_body.strip()) if arg_body.strip().isdigit() else 50
+
+            def _do_undo():
+                res = ZaloUndoEngine.undo_nonkey(zalo_client, thread_id, max_count=max_u)
+                _send_reply(
+                    f"🗑️ Đã thu hồi {res['undone']} tin nhắn của thành viên không có key (Bỏ qua {res['skipped_key']} tin của Admin/Key VIP)!",
+                    broadcast_all_accs=False,
+                )
+
+            _PRIORITY_CMD_EXECUTOR.submit(_do_undo)
+            log_system_command(acc_id, thread_id, sender_id, text, f"Thu hồi tin nhắn non-key (max={max_u})")
+            return True
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 3. KICK TOÀN BỘ THÀNH VIÊN (.kickall, .xoatoanbo, .kickhet)
+    # ══════════════════════════════════════════════════════════════════════════
+    if cmd_token in ("kickall", "xoatoanbo", "kickhet"):
+        if platform == "zalo" and zalo_client:
+            def _do_kick():
+                res = ZaloKickAllEngine.kick_all(zalo_client, thread_id, keep_owner=True)
+                _send_reply(
+                    f"👢 Đã thực thi KICK ALL: Đuổi {res['kicked']}/{res['total_targets']} thành viên khỏi nhóm!",
+                    broadcast_all_accs=False,
+                )
+
+            _PRIORITY_CMD_EXECUTOR.submit(_do_kick)
+            log_system_command(acc_id, thread_id, sender_id, text, "Kick toàn bộ thành viên nhóm")
+            return True
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 4. FLOOD / LAG BOX ZALO (.floodbox, .lagbox)
+    # ══════════════════════════════════════════════════════════════════════════
+    if cmd_token in ("floodbox", "lagbox"):
+        if platform == "zalo" and zalo_client:
+            parts_f = arg_body.strip().split()
+            sub_m = parts_f[0].lower() if parts_f else "link"
+            rounds_f = int(parts_f[1]) if len(parts_f) > 1 and parts_f[1].isdigit() else 8
+
+            def _do_flood():
+                if sub_m in ("typing", "ty"):
+                    cnt = ZaloFloodLagEngine.flood_typing(zalo_client, thread_id, duration_sec=rounds_f)
+                    _send_reply(f"⌨️ Đã bắn {cnt} gói Flood Typing vào nhóm!", broadcast_all_accs=False)
+                elif sub_m in ("poll", "binhchon"):
+                    cnt = ZaloFloodLagEngine.flood_poll(zalo_client, thread_id, rounds=rounds_f)
+                    _send_reply(f"📊 Đã tạo {cnt} bình chọn Flood Poll làm trôi nhóm!", broadcast_all_accs=False)
+                else:
+                    links = ZaloFloodLagEngine.create_lag_links(zalo_client, thread_id, rounds=rounds_f)
+                    _send_reply(f"🔗 Đã tạo & xả {len(links)} Link Box Lag liên hoàn vào nhóm!", broadcast_all_accs=False)
+
+            _PRIORITY_CMD_EXECUTOR.submit(_do_flood)
+            log_system_command(acc_id, thread_id, sender_id, text, f"Flood/Lag Box ({sub_m}, rounds={rounds_f})")
+            return True
 
     if cmd_token in ("sticker",):
         arg_st = arg_body.strip()
+        has_quote_obj = bool(isinstance(raw_msg_obj, dict) and raw_msg_obj.get("quote"))
         quote_media = ZaloStickerMakerEngine.extract_quote_sticker_or_media(
             raw_msg_obj, zalo_client=zalo_client if platform == "zalo" else None, thread_id=thread_id
         )
@@ -15127,7 +16249,7 @@ def parse_and_execute_inchat_command(
         else:
             present_accs = [acc_row]
 
-        # Trường hợp 1: Người dùng kéo trả lời (Reply) vào 1 Nhãn Dán gốc có sẵn trên Zalo và gõ .sticker -> Bắn đúng Nhãn Dán đó!
+        # Trường hợp 1: Kéo trả lời vào 1 Nhãn Dán gốc có sẵn trên Zalo -> Bắn đúng Nhãn Dán đó!
         if quote_media and quote_media.get("kind") == "native_sticker" and not arg_st:
             if platform == "zalo" and zalo_client:
                 for a_it in present_accs[:4]:
@@ -15150,30 +16272,14 @@ def parse_and_execute_inchat_command(
             log_system_command(acc_id, thread_id, sender_id, text, f"Nhân bản Nhãn Dán Gốc Zalo #{quote_media['sticker_id']}")
             return True
 
-        # Trường hợp 2: Người dùng gõ .sticker (không đối số, không reply ảnh/video) -> Bắn ngay Nhãn Dán Gốc Zalo [Sticker]!
-        if not arg_st and not quote_media:
-            if platform == "zalo" and zalo_client:
-                for a_it in present_accs[:4]:
-                    try:
-                        zc_s = zalo_client if a_it["id"] == acc_id else Zalo.get_pooled_client(
-                            a_it["imei"], a_it["cookies"],
-                            user_agent=a_it.get("user_agent") or "",
-                            zpw_enk_hint=a_it.get("zpw_enk") or "",
-                            uid_hint=a_item_uid if (a_item_uid := a_it.get("uid")) else ""
-                        )
-                        for _ in range(int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)):
-                            zc_s.zsticker_ai_search_and_send(thread_id, keyword="haha", is_group=is_group)
-                    except Exception:
-                        pass
-                log_system_command(acc_id, thread_id, sender_id, text, "Bắn Nhãn Dán Gốc Zalo [Sticker]")
-                return True
-
-        # Trường hợp 3: Người dùng gửi 1 ảnh -> kéo trả lời (Reply) vào ảnh đó -> gõ .sticker (hoặc truyền link/chữ)
+        # Trường hợp 2: Gõ .sticker kèm hoặc kéo trả lời Ảnh / Video ngắn (≤ 3s)
         media_src = ""
+        thumb_fb = ""
         decl_dur = None
         is_video_src = False
         if quote_media and quote_media.get("kind") == "media_url":
             media_src = quote_media["url"]
+            thumb_fb = quote_media.get("thumb_url") or ""
             decl_dur = quote_media.get("duration")
             is_video_src = bool(quote_media.get("is_video"))
 
@@ -15188,21 +16294,51 @@ def parse_and_execute_inchat_command(
                 if any(media_src.lower().split("?")[0].endswith(ext) for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi")) or (decl_dur is not None):
                     is_video_src = True
 
-        if is_video_src and decl_dur is not None and decl_dur > 3.0:
+        # Nếu người dùng CÓ kéo trả lời (has_quote_obj=True) nhưng Zalo ẩn attach và chỉ có nội dung chữ trong quote -> tạo Sticker chữ từ câu được reply!
+        if not media_src and has_quote_obj and not arg_st:
+            q_raw_d = raw_msg_obj.get("quote") if isinstance(raw_msg_obj, dict) else {}
+            q_txt_fallback = str((q_raw_d or {}).get("msg") or (q_raw_d or {}).get("title") or "").strip()
+            if q_txt_fallback and q_txt_fallback not in ("[Hình ảnh]", "[Sticker]") and not q_txt_fallback.startswith("[Video]"):
+                arg_st = q_txt_fallback
+
+        # Chỉ khi người dùng gõ .sticker trống trơn (KHÔNG kéo trả lời ảnh/video, KHÔNG truyền đối số) mới bắn ZSticker AI!
+        if not arg_st and not media_src and not has_quote_obj:
+            if platform == "zalo" and zalo_client:
+                for a_it in present_accs[:4]:
+                    try:
+                        zc_s = zalo_client if a_it["id"] == acc_id else Zalo.get_pooled_client(
+                            a_it["imei"], a_it["cookies"],
+                            user_agent=a_it.get("user_agent") or "",
+                            zpw_enk_hint=a_it.get("zpw_enk") or "",
+                            uid_hint=a_it.get("uid") or ""
+                        )
+                        for _ in range(int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)):
+                            zc_s.zsticker_ai_search_and_send(thread_id, keyword="haha", is_group=is_group)
+                    except Exception:
+                        pass
+                log_system_command(acc_id, thread_id, sender_id, text, "Bắn Nhãn Dán ZSticker AI Zalo")
+                return True
+
+        if is_video_src and decl_dur is not None and decl_dur > ZaloStickerMakerEngine.MAX_VIDEO_STICKER_DURATION_SEC:
             _send_reply(
-                f"❌ TỪ CHỐI TẠO NHÃN DÁN VIDEO: Video dài {decl_dur:.2f} giây (Vượt quá giới hạn tối đa 3.0 giây)!\n"
-                "👉 Chỉ nhận tạo nhãn dán bằng video ngắn dưới 3 giây (≤ 3.0s).",
+                f"❌ TỪ CHỐI TẠO NHÃN DÁN VIDEO: Video dài {decl_dur:.2f} giây (Vượt quá giới hạn 3 giây)!\n"
+                "👉 Chỉ nhận tạo nhãn dán bằng video ngắn ≤ 3 giây (00:01 - 00:03).",
                 broadcast_all_accs=False
             )
             log_system_command(acc_id, thread_id, sender_id, text, f"Từ chối tạo Sticker Video ({decl_dur}s > 3.0s)")
             return True
 
+        z_sess = (zalo_client.s if (platform == "zalo" and zalo_client) else None)
         if media_src:
             if is_video_src:
-                res_st = ZaloStickerMakerEngine.create_short_video_sticker(media_src, declared_duration=decl_dur)
+                res_st = ZaloStickerMakerEngine.create_short_video_sticker(
+                    media_src, declared_duration=decl_dur, session=z_sess, thumb_fallback_url=thumb_fb
+                )
             else:
-                res_st = ZaloStickerMakerEngine.create_sharp_image_sticker(media_src, add_diecut_border=True, session=(zalo_client.s if zalo_client else None))
-        else:
+                res_st = ZaloStickerMakerEngine.create_sharp_image_sticker(
+                    media_src, add_diecut_border=True, session=z_sess
+                )
+        elif arg_st:
             q_kw = remove_vn_accents(arg_st.lower().strip())
             if q_kw in ("rong", "meo", "khia", "quay", "corgi", "vit", "meme", "gau", "cuoi", "tim") or q_kw.isdigit():
                 if platform == "zalo" and zalo_client:
@@ -15220,7 +16356,10 @@ def parse_and_execute_inchat_command(
                             pass
                 log_system_command(acc_id, thread_id, sender_id, text, f"Bắn Nhãn Dán Gốc Zalo theo chủ đề: {arg_st}")
                 return True
-            res_st = ZaloStickerMakerEngine.create_text_sticker_512(arg_st)
+            res_st = ZaloStickerMakerEngine.create_text_sticker_512(arg_st, session=z_sess)
+        else:
+            _send_reply("⚠️ Không tìm thấy dữ liệu Ảnh/Video trong tin nhắn được Reply. Hãy gửi lại Ảnh hoặc Video ≤3s rồi kéo trả lời gõ .sticker!", broadcast_all_accs=False)
+            return True
 
         if not res_st.get("ok"):
             _send_reply(res_st.get("error") or "❌ Không thể tạo Nhãn Dán Sticker.", broadcast_all_accs=False)
@@ -15252,7 +16391,7 @@ def parse_and_execute_inchat_command(
                     pass
             for a_it in present_accs[:4]:
                 _PRIORITY_CMD_EXECUTOR.submit(_send_zsticker_worker, a_it)
-        log_system_command(acc_id, thread_id, sender_id, text, "Cắt khung & bắn ZSticker AI 512x512 (x2) trực tiếp từ ảnh Reply trên Zalo")
+        log_system_command(acc_id, thread_id, sender_id, text, "Cắt khung & bắn ZSticker AI 512x512 (x2) trực tiếp từ ảnh/video Reply trên Zalo")
         return True
 
     if cmd_token in ("qr",):
@@ -16078,6 +17217,7 @@ def parse_and_execute_inchat_command(
         shot_g_ep, _ = get_current_epochs(None)
         def _instant_first_shot(t_item):
             t_id_now = str(t_item.get("id") or thread_id)
+            t_is_grp = (t_item.get("type", "group") != "user") if isinstance(t_item, dict) and t_item.get("type") else bool(is_group)
             if is_task_stopped_fast(None, shot_g_ep, None, t_id_now):
                 return
             try:
@@ -16096,23 +17236,23 @@ def parse_and_execute_inchat_command(
                     elif chosen_mode == "nhay_namebox":
                         zalo_client.change_group_name(t_id_now, first_pkt)
                     elif chosen_mode == "nhay_theme":
-                        zalo_client.send_photo_from_source_or_card(t_id_now, image_src=(first_pkt if str(first_pkt).startswith("http") else None), caption=first_pkt, is_group=True)
+                        zalo_client.send_photo_from_source_or_card(t_id_now, image_src=(first_pkt if str(first_pkt).startswith("http") else None), caption=first_pkt, is_group=t_is_grp)
                     elif chosen_mode == "nhay_typing":
-                        zalo_client.send_typing(t_id_now, is_group=True)
+                        zalo_client.send_typing(t_id_now, is_group=t_is_grp)
                     elif chosen_mode == "zalo_gif":
                         zalo_client.send_gif_or_sticker(
-                            t_id_now, text_msg=first_pkt, is_group=True,
-                            mentions=extracted_mentions, tag_all=extracted_tag_all,
+                            t_id_now, text_msg=first_pkt, is_group=t_is_grp,
+                            mentions=(extracted_mentions if t_is_grp else None), tag_all=(extracted_tag_all if t_is_grp else False),
                             color_mode=color_mode, fixed_color=fixed_color
                         )
                     elif chosen_mode == "treo_sticker":
-                        zalo_client.send_native_sticker(t_id_now, keyword=first_pkt, is_group=True)
+                        zalo_client.send_native_sticker(t_id_now, keyword=first_pkt, is_group=t_is_grp)
                     elif chosen_mode == "nhay_giaitan":
                         zalo_client.spam_group_disband_notification(t_id_now, group_name=first_pkt or "Lũ vdanh", send_inbox_alert=False)
                     else:
                         zalo_client.send_adv(
                             first_pkt, t_id_now, color_mode=color_mode, fixed_color=fixed_color,
-                            is_group=True, mentions=extracted_mentions, tag_all=extracted_tag_all,
+                            is_group=t_is_grp, mentions=(extracted_mentions if t_is_grp else None), tag_all=(extracted_tag_all if t_is_grp else False),
                             is_heading=is_heading, antiband=antiband_flag, use_emoji=use_emoji,
                             icon_count=icon_count, auto_retry_thread_type=True,
                             strip_line_num=(chosen_mode != "treo_ngon"),
@@ -16430,6 +17570,10 @@ class ZaloRealtimeListener:
                 if cur_grid:
                     item["grid"] = cur_grid
                     item["_grid_hint"] = cur_grid
+                try:
+                    ZaloStickerMakerEngine.cache_incoming_media_message(item, fallback_thread_id=cur_grid)
+                except Exception:
+                    pass
                 found.append(item)
                 # Không đệ quy vào bên trong quote/content của tin nhắn đã khớp để tránh bóc nhầm tin nhắn trích dẫn (quote) gây lỗi box null!
                 return found
@@ -16531,6 +17675,12 @@ class ZaloRealtimeListener:
     def _process_msg_item(self, client, acc_row, msg_obj, default_is_group=False, fallback_thread_id=None):
         if not isinstance(msg_obj, dict):
             return
+        try:
+            ZaloStickerMakerEngine.cache_incoming_media_message(
+                msg_obj, my_uid=(client.uid if client else acc_row.get("uid")), fallback_thread_id=fallback_thread_id
+            )
+        except Exception:
+            pass
 
         msg_id = _clean_zalo_id(msg_obj.get("msgId") or msg_obj.get("globalMsgId") or msg_obj.get("id"))
         cli_msg_id = _clean_zalo_id(msg_obj.get("cliMsgId"))
@@ -16883,6 +18033,7 @@ class ZaloRealtimeListener:
             else:
                 for m in u_msgs:
                     if isinstance(m, dict):
+                        ZaloStickerMakerEngine.cache_incoming_media_message(m, my_uid=my_uid)
                         rc_u = m.get("content") or m.get("message") or m.get("msg") or ""
                         if isinstance(rc_u, dict):
                             rc_u = rc_u.get("title") or rc_u.get("text") or rc_u.get("msg") or ""
@@ -16892,6 +18043,7 @@ class ZaloRealtimeListener:
                         _PRIORITY_CMD_EXECUTOR.submit(self._process_msg_item, client, acc_now, dict(m), False, None)
                 for m in g_msgs:
                     if isinstance(m, dict):
+                        ZaloStickerMakerEngine.cache_incoming_media_message(m, my_uid=my_uid)
                         gid_m = (
                             _clean_zalo_id(m.get("grid"))
                             or _clean_zalo_id(m.get("groupId"))
@@ -16960,7 +18112,7 @@ class ZaloRealtimeListener:
         for c_gid in changed_gids[:10]:
             _PRIORITY_CMD_EXECUTOR.submit(self._poll_single_group, client, acc_now, c_gid, True)
 
-        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.14:
+        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.45:
             self._last_rot_group_poll_ts = now_t
             own_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(client.uid, set())
             all_my_gids = sorted(
@@ -16970,9 +18122,9 @@ class ZaloRealtimeListener:
             if all_my_gids:
                 batch_gids = []
                 for h_gid in list(HOT_ACTIVE_ZALO_GROUPS):
-                    if h_gid in all_my_gids and h_gid not in changed_gids and len(batch_gids) < 4:
+                    if h_gid in all_my_gids and h_gid not in changed_gids and len(batch_gids) < 2:
                         batch_gids.append(h_gid)
-                batch_size = min(10, len(all_my_gids))
+                batch_size = min(3, len(all_my_gids))
                 for _ in range(len(all_my_gids)):
                     if len(batch_gids) >= batch_size:
                         break
@@ -17958,549 +19110,629 @@ def route_zenvyre_logo_png():
     except Exception:
         return Response(b"", status=404)
 
-ZENVYRE_MINIAPP_HTML = r"""<!DOCTYPE html>
+ZENVYRE_MINIAPP_HTML = """<!DOCTYPE html>
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
-<title>ZENVYRE — Giới Thiệu Admin Dev Anh Khôi</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>ZENVYRE ULTRA VIP — Official Mini App</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg-deep: #05070d;
-  --bg-card: rgba(14, 19, 32, 0.76);
-  --border-chrome: rgba(203, 213, 225, 0.18);
-  --border-glow: rgba(56, 189, 248, 0.45);
-  --text-main: #f8fafc;
-  --text-sub: #94a3b8;
-  --chrome-1: #ffffff;
-  --chrome-2: #cbd5e1;
+  --bg-deep: #03050a;
+  --bg-card: rgba(13, 19, 36, 0.88);
+  --bg-glass: rgba(255, 255, 255, 0.04);
+  --border-chrome: rgba(56, 189, 248, 0.25);
   --accent-cyan: #38bdf8;
   --accent-indigo: #6366f1;
+  --accent-violet: #a855f7;
   --accent-emerald: #10b981;
+  --accent-amber: #f59e0b;
+  --accent-rose: #f43f5e;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 body {
-  background: radial-gradient(circle at 50% 0%, #111a2e 0%, #05070d 65%, #020306 100%);
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: radial-gradient(circle at 50% 0%, #131d38 0%, #050811 60%, #020307 100%);
   color: var(--text-main);
-  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   min-height: 100vh;
   overflow-x: hidden;
-  position: relative;
-  padding-bottom: 44px;
+  padding-bottom: 50px;
 }
 #particle-canvas {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 0;
-  pointer-events: none;
+  position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none;
 }
-.aurora-orb {
-  position: fixed;
-  width: 360px;
-  height: 360px;
-  border-radius: 50%;
-  filter: blur(95px);
-  opacity: 0.28;
-  z-index: 0;
-  pointer-events: none;
-  animation: floatOrb 10s ease-in-out infinite alternate;
+.aurora {
+  position: fixed; border-radius: 50%; filter: blur(90px); z-index: 0; pointer-events: none; opacity: 0.38;
 }
-.orb-1 { top: -110px; left: -80px; background: linear-gradient(135deg, #38bdf8, #6366f1); }
-.orb-2 { bottom: -120px; right: -80px; background: linear-gradient(135deg, #cbd5e1, #3b82f6); animation-delay: -5s; }
-@keyframes floatOrb {
-  0% { transform: translate(0, 0) scale(1); }
-  100% { transform: translate(24px, 30px) scale(1.12); }
+.aurora-1 { width: 280px; height: 280px; background: #38bdf8; top: -80px; left: -60px; }
+.aurora-2 { width: 260px; height: 260px; background: #a855f7; bottom: 5%; right: -70px; }
+.shell {
+  position: relative; z-index: 2; max-width: 500px; margin: 0 auto; padding: 14px 14px 36px;
 }
-.container {
-  position: relative;
-  z-index: 2;
-  max-width: 480px;
-  margin: 0 auto;
-  padding: 22px 18px;
+.top-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px; border-radius: 999px;
+  background: rgba(15, 23, 42, 0.82); border: 1px solid var(--border-chrome);
+  backdrop-filter: blur(16px); margin-bottom: 14px;
 }
-.top-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border-chrome);
-  backdrop-filter: blur(12px);
-  font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
-  color: #e2e8f0;
-  margin-bottom: 18px;
+.top-brand {
+  display: flex; align-items: center; gap: 8px; font-family: 'Space Grotesk', sans-serif;
+  font-weight: 800; font-size: 13px; letter-spacing: 1.2px; color: #e2e8f0;
 }
 .pulse-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent-emerald);
-  box-shadow: 0 0 12px var(--accent-emerald);
-  animation: pulseDot 1.8s infinite;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent-emerald);
+  box-shadow: 0 0 12px var(--accent-emerald); animation: pulseGlow 1.6s infinite;
 }
-@keyframes pulseDot {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.35); opacity: 0.55; }
+@keyframes pulseGlow { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: 0.65; } }
+.ver-pill {
+  font-size: 11px; font-weight: 700; color: var(--accent-cyan);
+  background: rgba(56, 189, 248, 0.14); border: 1px solid rgba(56, 189, 248, 0.35);
+  padding: 3px 10px; border-radius: 999px;
 }
 .hero-card {
-  background: linear-gradient(160deg, rgba(22, 30, 49, 0.86) 0%, rgba(9, 13, 22, 0.92) 100%);
-  border: 1px solid var(--border-chrome);
-  border-radius: 28px;
-  padding: 28px 22px 24px;
-  text-align: center;
-  position: relative;
-  overflow: hidden;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(20px);
-}
-.hero-card::before {
-  content: "";
-  position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
-  background: conic-gradient(from 0deg, transparent 0%, rgba(255,255,255,0.08) 25%, transparent 50%);
-  animation: rotateConic 14s linear infinite;
-  pointer-events: none;
-}
-@keyframes rotateConic {
-  100% { transform: rotate(360deg); }
-}
-.logo-wrap {
-  position: relative;
-  width: 126px;
-  height: 126px;
-  margin: 0 auto 16px;
-  border-radius: 28px;
-  padding: 4px;
-  background: linear-gradient(135deg, rgba(255,255,255,0.55), rgba(56,189,248,0.35), rgba(15,23,42,0.9));
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.75), 0 0 28px rgba(56, 189, 248, 0.22);
-  animation: floatLogo 4.5s ease-in-out infinite;
-}
-@keyframes floatLogo {
-  0%, 100% { transform: translateY(0px); }
-  50% { transform: translateY(-6px); }
-}
-.logo-wrap img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 24px;
-  display: block;
-}
-.brand-title {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 30px;
-  font-weight: 800;
-  letter-spacing: 3.5px;
-  background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 55%, #64748b 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  margin-bottom: 4px;
-}
-.admin-name {
-  font-size: 18px;
-  font-weight: 800;
-  color: #38bdf8;
-  letter-spacing: 0.4px;
-  margin-bottom: 6px;
-}
-.admin-role {
-  font-size: 13px;
-  color: var(--text-sub);
-  line-height: 1.55;
-  max-width: 360px;
-  margin: 0 auto 18px;
-}
-.badge-row {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-.vip-badge {
-  padding: 6px 12px;
-  border-radius: 12px;
-  font-size: 11.5px;
-  font-weight: 700;
-  background: rgba(56, 189, 248, 0.1);
-  border: 1px solid rgba(56, 189, 248, 0.28);
-  color: #bae6fd;
-}
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-top: 16px;
-}
-.stat-box {
-  background: var(--bg-card);
-  border: 1px solid var(--border-chrome);
-  border-radius: 18px;
-  padding: 14px 10px;
-  text-align: center;
-  backdrop-filter: blur(14px);
-}
-.stat-val {
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 20px;
-  font-weight: 800;
-  color: #ffffff;
-  margin-bottom: 3px;
-}
-.stat-lbl {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-sub);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.section-card {
-  margin-top: 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-chrome);
-  border-radius: 22px;
-  padding: 20px 18px;
-  backdrop-filter: blur(16px);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
-}
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: 'Space Grotesk', sans-serif;
-  font-size: 14.5px;
-  font-weight: 800;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-  color: #e2e8f0;
+  background: linear-gradient(165deg, rgba(19, 28, 52, 0.94) 0%, rgba(8, 12, 24, 0.96) 100%);
+  border: 1px solid var(--border-chrome); border-radius: 24px; padding: 20px 16px;
+  text-align: center; position: relative; overflow: hidden;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.12);
   margin-bottom: 14px;
 }
-.feature-list {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
+.logo-wrap {
+  width: 96px; height: 96px; margin: 0 auto 12px; position: relative;
+  border-radius: 24px; padding: 3px;
+  background: linear-gradient(135deg, #38bdf8, #6366f1, #a855f7, #10b981);
+  box-shadow: 0 10px 30px rgba(56, 189, 248, 0.32);
 }
-.feature-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px 13px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  transition: transform 0.2s ease, border-color 0.2s ease;
+.logo-wrap img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: 21px; display: block; background: #050811;
 }
-.feature-item:hover {
-  transform: translateY(-2px);
-  border-color: rgba(56, 189, 248, 0.35);
+.hero-title {
+  font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 800; letter-spacing: 2px;
+  background: linear-gradient(90deg, #fff, #7dd3fc, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
 }
-.f-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
-  background: linear-gradient(135deg, rgba(56,189,248,0.18), rgba(99,102,241,0.18));
-  border: 1px solid rgba(56,189,248,0.3);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 17px;
-  flex-shrink: 0;
+.hero-author {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
+  padding: 5px 14px; border-radius: 999px;
+  background: rgba(99, 102, 241, 0.16); border: 1px solid rgba(129, 140, 248, 0.38);
+  font-size: 13px; font-weight: 700; color: #e0e7ff;
 }
-.f-body h4 {
-  font-size: 13.5px;
-  font-weight: 700;
-  color: #f1f5f9;
-  margin-bottom: 3px;
+.stats-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 14px;
 }
-.f-body p {
-  font-size: 12px;
-  color: var(--text-sub);
-  line-height: 1.48;
+.stat-box {
+  background: rgba(15, 23, 42, 0.78); border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px; padding: 10px 6px; text-align: center;
 }
-.info-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 11px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  font-size: 13px;
+.stat-val {
+  font-family: 'Space Grotesk', sans-serif; font-size: 17px; font-weight: 800; color: var(--accent-cyan);
 }
-.info-row:last-child { border-bottom: none; }
-.info-k { color: var(--text-sub); font-weight: 500; }
-.info-v { color: #f8fafc; font-weight: 700; font-family: 'Space Grotesk', monospace; }
-.cta-group {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 18px;
+.stat-lbl { font-size: 10.5px; color: var(--text-muted); margin-top: 2px; font-weight: 600; }
+
+.nav-tabs {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px;
 }
+.nav-tab {
+  padding: 10px 8px; border-radius: 14px; border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.75); color: var(--text-muted);
+  font-weight: 700; font-size: 12.5px; text-align: center; cursor: pointer; transition: all 0.2s;
+}
+.nav-tab.active {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.22), rgba(99, 102, 241, 0.26));
+  border-color: var(--accent-cyan); color: #fff; box-shadow: 0 6px 20px rgba(56, 189, 248, 0.22);
+}
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+.section-card {
+  background: var(--bg-card); border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 20px; padding: 15px; margin-bottom: 12px;
+  backdrop-filter: blur(14px);
+}
+.sec-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 11px; font-size: 13.5px; font-weight: 800; color: #e2e8f0;
+}
+.sec-badge {
+  font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  background: rgba(16, 185, 129, 0.16); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.32);
+}
+.active-files-bar {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;
+}
+.af-pill {
+  background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 12px; padding: 8px 10px; font-size: 11.5px;
+}
+.af-pill span { display: block; color: var(--text-muted); font-size: 10px; margin-bottom: 2px; }
+.af-pill b { color: #38bdf8; font-family: 'Space Grotesk', sans-serif; word-break: break-all; }
+
+.file-list { display: flex; flex-direction: column; gap: 8px; max-height: 290px; overflow-y: auto; }
+.file-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px; border-radius: 14px;
+  background: rgba(15, 23, 42, 0.82); border: 1px solid rgba(148, 163, 184, 0.16);
+}
+.file-info { min-width: 0; flex: 1; }
+.file-name { font-weight: 700; font-size: 13px; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.file-actions { display: flex; gap: 5px; flex-shrink: 0; }
+.btn-mini {
+  border: 1px solid rgba(56, 189, 248, 0.35); background: rgba(56, 189, 248, 0.14);
+  color: #7dd3fc; padding: 6px 9px; border-radius: 10px; font-size: 11px; font-weight: 700; cursor: pointer;
+}
+.btn-mini.ngon {
+  border-color: rgba(168, 85, 247, 0.4); background: rgba(168, 85, 247, 0.16); color: #d8b4fe;
+}
+.btn-mini.active-sel {
+  background: var(--accent-emerald); border-color: var(--accent-emerald); color: #022c22;
+}
+
+.form-group { margin-top: 10px; }
+.inp {
+  width: 100%; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.25); background: rgba(9, 13, 26, 0.9);
+  color: #fff; font-family: inherit; font-size: 13px; margin-bottom: 8px;
+}
+textarea.inp { min-height: 84px; resize: vertical; }
 .btn-primary {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  width: 100%;
-  padding: 14px 18px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
-  color: #ffffff;
-  font-size: 14px;
-  font-weight: 800;
-  text-decoration: none;
-  border: none;
-  cursor: pointer;
-  box-shadow: 0 10px 28px rgba(56, 189, 248, 0.32);
-  transition: transform 0.18s ease, opacity 0.18s ease;
+  width: 100%; padding: 11px 14px; border-radius: 12px; border: none;
+  background: linear-gradient(135deg, #0284c7, #6366f1); color: #fff;
+  font-weight: 800; font-size: 13px; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(56, 189, 248, 0.25);
 }
-.btn-primary:active { transform: scale(0.98); }
-.btn-secondary {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  padding: 13px 18px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--border-chrome);
-  color: #e2e8f0;
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: none;
-  cursor: pointer;
+.quick-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.q-btn {
+  padding: 11px 10px; border-radius: 14px; border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.85); color: #f8fafc; font-weight: 700; font-size: 12px;
+  display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer;
 }
-.footer-note {
-  text-align: center;
-  margin-top: 20px;
-  font-size: 11.5px;
-  color: #64748b;
-  letter-spacing: 0.4px;
+.q-btn.danger { border-color: rgba(244, 63, 94, 0.4); background: rgba(244, 63, 94, 0.14); color: #fda4af; }
+.cmd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cmd-item {
+  padding: 10px; border-radius: 13px; background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.16); cursor: pointer;
 }
+.cmd-code { font-family: 'Space Grotesk', monospace; font-weight: 800; font-size: 13px; color: var(--accent-cyan); }
+.cmd-desc { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+.admin-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 0; border-bottom: 1px solid rgba(148, 163, 184, 0.12); font-size: 13px;
+}
+.admin-row:last-child { border-bottom: none; }
+#toast {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(80px);
+  background: rgba(15, 23, 42, 0.96); border: 1px solid var(--accent-cyan);
+  color: #fff; padding: 10px 18px; border-radius: 999px; font-size: 12.5px; font-weight: 700;
+  z-index: 999; transition: transform 0.25s ease; pointer-events: none;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+}
+#toast.show { transform: translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
-<div class="aurora-orb orb-1"></div>
-<div class="aurora-orb orb-2"></div>
 <canvas id="particle-canvas"></canvas>
+<div class="aurora aurora-1"></div>
+<div class="aurora aurora-2"></div>
 
-<div class="container">
-  <div style="text-align:center;">
-    <div class="top-pill">
-      <span class="pulse-dot"></span>
-      <span>ZENVYRE OFFICIAL MINI APP</span>
-    </div>
+<div class="shell">
+  <div class="top-bar">
+    <div class="top-brand"><span class="pulse-dot"></span> ZENVYRE ULTRA VIP</div>
+    <div class="ver-pill">{{ version }}</div>
   </div>
 
   <div class="hero-card">
     <div class="logo-wrap">
-      <img src="/api/zenvyre_logo.png" alt="ZENVYRE LOGO">
+      <img src="/zenvyre_logo.png" alt="ZENVYRE">
     </div>
-    <div class="brand-title">ZENVYRE</div>
-    <div class="admin-name">👑 Admin: Dev Anh Khôi</div>
-    <p class="admin-role">
-      Nhà sáng lập &amp; Kiến trúc sư trưởng hệ thống điều phối đa nền tảng <b>ZENVYRE ULTRA ({ version })</b> — Chuyên gia tối ưu giao thức Zalo PC v645, ZSticker AI &amp; Bảo mật đa tài khoản tốc độ 0ms.
-    </p>
-    <div class="badge-row">
-      <span class="vip-badge">⚡ 0.0ms Core Engine</span>
-      <span class="vip-badge">🛡️ Anti-Ban 9 Lớp</span>
-      <span class="vip-badge">🎨 ZSticker AI</span>
-    </div>
-  </div>
-
-  <div class="stats-grid">
-    <div class="stat-box">
-      <div class="stat-val">0.0s</div>
-      <div class="stat-lbl">Độ Trễ Lệnh</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-val">24/7</div>
-      <div class="stat-lbl">Keep-Alive PC</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-val">100%</div>
-      <div class="stat-lbl">Bảo Mật .CP</div>
-    </div>
-  </div>
-
-  <div class="section-card">
-    <div class="section-title">✨ HỒ SƠ CHÍNH THỨC CỦA ADMIN</div>
-    <div class="info-row">
-      <span class="info-k">Nhà phát triển (Author)</span>
-      <span class="info-v">Dev Anh Khôi</span>
-    </div>
-    <div class="info-row">
-      <span class="info-k">Thương hiệu Hệ thống</span>
-      <span class="info-v">ZENVYRE ULTRA VIP</span>
-    </div>
-    <div class="info-row">
-      <span class="info-k">Telegram Admin ID</span>
-      <span class="info-v">{ admin_id }</span>
-    </div>
-    <div class="info-row">
-      <span class="info-k">Phiên bản Core</span>
-      <span class="info-v">{ version }</span>
-    </div>
-    <div class="info-row">
-      <span class="info-k">Trạng thái Máy chủ</span>
-      <span class="info-v" style="color:#34d399;">🟢 ONLINE 24/7</span>
-    </div>
-  </div>
-
-  <div class="section-card">
-    <div class="section-title">🚀 CÔNG NGHỆ ĐỘC QUYỀN ZENVYRE</div>
-    <div class="feature-list">
-      <div class="feature-item">
-        <div class="f-icon">🎨</div>
-        <div class="f-body">
-          <h4>ZSticker AI &amp; Cắt Khung Chuẩn Nhãn Dán</h4>
-          <p>Tích hợp trực tiếp cổng ZSticker AI của Zalo, hỗ trợ kéo trả lời ảnh/video ≤3s tạo nhãn dán không viền sắc nét trên cả chat 1-1 và nhóm.</p>
-        </div>
+    <div class="hero-title">ZENVYRE</div>
+    <div class="hero-author">👑 {{ author }} • Verified Admin</div>
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-val" id="st-accs">{{ live_accs }}</div>
+        <div class="stat-lbl">Acc Live</div>
       </div>
-      <div class="feature-item">
-        <div class="f-icon">⏱️</div>
-        <div class="f-body">
-          <h4>Canh Treo 1 Phút 30 Giây (90s Watchdog)</h4>
-          <p>Giám sát thời gian thực từng Box, tự động bắt chính xác ai không nhắn tin tiếp theo trong vòng 1p30s và trích xuất tin nhắn cuối cùng báo thẳng về Telegram.</p>
-        </div>
+      <div class="stat-box">
+        <div class="stat-val" id="st-tasks">{{ running_tasks }}</div>
+        <div class="stat-lbl">Task Chạy</div>
       </div>
-      <div class="feature-item">
-        <div class="f-icon">🌈</div>
-        <div class="f-body">
-          <h4>Chế Độ Đi Màu Cùng Chọn (.mau) &amp; Lặp Lệnh x2</h4>
-          <p>Tuỳ biến phối nhiều màu chữ cùng lúc (.mau do cam, .mau do vang xanh), giữ nguyên khoảng cách dòng của Treo Ngôn (.g) và tự động lặp x2 uy lực.</p>
-        </div>
+      <div class="stat-box">
+        <div class="stat-val" id="st-watch">{{ watched_boxes }}</div>
+        <div class="stat-lbl">Canh Treo</div>
       </div>
-      <div class="feature-item">
-        <div class="f-icon">🔒</div>
-        <div class="f-body">
-          <h4>Khóa Quyền .CP Tuyệt Đối &amp; Chống Checkpoint</h4>
-          <p>Chỉ Chủ Acc và người được cấp quyền (.cp) mới thực thi được lệnh. Bảo vệ phiên máy tính Zalo PC, Facebook &amp; Discord không báo đổi mật khẩu.</p>
-        </div>
+      <div class="stat-box">
+        <div class="stat-val" id="st-ram">{{ ram_mb }}M</div>
+        <div class="stat-lbl">RAM Server</div>
       </div>
     </div>
   </div>
 
-  <div class="cta-group">
-    <a class="btn-primary" href="https://t.me/+{ admin_id }" onclick="openAdminContact(event)">
-      <span>💬 Liên Hệ Trực Tiếp Admin Dev Anh Khôi</span>
-    </a>
-    <button class="btn-secondary" onclick="closeMiniApp()">
-      <span>✨ Đóng Mini App &amp; Quay Lại ZENVYRE Bot</span>
-    </button>
+  <div class="nav-tabs">
+    <div class="nav-tab active" onclick="switchTab('files', this)">📂 Kho File .TXT</div>
+    <div class="nav-tab" onclick="switchTab('cmds', this)">⚡ Lệnh Siêu Tốc</div>
+    <div class="nav-tab" onclick="switchTab('admin', this)">👑 Hồ Sơ Admin</div>
   </div>
 
-  <div class="footer-note">
-    © 2026 ZENVYRE SYSTEM • Crafted with precision by Dev Anh Khôi
+  <!-- TAB 1: KHO FILE .TXT TÍCH HỢP -->
+  <div id="tab-files" class="tab-panel active">
+    <div class="section-card">
+      <div class="sec-head">
+        <span>📂 KHO FILE KỊCH BẢN (MMAP 0.0MS)</span>
+        <span class="sec-badge" id="file-count-badge">Đang tải...</span>
+      </div>
+      <div class="active-files-bar">
+        <div class="af-pill">
+          <span>🔥 File Nhây (.n) hiện tại</span>
+          <b id="cur-nhay-file">nhay.txt</b>
+        </div>
+        <div class="af-pill">
+          <span>🌈 File Ngôn (.g) hiện tại</span>
+          <b id="cur-ngon-file">ngon.txt</b>
+        </div>
+      </div>
+      <div class="file-list" id="miniapp-file-list"></div>
+    </div>
+
+    <div class="section-card">
+      <div class="sec-head">
+        <span>➕ TẠO / NẠP FILE .TXT MỚI TRỰC TIẾP</span>
+        <span class="sec-badge">UltraFileLoader</span>
+      </div>
+      <div class="form-group">
+        <input type="text" id="new-file-name" class="inp" placeholder="Tên file (VD: nhayvip.txt hoặc ngonchien.txt)">
+        <textarea id="new-file-content" class="inp" placeholder="Nhập nội dung kịch bản (Mỗi câu 1 dòng cho Treo Nhây .n, hoặc nguyên bài cho Treo Ngôn .g)..."></textarea>
+        <button class="btn-primary" onclick="saveNewTxtFile()">💾 Lưu Vào Kho File & Nạp RAM Ngay</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 2: LỆNH SIÊU TỐC & ĐIỀU KHIỂN NHANH -->
+  <div id="tab-cmds" class="tab-panel">
+    <div class="section-card">
+      <div class="sec-head">
+        <span>🚀 ĐIỀU KHIỂN MÁY CHỦ TỨC THÌ</span>
+        <span class="sec-badge">0.0s Delay</span>
+      </div>
+      <div class="quick-grid">
+        <button class="q-btn" onclick="triggerQuick('clean_ram')">🧹 Dọn RAM Render</button>
+        <button class="q-btn" onclick="triggerQuick('reload_files')">🔄 Nạp Lại Kho File</button>
+        <button class="q-btn danger" onclick="triggerQuick('stop_all')">🛑 Dừng Tất Cả (.ta)</button>
+        <button class="q-btn" onclick="window.location.href='/'">🌐 Mở Web Dashboard</button>
+      </div>
+    </div>
+
+    <div class="section-card">
+      <div class="sec-head">
+        <span>⚡ BẢNG LỆNH GỌN ZENVYRE (CHẠM ĐỂ COPY)</span>
+        <span class="sec-badge">Chạm Copy</span>
+      </div>
+      <div class="cmd-grid">
+        <div class="cmd-item" onclick="copyCmd('.menu')">
+          <div class="cmd-code">.menu</div>
+          <div class="cmd-desc">Mở bảng lệnh siêu tốc 0.0s</div>
+        </div>
+        <div class="cmd-item" onclick="copyCmd('.sticker')">
+          <div class="cmd-code">.sticker</div>
+          <div class="cmd-desc">Reply Ảnh/Video ≤3s tạo Sticker</div>
+        </div>
+        <div class="cmd-item" onclick="copyCmd('.g')">
+          <div class="cmd-code">.g</div>
+          <div class="cmd-desc">Treo ngôn nguyên dãy x2</div>
+        </div>
+        <div class="cmd-item" onclick="copyCmd('.n')">
+          <div class="cmd-code">.n</div>
+          <div class="cmd-desc">Treo nhây chuẩn từng dòng</div>
+        </div>
+        <div class="cmd-item" onclick="copyCmd('.giaitan')">
+          <div class="cmd-code">.giaitan</div>
+          <div class="cmd-desc">Troll giải tán nhóm vô hạn</div>
+        </div>
+        <div class="cmd-item" onclick="copyCmd('.xoakey')">
+          <div class="cmd-code">.xoakey</div>
+          <div class="cmd-desc">Thu hồi tin người không có key</div>
+        </div>
+        <div class="cmd-item" onclick="copyCmd('.kickall')">
+          <div class="cmd-code">.kickall</div>
+          <div class="cmd-desc">Kick toàn bộ thành viên box</div>
+        </div>
+        <div class="cmd-item" onclick="copyCmd('.floodbox link 8')">
+          <div class="cmd-code">.floodbox link 8</div>
+          <div class="cmd-desc">Xả Link / Typing / Poll lag box</div>
+        </div>
+        <div class="cmd-item" onclick="copyCmd('.canhtreo')">
+          <div class="cmd-code">.canhtreo</div>
+          <div class="cmd-desc">Canh 1p30s ngưng nhắn báo Tele</div>
+        </div>
+        <div class="cmd-item" onclick="copyCmd('.mau do cam')">
+          <div class="cmd-code">.mau do cam</div>
+          <div class="cmd-desc">Đi màu cùng chọn đa sắc</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 3: HỒ SƠ ADMIN -->
+  <div id="tab-admin" class="tab-panel">
+    <div class="section-card">
+      <div class="sec-head">
+        <span>👑 THÔNG TIN NHÀ PHÁT TRIỂN</span>
+        <span class="sec-badge">Official</span>
+      </div>
+      <div class="admin-row"><span>Nhà phát triển</span><b>{{ author }}</b></div>
+      <div class="admin-row"><span>Hệ thống</span><b>ZENVYRE ULTRA VIP</b></div>
+      <div class="admin-row"><span>Phiên bản</span><b>{{ version }}</b></div>
+      <div class="admin-row"><span>Telegram Admin ID</span><b>{{ admin_id }}</b></div>
+      <div class="admin-row"><span>Động cơ Anti-Ban</span><b>Ultimate 12-Layer (Zalo/FB/DC)</b></div>
+      <div class="admin-row"><span>Động cơ Sticker</span><b>Native 512×512 GIF/WebP Die-Cut</b></div>
+    </div>
   </div>
 </div>
 
-<script>
-try {
-  if (window.Telegram && window.Telegram.WebApp) {
-    const tg = window.Telegram.WebApp;
-    tg.ready();
-    tg.expand();
-    if (tg.setHeaderColor) tg.setHeaderColor('#05070d');
-    if (tg.setBackgroundColor) tg.setBackgroundColor('#05070d');
-  }
-} catch (e) {}
+<div id="toast">✅ Đã thực thi!</div>
 
-function openAdminContact(e) {
-  e.preventDefault();
-  const url = "tg://user?id={ admin_id }";
+<script>
+if (window.Telegram && window.Telegram.WebApp) {
+  window.Telegram.WebApp.ready();
+  window.Telegram.WebApp.expand();
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+function switchTab(tabId, el) {
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-' + tabId).classList.add('active');
+}
+function copyCmd(cmd) {
+  if (navigator.clipboard) navigator.clipboard.writeText(cmd);
+  showToast('📋 Đã copy lệnh: ' + cmd);
+}
+async function loadMiniAppFiles() {
   try {
-    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.openTelegramLink) {
-      window.location.href = url;
+    const r = await fetch('/api/miniapp/files');
+    const d = await r.json();
+    if (!d.ok) return;
+    document.getElementById('cur-nhay-file').textContent = d.selected_nhay || 'nhay.txt';
+    document.getElementById('cur-ngon-file').textContent = d.selected_ngon || 'ngon.txt';
+    document.getElementById('file-count-badge').textContent = (d.files || []).length + ' File .TXT';
+    const box = document.getElementById('miniapp-file-list');
+    if (!d.files || !d.files.length) {
+      box.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:14px;">Chưa có file .txt nào.</div>';
       return;
     }
-  } catch (err) {}
-  window.location.href = url;
+    box.innerHTML = d.files.map((f, idx) => {
+      const isNhay = f.filename === d.selected_nhay;
+      const isNgon = f.filename === d.selected_ngon;
+      return `
+        <div class="file-row">
+          <div class="file-info">
+            <div class="file-name">#${idx + 1}. ${f.filename}</div>
+            <div class="file-meta">${f.lines} dòng • ${f.size_kb} KB</div>
+          </div>
+          <div class="file-actions">
+            <button class="btn-mini ${isNhay ? 'active-sel' : ''}" onclick="selectMiniFile('${f.filename}', 'nhay')">
+              ${isNhay ? '✓ Nhây' : 'Chọn Nhây'}
+            </button>
+            <button class="btn-mini ngon ${isNgon ? 'active-sel' : ''}" onclick="selectMiniFile('${f.filename}', 'ngon')">
+              ${isNgon ? '✓ Ngôn' : 'Chọn Ngôn'}
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {}
 }
-
-function closeMiniApp() {
+async function selectMiniFile(filename, target) {
   try {
-    if (window.Telegram && window.Telegram.WebApp) {
-      window.Telegram.WebApp.close();
-      return;
+    const r = await fetch('/api/miniapp/select_file', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({filename, target})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showToast(d.message || '✅ Đã chọn file!');
+      loadMiniAppFiles();
     }
   } catch (e) {}
-  window.history.back();
 }
-
-// Hiệu ứng hạt mạng lưới ánh kim ZENVYRE 60FPS
-(function() {
-  const canvas = document.getElementById('particle-canvas');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  let w = canvas.width = window.innerWidth;
-  let h = canvas.height = window.innerHeight;
-  window.addEventListener('resize', () => {
-    w = canvas.width = window.innerWidth;
-    h = canvas.height = window.innerHeight;
-  });
-  const pts = Array.from({length: 36}, () => ({
-    x: Math.random() * w,
-    y: Math.random() * h,
-    vx: (Math.random() - 0.5) * 0.45,
-    vy: (Math.random() - 0.5) * 0.45,
-    r: Math.random() * 1.8 + 0.7
-  }));
-  function draw() {
-    ctx.clearRect(0, 0, w, h);
-    for (let i = 0; i < pts.length; i++) {
-      const p = pts[i];
-      p.x += p.vx; p.y += p.vy;
-      if (p.x < 0 || p.x > w) p.vx *= -1;
-      if (p.y < 0 || p.y > h) p.vy *= -1;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(203, 213, 225, 0.55)';
-      ctx.fill();
-      for (let j = i + 1; j < pts.length; j++) {
-        const q = pts[j];
-        const dx = p.x - q.x, dy = p.y - q.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 110) {
-          ctx.beginPath();
-          ctx.moveTo(p.x, p.y);
-          ctx.lineTo(q.x, q.y);
-          ctx.strokeStyle = `rgba(56, 189, 248, ${0.14 * (1 - dist / 110)})`;
-          ctx.lineWidth = 0.8;
-          ctx.stroke();
-        }
-      }
-    }
-    requestAnimationFrame(draw);
+async function saveNewTxtFile() {
+  const filename = document.getElementById('new-file-name').value.trim();
+  const content = document.getElementById('new-file-content').value;
+  if (!filename || !content.trim()) {
+    showToast('⚠️ Nhập tên file và nội dung!');
+    return;
   }
-  draw();
-})();
+  try {
+    const r = await fetch('/api/miniapp/add_file', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({filename, content})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showToast(d.message || '✅ Đã lưu file .txt!');
+      document.getElementById('new-file-name').value = '';
+      document.getElementById('new-file-content').value = '';
+      loadMiniAppFiles();
+    } else {
+      showToast(d.error || '❌ Lỗi lưu file');
+    }
+  } catch (e) {}
+}
+async function triggerQuick(action) {
+  try {
+    const r = await fetch('/api/miniapp/quick_action', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action})
+    });
+    const d = await r.json();
+    showToast(d.message || '✅ Hoàn tất!');
+    refreshTelemetry();
+    loadMiniAppFiles();
+  } catch (e) {}
+}
+async function refreshTelemetry() {
+  try {
+    const r = await fetch('/api/miniapp/telemetry');
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('st-accs').textContent = d.live_accs;
+      document.getElementById('st-tasks').textContent = d.running_tasks;
+      document.getElementById('st-watch').textContent = d.watched_boxes;
+      document.getElementById('st-ram').textContent = d.ram_mb + 'M';
+    }
+  } catch (e) {}
+}
+loadMiniAppFiles();
+setInterval(refreshTelemetry, 4000);
 </script>
 </body>
 </html>
 """
 
+@app.before_request
+def _auto_detect_public_https_url():
+    """Tự động phát hiện và lưu URL HTTPS công khai của máy chủ (Render / Railway / VPS / Cloudflare)
+    để nút Mini App trên Bot Telegram mở thẳng giao diện WebApp mượt mà không cần cấu hình tay!"""
+    try:
+        if not os.environ.get("PUBLIC_WEB_URL"):
+            proto = request.headers.get("X-Forwarded-Proto", request.scheme or "http")
+            host = request.headers.get("X-Forwarded-Host") or request.host or ""
+            if host and not host.startswith(("127.0.0.1", "localhost", "0.0.0.0")):
+                if proto == "https" or ".onrender.com" in host or ".up.railway.app" in host or ".fly.dev" in host:
+                    os.environ["PUBLIC_WEB_URL"] = f"https://{host}"
+    except Exception:
+        pass
+
+
 @app.route("/miniapp")
 @app.route("/zenvyre")
 @app.route("/admin")
 def route_zenvyre_miniapp():
-    return render_template_string(
-        ZENVYRE_MINIAPP_HTML,
-        author=APP_AUTHOR,
-        version=APP_VERSION,
-        admin_id=TELEGRAM_ADMIN_ID,
-    )
+    live_accs = len(get_all_accounts_from_ram(enabled_only=True))
+    running_tasks = sum(1 for v in ACTIVE_TASKS.values() if not v["stop"].is_set())
+    watched_boxes = len(CanhTreoWatchdogEngine.get_watched_boxes())
+    ram_mb = round(RenderRAMAutoCleaner.get_current_rss_mb(), 1)
+    ctx = {
+        "author": APP_AUTHOR,
+        "version": APP_VERSION,
+        "admin_id": TELEGRAM_ADMIN_ID,
+        "live_accs": live_accs,
+        "running_tasks": running_tasks,
+        "watched_boxes": watched_boxes,
+        "ram_mb": ram_mb,
+    }
+    rendered = ZENVYRE_MINIAPP_HTML
+    for k, v in ctx.items():
+        rendered = rendered.replace("{{ " + k + " }}", str(v)).replace("{{" + k + "}}", str(v)).replace("{ " + k + " }", str(v))
+    return render_template_string(rendered, **ctx)
+
+
+@app.route("/api/miniapp/telemetry")
+def api_miniapp_telemetry():
+    return jsonify({
+        "ok": True,
+        "author": APP_AUTHOR,
+        "version": APP_VERSION,
+        "admin_id": TELEGRAM_ADMIN_ID,
+        "live_accs": len(get_all_accounts_from_ram(enabled_only=True)),
+        "running_tasks": sum(1 for v in ACTIVE_TASKS.values() if not v["stop"].is_set()),
+        "watched_boxes": len(CanhTreoWatchdogEngine.get_watched_boxes()),
+        "ram_mb": round(RenderRAMAutoCleaner.get_current_rss_mb(), 1),
+        "antiban": UltimateAntiBan.health(),
+    })
+
+
+@app.route("/api/miniapp/files")
+def api_miniapp_files():
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    files_out = []
+    for fn in sorted(os.listdir(UPLOAD_DIR)):
+        if fn.lower().endswith(".txt"):
+            fp = os.path.join(UPLOAD_DIR, fn)
+            info = UltraFileLoader.load(fp)
+            files_out.append({
+                "filename": fn,
+                "lines": info.get("line_count", 0),
+                "size_kb": round(info.get("size", 0) / 1024.0, 1),
+            })
+    with SYSTEM_CFG_LOCK:
+        sel_nhay = SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file", "nhay.txt")
+        sel_ngon = SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file", "ngon.txt")
+    return jsonify({
+        "ok": True,
+        "files": files_out,
+        "selected_nhay": sel_nhay,
+        "selected_ngon": sel_ngon,
+    })
+
+
+@app.route("/api/miniapp/select_file", methods=["POST"])
+def api_miniapp_select_file():
+    data = request.get_json(silent=True) or {}
+    fn = os.path.basename(str(data.get("filename") or "").strip())
+    target = str(data.get("target") or "nhay").lower()
+    if not fn or not fn.endswith(".txt"):
+        return jsonify({"ok": False, "error": "Tên file không hợp lệ"})
+    with SYSTEM_CFG_LOCK:
+        if target == "ngon":
+            SYSTEM_RUNTIME_CONFIG["selected_ngon_file"] = fn
+            SYSTEM_RUNTIME_CONFIG["selected_ngon_by_acc"].clear()
+            msg = f"🌈 Đã chọn File Ngôn (.g): {fn}"
+        else:
+            SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = fn
+            SYSTEM_RUNTIME_CONFIG["selected_file"] = fn
+            SYSTEM_RUNTIME_CONFIG["selected_nhay_by_acc"].clear()
+            msg = f"🔥 Đã chọn File Nhây (.n): {fn}"
+    return jsonify({"ok": True, "message": msg, "filename": fn, "target": target})
+
+
+@app.route("/api/miniapp/add_file", methods=["POST"])
+def api_miniapp_add_file():
+    data = request.get_json(silent=True) or {}
+    raw_name = os.path.basename(str(data.get("filename") or "").strip())
+    content = str(data.get("content") or "")
+    if not raw_name:
+        return jsonify({"ok": False, "error": "Chưa nhập tên file"})
+    if not raw_name.lower().endswith(".txt"):
+        raw_name += ".txt"
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    fp = os.path.join(UPLOAD_DIR, raw_name)
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write(content.strip() + "\n")
+    UltraFileLoader.invalidate(fp)
+    info = UltraFileLoader.load(fp)
+    return jsonify({
+        "ok": True,
+        "filename": raw_name,
+        "lines": info.get("line_count", 0),
+        "message": f"✅ Đã lưu {raw_name} ({info.get('line_count', 0)} dòng) vào kho file!",
+    })
+
+
+@app.route("/api/miniapp/quick_action", methods=["POST"])
+def api_miniapp_quick_action():
+    data = request.get_json(silent=True) or {}
+    act = str(data.get("action") or "").lower()
+    if act == "clean_ram":
+        res = RenderRAMAutoCleaner.clean_now(reason="miniapp")
+        return jsonify({"ok": True, "message": f"🧹 Đã dọn RAM! Hiện tại: {res.get('after_mb', 0)}MB"})
+    if act == "stop_all":
+        stop_tasks_for_thread(None)
+        return jsonify({"ok": True, "message": "🛑 Đã dừng toàn bộ các chiến dịch đang chạy!"})
+    if act == "reload_files":
+        UltraFileLoader.invalidate()
+        cnt = UltraFileLoader.preload_directory(UPLOAD_DIR)
+        return jsonify({"ok": True, "message": f"🔄 Đã nạp lại {cnt} file .txt vào bộ nhớ mmap!"})
+    return jsonify({"ok": False, "error": "Thao tác không hợp lệ"})
 
 
 @app.route("/api/system/clean_ram", methods=["POST", "GET"])
