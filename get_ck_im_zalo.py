@@ -1,11 +1,11 @@
 # ==============================================================================
 # ZENVYRE — BỘ ĐIỀU KHIỂN TRUNG TÂM BOT TELEGRAM & MINI APP SIÊU TỐC 🇻🇳
 # Author : Dev Anh Khôi
-# Version: v2026.18.0 ZENVYRE ULTRA
+# Version: v2026.20.0 ZENVYRE ULTRA
 # ==============================================================================
 APP_TITLE = "ZENVYRE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.18.0 ZENVYRE ULTRA"
+APP_VERSION = "v2026.20.0 ZENVYRE ULTRA"
 
 import os
 import re
@@ -162,21 +162,21 @@ def strip_button_custom_emojis(reply_markup):
 
 # DANH SÁCH 10 CHỨC NĂNG CỐT LÕI CHÍNH CỦA HỆ THỐNG ZENVYRE (ĐÃ XOÁ SẠCH TREO NGÔN ĐỎ, TREO NGÔN GIF & CÁC LỆNH RƯỜM RÀ)
 FUNCTION_ITEMS_32 = [
-    {"id": "fn_treo_damau",    "label": "🌈 Treo Ngôn (.g)",       "mode": "treo_ngon",     "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "ngon.txt",        "desc": "Treo ngôn nguyên một dãy (giữ nguyên khoảng cách dòng ở giữa) + lặp x2 uy lực (.g)", "emoji_id": "5359785904535774578"},
-    {"id": "fn_treo_nhay",     "label": "🔥 Treo Nhây (.n)",       "mode": "treo_nhay",     "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Treo nhây chuẩn từng dòng một (mỗi lần gửi đúng 1 dòng trong văn bản) + lặp x2 (.n)", "emoji_id": "5424972470023104089"},
-    {"id": "fn_canh_treo",     "label": "⏱️ Canh Treo 1p30s",      "mode": "special_canhtreo","color_mode": "word_rainbow","fixed_color": "red", "file_hint": "",                "desc": "Canh chuẩn Box 1 phút 30 giây: Ai không nhắn tin tiếp theo sẽ tìm tin nhắn cuối báo về Bot Tele", "emoji_id": "5397782960512444700"},
-    {"id": "fn_nhay_giaitan",  "label": "📢 Giải Tán Nhóm",        "mode": "nhay_giaitan",  "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhaynamebox.txt", "desc": "Phát thông báo hệ thống Zalo 'Nhóm ... đã được giải tán' gửi tới toàn bộ thành viên (.nhaygiaitan)", "emoji_id": "5424972470023104089"},
-    {"id": "fn_zsticker_ai",   "label": "🎨 ZSticker AI",          "mode": "special_sticker","color_mode": "word_rainbow","fixed_color": "red", "file_hint": "",                "desc": "Tạo nhãn dán cắt khung ZSticker AI từ ảnh/video ≤3s chuẩn Zalo (.sticker)", "emoji_id": "5368324170671202286"},
-    {"id": "fn_link_box",      "label": "🔗 Tạo Link Box",         "mode": "special_linkbox","color_mode": "word_rainbow","fixed_color": "red", "file_hint": "",                "desc": "Tạo & lấy đường dẫn mời tham gia nhóm (Link Box Zalo) siêu tốc qua API (.linkbox)", "emoji_id": "5397782960512444700"},
-    {"id": "fn_send_photo",    "label": "🖼️ Gửi Ảnh (.anh)",       "mode": "nhay_theme",    "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Gửi & treo ảnh sắc nét trực tiếp vào Box Zalo (thay thế chức năng đổi nền cũ) (.anh)", "emoji_id": "5472164874886846699"},
-    {"id": "fn_anall",         "label": "👻 Nhây Tag Ẩn",          "mode": "anall",         "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Nhây từng dòng kèm báo chuông @All ẩn hoàn toàn trên nhóm (.anall)", "tag_all": True, "hide_tag_all": True, "emoji_id": "5445284980978621387"},
-    {"id": "fn_colormode",     "label": "🎨 Đi Màu (.mau)",        "mode": "special_color", "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Đi màu cùng chọn (phối nhiều màu tự chọn) hoặc đổi màu chữ toàn hệ thống (.mau)", "emoji_id": "5359785904535774578"},
-    {"id": "fn_stop_all",      "label": "🛑 Dừng Tất Cả (.ta)",    "mode": "special_stop",  "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Dừng khẩn cấp toàn bộ các chiến dịch đang chạy ngầm (.ta)", "emoji_id": "5210952531676504517"},
-    {"id": "fn_delay",         "label": "⚡ Tốc Độ Delay (.d)",    "mode": "special_delay", "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Chỉnh tốc độ gửi tin (0.0s, 0.1s, 0.3s, 0.5s, 1.0s) (.d)", "emoji_id": "5431449001532594346"},
-    {"id": "fn_fontstyle",     "label": "🔤 Cỡ & Kiểu Chữ",        "mode": "special_font",  "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Chọn cỡ chữ To Đậm (f_18), Vừa Đậm (f_15), Xen Kẽ (.font)", "emoji_id": "5368324170671202286"},
+    {"id": "fn_treo_damau",    "label": "🌈 Treo Ngôn (.g)",       "mode": "treo_ngon",      "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "ngon.txt",        "desc": "Treo ngôn nguyên dãy (giữ cách dòng) + lặp x2 (.g)", "emoji_id": "5359785904535774578"},
+    {"id": "fn_treo_nhay",     "label": "🔥 Treo Nhây (.n)",       "mode": "treo_nhay",      "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Treo nhây từng dòng rời + lặp x2 (.n)", "emoji_id": "5424972470023104089"},
+    {"id": "fn_canh_treo",     "label": "⏱️ Canh Treo 1p30s",      "mode": "special_canhtreo","color_mode": "word_rainbow","fixed_color": "red", "file_hint": "",                "desc": "Canh Box 1p30s ngưng nhắn tự báo tin cuối về Tele (.canhtreo)", "emoji_id": "5397782960512444700"},
+    {"id": "fn_nhay_giaitan",  "label": "📢 Troll Giải Tán",       "mode": "nhay_giaitan",   "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhaynamebox.txt", "desc": "Phát thông báo hệ thống Zalo giải tán nhóm vô hạn + tag ẩn (.giaitan)", "emoji_id": "5424972470023104089"},
+    {"id": "fn_zsticker_ai",   "label": "🎨 Tạo Sticker Zalo",     "mode": "special_sticker","color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Reply Ảnh / Video ≤3s cắt khung tạo Nhãn Dán Zalo thật (.sticker)", "emoji_id": "5368324170671202286"},
+    {"id": "fn_link_box",      "label": "🔗 Tạo Link Box",         "mode": "special_linkbox","color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Lấy & tạo mới Link Box Zalo siêu tốc qua API (.linkbox)", "emoji_id": "5397782960512444700"},
+    {"id": "fn_send_photo",    "label": "🖼️ Gửi Ảnh (.anh)",       "mode": "nhay_theme",     "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Gửi & treo ảnh trực tiếp vào Box Zalo (.anh)", "emoji_id": "5472164874886846699"},
+    {"id": "fn_anall",         "label": "👻 Nhây Tag Ẩn",          "mode": "anall",          "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Nhây từng dòng kèm báo chuông @All ẩn (.anall)", "tag_all": True, "hide_tag_all": True, "emoji_id": "5445284980978621387"},
+    {"id": "fn_colormode",     "label": "🎨 Đi Màu (.mau)",        "mode": "special_color",  "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Đi màu cùng chọn (.mau do cam) hoặc đổi màu từng từ", "emoji_id": "5359785904535774578"},
+    {"id": "fn_stop_all",      "label": "🛑 Dừng Tất Cả (.ta)",    "mode": "special_stop",   "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Dừng ngay toàn bộ chiến dịch đang chạy (.ta)", "emoji_id": "5210952531676504517"},
+    {"id": "fn_delay",         "label": "⚡ Chỉnh Delay (.d)",     "mode": "special_delay",  "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Chỉnh tốc độ gửi tin (0.0s - 1.0s) (.d)", "emoji_id": "5431449001532594346"},
+    {"id": "fn_fontstyle",     "label": "🔤 Cỡ & Kiểu Chữ",        "mode": "special_font",   "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Chọn cỡ chữ To Đậm (f_18), Vừa Đậm (f_15) (.font)", "emoji_id": "5368324170671202286"},
 ]
 
-# BẢNG CHỨC NĂNG CHÍNH ZENVYRE (1 TRANG DUY NHẤT — 10 NÚT GỌN GÀNG, NGĂN NẮP, KHÔNG RỐI MẮT)
+# BẢNG CHỨC NĂNG CHÍNH ZENVYRE (1 TRANG DUY NHẤT — 10 NÚT GỌN GÀNG, NGĂN NẮP, DỄ NHÌN)
 COMPACT_TELE_FUNCTIONS_16 = FUNCTION_ITEMS_32[:10]
 
 FUNCTION_MAP_BY_ID = {item["id"]: item for item in FUNCTION_ITEMS_32}
@@ -1319,33 +1319,39 @@ class DirectTelegramBotRunner:
     def build_tabbed_caption(cls, user_first_name="Anh", user_id=ROOT_ADMIN_ID, active_tab="func", page=1, extra_notice=""):
         name_clean = str(user_first_name or "Anh").replace("<", "").replace(">", "").strip() or "Anh"
         if active_tab == "func":
-            sec_title = "10 CHỨC NĂNG CHÍNH ZENVYRE (GỌN GÀNG • 0MS)"
+            sec_title = "BẢNG ĐIỀU KHIỂN CHÍNH (0.0S)"
         elif active_tab == "mgmt":
             sec_title = "QUẢN LÝ ACC, COOKIE & KHO FILE (.TXT)"
         else:
-            sec_title = "MINI APP GIỚI THIỆU ADMIN & TIỆN ÍCH"
+            sec_title = "MINI APP ZENVYRE & TIỆN ÍCH NHANH"
 
         acc_cnt, running_cnt, color_label, delay_val = cls._get_live_runtime_summary(user_id=user_id)
         ram_mb = 64.0
         canh_cnt = 0
+        nhay_f = "nhay.txt"
+        ngon_f = "ngon.txt"
         try:
             import app as _main_app
             if hasattr(_main_app, "RenderRAMAutoCleaner"):
                 ram_mb = _main_app.RenderRAMAutoCleaner.get_current_rss_mb()
             if hasattr(_main_app, "CanhTreoWatchdogEngine"):
                 canh_cnt = len(_main_app.CanhTreoWatchdogEngine.get_watched_boxes())
+            with _main_app.SYSTEM_CFG_LOCK:
+                nhay_f = _main_app.SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file", "nhay.txt")
+                ngon_f = _main_app.SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file", "ngon.txt")
         except Exception:
             pass
         notice_block = f"\n<blockquote>{extra_notice}</blockquote>" if extra_notice else ""
 
         return (
-            f"🌌 <b>ZENVYRE ULTRA VIP ({APP_VERSION}) — {name_clean.upper()}</b> {tg_anim('sparkle', '✨')}\n"
+            f"🌌 <b>ZENVYRE ULTRA ({APP_VERSION})</b>\n"
             f"<blockquote>"
-            f"👑 <b>Admin: {APP_AUTHOR}</b>  •  🟢 <b>{acc_cnt} Acc</b>  •  🚀 <b>{running_cnt} Task</b>\n"
-            f"⏱️ <b>Canh Treo:</b> <code>{canh_cnt} Box</code>  •  🎨 <b>Màu:</b> <code>{color_label}</code>  •  🧹 <b>RAM: {ram_mb:.0f}MB</b>"
+            f"👑 <b>{APP_AUTHOR}</b> • 🟢 <b>{acc_cnt} Acc</b> • 🚀 <b>{running_cnt} Task</b> • 🧹 <b>{ram_mb:.0f}MB</b>\n"
+            f"📂 <b>Nhây:</b> <code>{nhay_f}</code> • <b>Ngôn:</b> <code>{ngon_f}</code>\n"
+            f"⏱️ <b>Canh Treo:</b> <code>{canh_cnt} Box</code> • 🎨 <b>Màu:</b> <code>{color_label}</code> • ⚡ <b>Delay:</b> <code>{delay_val}s</code>"
             f"</blockquote>"
             f"{notice_block}\n"
-            f"{tg_anim('gear', '⚙️')} <b>{sec_title}</b>"
+            f"⚡ <b>{sec_title}</b>"
         )
 
     @classmethod
@@ -1901,16 +1907,14 @@ class DirectTelegramBotRunner:
         )
 
         cap = (
-            f"{tg_anim('gear', '⚙️')} <b>CẤU HÌNH: {fn_meta['label'].upper()}</b>\n"
-            f"<i>{fn_meta['desc']}</i>\n\n"
+            f"⚙️ <b>{fn_meta['label'].upper()}</b>\n"
             f"<blockquote>"
-            f"{tg_anim('download', '📂')} File tệp (.txt): {content_preview}\n"
-            f"{tg_anim('users', '👥')} Tài khoản chạy: <b>{wiz['acc_name']}</b> ({acc_cnt} Acc khả dụng)\n"
-            f"{tg_anim('folder', '📦')} Mục tiêu: <b>{wiz['box_name']}</b> ({len(boxes)} Box)"
+            f"📂 <b>File (.txt):</b> {content_preview}\n"
+            f"👥 <b>Tài khoản:</b> <b>{wiz['acc_name']}</b> ({acc_cnt} Acc)\n"
+            f"📦 <b>Mục tiêu:</b> <b>{wiz['box_name']}</b> ({len(boxes)} Box)"
             f"{tag_info}"
-            f"{poll_speed_note}\n"
-            f"{tg_anim('magic', '🎨')} Màu chữ: <b>{'Đỏ Rực (db342e)' if fn_meta['color_mode'] == 'fixed' else 'Chữ Đổi Từng Màu Cầu Vồng (0% Trắng)'}</b>"
-            f"</blockquote>\n\n"
+            f"{poll_speed_note}"
+            f"</blockquote>\n"
             f"{step_guide}"
         )
         self.edit_menu_message(chat_id, message_id, cap, reply_markup={"inline_keyboard": kb_rows})
