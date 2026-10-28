@@ -1,11 +1,11 @@
 # ==============================================================================
 # HỆ THỐNG ĐĂNG NHẬP QR ZALO PC & GIỮ SỐNG PHIÊN 24/7 (ZALO LOGIN ENGINE)
 # Author : Dev Anh Khôi
-# Version: v2026.18.0 ZENVYRE ULTRA
+# Version: v2026.20.0 ZENVYRE ULTRA
 # ==============================================================================
 APP_AUTHOR = "Dev Anh Khôi"
 APP_TITLE = "ZENVYRE"
-APP_VERSION = "v2026.18.0 ZENVYRE ULTRA"
+APP_VERSION = "v2026.20.0 ZENVYRE ULTRA"
 
 import os
 import re
