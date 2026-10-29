@@ -1,11 +1,11 @@
 # ==============================================================================
 # ZENVYRE — BỘ ĐIỀU KHIỂN TRUNG TÂM BOT TELEGRAM & MINI APP SIÊU TỐC 🇻🇳
 # Author : Dev Anh Khôi
-# Version: v2026.20.0 ZENVYRE ULTRA
+# Version: v2026.21.0 ZENVYRE ULTRA
 # ==============================================================================
 APP_TITLE = "ZENVYRE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.20.0 ZENVYRE ULTRA"
+APP_VERSION = "v2026.21.0 ZENVYRE ULTRA"
 
 import os
 import re
@@ -164,20 +164,23 @@ def strip_button_custom_emojis(reply_markup):
 FUNCTION_ITEMS_32 = [
     {"id": "fn_treo_damau",    "label": "🌈 Treo Ngôn (.g)",       "mode": "treo_ngon",      "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "ngon.txt",        "desc": "Treo ngôn nguyên dãy (giữ cách dòng) + lặp x2 (.g)", "emoji_id": "5359785904535774578"},
     {"id": "fn_treo_nhay",     "label": "🔥 Treo Nhây (.n)",       "mode": "treo_nhay",      "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Treo nhây từng dòng rời + lặp x2 (.n)", "emoji_id": "5424972470023104089"},
+    {"id": "fn_nhay_giaitan",  "label": "📢 Troll Giải Tán",       "mode": "nhay_giaitan",   "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Phát thông báo hệ thống Zalo giải tán nhóm vô hạn + tag ẩn (.giaitan)", "emoji_id": "5424972470023104089"},
+    {"id": "fn_anall",         "label": "👻 Nhây Tag Ẩn",          "mode": "anall",          "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Nhây từng dòng kèm báo chuông @All ẩn (.anall)", "tag_all": True, "hide_tag_all": True, "emoji_id": "5445284980978621387"},
+    {"id": "fn_xoakey",        "label": "🗑️ Thu Hồi Non-Key",      "mode": "special_xoakey", "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Thu hồi tin nhắn của thành viên không có key (.xoakey)", "emoji_id": "5431449001532594346"},
+    {"id": "fn_kickall",       "label": "👢 Kick All Mem",         "mode": "special_kickall","color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Kick toàn bộ thành viên khỏi nhóm giữ lại chủ Acc (.kickall)", "emoji_id": "5424972470023104089"},
+    {"id": "fn_floodbox",      "label": "💥 Flood Lag Box",        "mode": "special_flood",  "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Xả Link Lag / Typing / Poll làm trôi nhóm (.floodbox)", "emoji_id": "5431449001532594346"},
     {"id": "fn_canh_treo",     "label": "⏱️ Canh Treo 1p30s",      "mode": "special_canhtreo","color_mode": "word_rainbow","fixed_color": "red", "file_hint": "",                "desc": "Canh Box 1p30s ngưng nhắn tự báo tin cuối về Tele (.canhtreo)", "emoji_id": "5397782960512444700"},
-    {"id": "fn_nhay_giaitan",  "label": "📢 Troll Giải Tán",       "mode": "nhay_giaitan",   "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhaynamebox.txt", "desc": "Phát thông báo hệ thống Zalo giải tán nhóm vô hạn + tag ẩn (.giaitan)", "emoji_id": "5424972470023104089"},
     {"id": "fn_zsticker_ai",   "label": "🎨 Tạo Sticker Zalo",     "mode": "special_sticker","color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Reply Ảnh / Video ≤3s cắt khung tạo Nhãn Dán Zalo thật (.sticker)", "emoji_id": "5368324170671202286"},
     {"id": "fn_link_box",      "label": "🔗 Tạo Link Box",         "mode": "special_linkbox","color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Lấy & tạo mới Link Box Zalo siêu tốc qua API (.linkbox)", "emoji_id": "5397782960512444700"},
     {"id": "fn_send_photo",    "label": "🖼️ Gửi Ảnh (.anh)",       "mode": "nhay_theme",     "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Gửi & treo ảnh trực tiếp vào Box Zalo (.anh)", "emoji_id": "5472164874886846699"},
-    {"id": "fn_anall",         "label": "👻 Nhây Tag Ẩn",          "mode": "anall",          "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Nhây từng dòng kèm báo chuông @All ẩn (.anall)", "tag_all": True, "hide_tag_all": True, "emoji_id": "5445284980978621387"},
     {"id": "fn_colormode",     "label": "🎨 Đi Màu (.mau)",        "mode": "special_color",  "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Đi màu cùng chọn (.mau do cam) hoặc đổi màu từng từ", "emoji_id": "5359785904535774578"},
     {"id": "fn_stop_all",      "label": "🛑 Dừng Tất Cả (.ta)",    "mode": "special_stop",   "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Dừng ngay toàn bộ chiến dịch đang chạy (.ta)", "emoji_id": "5210952531676504517"},
     {"id": "fn_delay",         "label": "⚡ Chỉnh Delay (.d)",     "mode": "special_delay",  "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Chỉnh tốc độ gửi tin (0.0s - 1.0s) (.d)", "emoji_id": "5431449001532594346"},
     {"id": "fn_fontstyle",     "label": "🔤 Cỡ & Kiểu Chữ",        "mode": "special_font",   "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Chọn cỡ chữ To Đậm (f_18), Vừa Đậm (f_15) (.font)", "emoji_id": "5368324170671202286"},
 ]
 
-# BẢNG CHỨC NĂNG CHÍNH ZENVYRE (1 TRANG DUY NHẤT — 10 NÚT GỌN GÀNG, NGĂN NẮP, DỄ NHÌN)
-COMPACT_TELE_FUNCTIONS_16 = FUNCTION_ITEMS_32[:10]
+# BẢNG CHỨC NĂNG CHÍNH ZENVYRE (GỌN GÀNG, ĐẦY ĐỦ 14 NÚT CHỨC NĂNG CHÍNH)
+COMPACT_TELE_FUNCTIONS_16 = FUNCTION_ITEMS_32[:14]
 
 FUNCTION_MAP_BY_ID = {item["id"]: item for item in FUNCTION_ITEMS_32}
 
@@ -348,6 +351,8 @@ def can_user_access_account(user_id, owner_tg_id) -> bool:
         return True
     u_s = str(user_id or "").strip()
     o_s = str(owner_tg_id or "").strip()
+    if not o_s:
+        return True
     return bool(u_s and o_s and u_s == o_s)
 
 
@@ -1452,22 +1457,24 @@ class DirectTelegramBotRunner:
                     plat = (a.get("platform") or "zalo").lower()
                     if plat == "zalo":
                         auid_s = str(a.get("uid") or "").strip()
-                        # 1. Lấy tức thì từ _GROUPS_CACHE trong RAM nếu đã có
-                        if auid_s and hasattr(_main_app.Zalo, "_GROUPS_CACHE"):
-                            g_cached = _main_app.Zalo._GROUPS_CACHE.get(auid_s)
-                            if g_cached:
-                                for g in (g_cached[1] or []):
-                                    gid = str(g.get("id") or "").strip()
-                                    if gid and gid not in seen and gid != "null":
-                                        seen.add(gid)
-                                        boxes.append({
-                                            "id": gid,
-                                            "name": g.get("name") or f"Nhóm {gid[-6:]}",
-                                            "platform": "zalo",
-                                            "acc_id": a["id"],
-                                        })
-                        # 2. Bổ sung tức thì từ KNOWN_GROUPS_BY_ACC trong RAM
-                        for gid_k in _main_app.KNOWN_GROUPS_BY_ACC.get(auid_s, set()):
+                        # 1. Lấy tức thì từ _GROUPS_CACHE trong RAM nếu đã có (Hỗ trợ cả dict {"ts","data"} và tuple)
+                        if hasattr(_main_app.Zalo, "_GROUPS_CACHE"):
+                            g_cached = _main_app.Zalo._GROUPS_CACHE.get(auid_s) or _main_app.Zalo._GROUPS_CACHE.get(str(a.get("imei") or ""))
+                            g_list_ram = g_cached.get("data") if isinstance(g_cached, dict) else (g_cached[1] if isinstance(g_cached, (list, tuple)) and len(g_cached) > 1 else [])
+                            for g in (g_list_ram or []):
+                                if not isinstance(g, dict):
+                                    continue
+                                gid = str(g.get("id") or "").strip()
+                                if gid and gid not in seen and gid != "null":
+                                    seen.add(gid)
+                                    boxes.append({
+                                        "id": gid,
+                                        "name": g.get("name") or f"Nhóm {gid[-6:]}",
+                                        "platform": "zalo",
+                                        "acc_id": a["id"],
+                                    })
+                        # 2. Bổ sung tức thì từ KNOWN_GROUPS_BY_ACC & ALL_KNOWN_ZALO_GROUP_IDS trong RAM
+                        for gid_k in (_main_app.KNOWN_GROUPS_BY_ACC.get(auid_s, set()) | _main_app.ALL_KNOWN_ZALO_GROUP_IDS):
                             gid_s = str(gid_k).strip()
                             if gid_s and gid_s not in seen and gid_s != "null":
                                 seen.add(gid_s)
@@ -1844,15 +1851,26 @@ class DirectTelegramBotRunner:
             self.edit_menu_message(chat_id, message_id, cap, reply_markup=kb)
             return
 
-        # Khởi tạo lựa chọn Wizard cho chiến dịch (Bắt buộc chọn File tệp .txt trước khi chạy)
+        # Khởi tạo lựa chọn Wizard cho chiến dịch (Tự động nạp sẵn File mặc định để bấm BẮT ĐẦU CHẠY ăn ngay 100%!)
+        default_fn = fn_meta.get("file_hint") or ("ngon.txt" if mode == "treo_ngon" else "nhay.txt")
+        try:
+            import app as _main_app
+            with _main_app.SYSTEM_CFG_LOCK:
+                if mode == "treo_ngon":
+                    default_fn = _main_app.SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file") or default_fn
+                else:
+                    default_fn = _main_app.SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file") or default_fn
+        except Exception:
+            pass
         wiz = self.wizard_selections.get(user_id) or {}
         wiz["fn_id"] = fn_id
         wiz.setdefault("box_id", "ALL")
         wiz.setdefault("box_name", "Tất Cả Các Box (All)")
         wiz.setdefault("acc_id", "ALL")
         wiz.setdefault("acc_name", "Tất Cả Acc Của Bạn (Đa Acc)")
-        wiz.setdefault("file_name", "")
-        wiz.setdefault("file_selected", False)
+        if not wiz.get("file_name"):
+            wiz["file_name"] = default_fn
+        wiz["file_selected"] = True
         wiz.setdefault("custom_text", "")
         wiz.setdefault("tag_query", "")
         self.wizard_selections[user_id] = wiz
@@ -1861,13 +1879,11 @@ class DirectTelegramBotRunner:
         files = self._get_available_txt_files()
         vis_accs = get_user_visible_accounts(user_id, enabled_only=True)
         acc_cnt = len(vis_accs)
-        has_file_ready = bool((wiz.get("file_selected") and wiz.get("file_name")) or wiz.get("custom_text"))
+        has_file_ready = True
 
-        kb_rows = []
-        if has_file_ready:
-            kb_rows.append([tg_btn(f"BẮT ĐẦU CHẠY: {fn_meta['label']}", f"runfn:{fn_id}", emoji_key="rocket")])
-        else:
-            kb_rows.append([tg_btn("⚠️ BƯỚC 1: HÃY CHỌN FILE (.TXT) BÊN DƯỚI TRƯỚC", f"runfn:{fn_id}", emoji_key="warn")])
+        kb_rows = [
+            [tg_btn(f"🚀 BẮT ĐẦU CHẠY NGAY: {fn_meta['label']}", f"runfn:{fn_id}", emoji_key="rocket")]
+        ]
 
         file_btns = []
         for idx_f, f_item in enumerate(files[:10], 1):
@@ -1925,19 +1941,11 @@ class DirectTelegramBotRunner:
             return
         wiz = self.wizard_selections.get(user_id) or {}
         custom_text = (wiz.get("custom_text") or "").strip()
-        file_selected = bool(wiz.get("file_selected") and wiz.get("file_name"))
-        if not file_selected and not custom_text:
-            if cb_id:
-                self.answer_callback(
-                    cb_id,
-                    "⚠️ Bắt buộc chọn trước 1 File tệp (.txt) bên dưới trước khi bấm Bắt Đầu Chạy!",
-                    show_alert=True,
-                )
-            self.render_function_wizard(chat_id, message_id, user_id, fn_id)
-            return
-
+        if not wiz.get("file_name"):
+            wiz["file_name"] = fn_meta.get("file_hint") or ("ngon.txt" if fn_meta.get("mode") == "treo_ngon" else "nhay.txt")
+        wiz["file_selected"] = True
         if cb_id:
-            self.answer_callback(cb_id, "🚀 Đang khởi chạy chiến dịch...")
+            self.answer_callback(cb_id, "🚀 Đang khởi chạy chức năng...")
 
         box_id = wiz.get("box_id") or "ALL"
         acc_sel = str(wiz.get("acc_id") or "ALL")
@@ -1978,16 +1986,43 @@ class DirectTelegramBotRunner:
                 return
 
             mode = fn_meta["mode"]
+            if mode in ("special_xoakey", "special_kickall", "special_flood"):
+                zalo_accs = [a for a in vis_accs if (a.get("platform") or "zalo") == "zalo"]
+                if not zalo_accs:
+                    self.send_text(chat_id, "⚠️ Chức năng này yêu cầu ít nhất 1 tài khoản Zalo đang sống!")
+                    return
+                zc = _main_app.Zalo.get_pooled_client(
+                    zalo_accs[0]["imei"], zalo_accs[0]["cookies"],
+                    user_agent=zalo_accs[0].get("user_agent") or "",
+                    zpw_enk_hint=zalo_accs[0].get("zpw_enk") or "",
+                    uid_hint=zalo_accs[0].get("uid") or ""
+                )
+                for b_t in target_boxes[:8]:
+                    gid_t = str(b_t["id"])
+                    if mode == "special_xoakey":
+                        threading.Thread(target=_main_app.ZaloUndoEngine.undo_nonkey, args=(zc, gid_t, 50), daemon=True).start()
+                    elif mode == "special_kickall":
+                        threading.Thread(target=_main_app.ZaloKickAllEngine.kick_all, args=(zc, gid_t, True), daemon=True).start()
+                    elif mode == "special_flood":
+                        threading.Thread(target=_main_app.ZaloFloodLagEngine.create_lag_links, args=(zc, gid_t, 8), daemon=True).start()
+                cap = self.build_tabbed_caption(
+                    user_id=user_id, active_tab="func", page=1,
+                    extra_notice=f"✅ <b>ĐÃ KÍCH HOẠT {fn_meta['label'].upper()} TRÊN {len(target_boxes)} BOX!</b>"
+                )
+                self.edit_menu_message(chat_id, message_id, cap, reply_markup=self.build_tabbed_keyboard("func", 1, user_id=user_id))
+                return
+
             if custom_text:
                 if mode == "treo_ngon":
                     blocks = [custom_text]
                 else:
                     blocks = [ln.strip() for ln in custom_text.splitlines() if ln.strip()] or [custom_text]
+            elif mode == "nhay_giaitan":
+                blocks = ["auto"]
             else:
                 blocks = self._read_txt_file_blocks(file_name, mode=mode)
                 if not blocks:
-                    self.send_text(chat_id, f"⚠️ File <code>{file_name}</code> đang trống! Hãy chọn file khác.")
-                    return
+                    blocks = ["ZENVYRE ULTRA VIP 2026", "Tốc độ ánh sáng cân mọi chiến trường"]
 
             # Chỉ dừng tiến trình cũ trên đúng các Box mục tiêu đang chọn để các Box/Acc khác vẫn chạy bình thường!
             if box_id == "ALL":
