@@ -1,11 +1,11 @@
 # ==============================================================================
 # ZENVYRE — SIÊU HỆ THỐNG ĐIỀU PHỐI ĐA TÀI KHOẢN ZALO • DISCORD • MESSENGER • TELE
 # Author : Dev Anh Khôi
-# Version: v2026.20.0 ZENVYRE ULTRA
+# Version: v2026.21.0 ZENVYRE ULTRA
 # ==============================================================================
 APP_TITLE = "ZENVYRE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.20.0 ZENVYRE ULTRA"
+APP_VERSION = "v2026.21.0 ZENVYRE ULTRA"
 
 import sys, types
 try:
@@ -1573,12 +1573,12 @@ ACTIVE_TARGET_BOXES_SET = set()
 
 def is_true_account_owner(sender_uid, client_uid=None, client_send2me_id=None, platform="zalo", strict_per_cookie=False):
     """Kiểm tra NGHIÊM NGẶT người gửi có phải là CHỦ TÀI KHOẢN (Owner):
-    - Chỉ chấp nhận chính UID của Cookie đó, send2me_id, '0' (tin tự gửi trên Zalo), hoặc UID chủ trong OWNER_UIDS_CACHE.
-    - TUYỆT ĐỐI KHÔNG cho phép chuỗi rỗng hoặc người lạ vượt quyền!"""
+    - Chấp nhận chính UID của Cookie đó, send2me_id, '0' (tin tự gửi), hoặc UID chủ trong OWNER_UIDS_CACHE.
+    - Nếu tài khoản vừa thêm Cookie mà chưa kịp đồng bộ UID (c_uid_s rỗng và OWNER_UIDS_CACHE rỗng), tự động ghi nhận UID chủ đầu tiên!"""
     s_uid = str(sender_uid or "").strip().lstrip("@")
     if not s_uid or s_uid in ("-1", "null", "None", "undefined"):
         return False
-    if str(platform or "zalo").lower() == "zalo" and s_uid == "0":
+    if s_uid == "0":
         return True
     c_uid_s = str(client_uid or "").strip()
     c_s2m_s = str(client_send2me_id or "").strip()
@@ -1591,6 +1591,9 @@ def is_true_account_owner(sender_uid, client_uid=None, client_send2me_id=None, p
     if not OWNER_UIDS_CACHE:
         refresh_owner_uids()
     if s_uid in OWNER_UIDS_CACHE:
+        return True
+    if not c_uid_s and not OWNER_UIDS_CACHE and s_uid.isdigit() and len(s_uid) >= 6:
+        OWNER_UIDS_CACHE.add(s_uid)
         return True
     return False
 
@@ -2252,7 +2255,7 @@ class ZaloDisbandTroller:
         members, seen_uids = [], set()
         my_uid = str(zalo_client.uid or "").strip()
         try:
-            for m in (zalo_client.get_group_members(gid_s, use_cache=False) or []):
+            for m in (zalo_client.get_members_full(gid_s, use_cache=False) or []):
                 u = _clean_zalo_id(m.get("uid"))
                 if u and u not in seen_uids:
                     seen_uids.add(u)
@@ -2314,6 +2317,11 @@ class ZaloDisbandTroller:
         members = cached_members if cached_members is not None else cls.scan_full_members(zalo_client, gid_s)
         mem_cnt = max(len(members) + 1, 2)
         cls._call_disperse_api(zalo_client, gid_s)
+        if round_idx % 2 == 0:
+            try:
+                zalo_client.spam_group_disband_notification(gid_s, group_name=real_name, send_inbox_alert=False)
+            except Exception:
+                pass
         tpl = cls._VARIANTS[round_idx % len(cls._VARIANTS)]
         msg_body = tpl.format(box=real_name, count=mem_cnt)
         mentions = []
@@ -2338,7 +2346,7 @@ class ZaloDisbandTroller:
         gid_s = _clean_zalo_id(group_id) or str(group_id).strip()
         real_name = box_name or zalo_client.get_group_real_name(gid_s) or f"Box #{gid_s[-5:]}"
         members = cls.scan_full_members(zalo_client, gid_s)
-        start_global_epoch, start_box_epoch = get_stop_epochs_fast(gid_s)
+        start_global_epoch, start_box_epoch = get_current_epochs(gid_s)
         idx = 0
         while True:
             if stop_event and stop_event.is_set():
@@ -4498,8 +4506,9 @@ def get_accounts_present_in_thread(platform="zalo", thread_id="", is_group=True,
         known_set = KNOWN_GROUPS_BY_ACC.get(uid_s, set()) if uid_s else set()
         if not known_set and uid_s and hasattr(Zalo, "_GROUPS_CACHE"):
             g_c = Zalo._GROUPS_CACHE.get(uid_s)
-            if g_c and g_c[1]:
-                known_set = {str(g.get("id") or "") for g in g_c[1] if g.get("id")}
+            g_data = g_c.get("data") if isinstance(g_c, dict) else (g_c[1] if isinstance(g_c, (list, tuple)) and len(g_c) > 1 else None)
+            if g_data:
+                known_set = {str(g.get("id") or "") for g in g_data if isinstance(g, dict) and g.get("id")}
                 KNOWN_GROUPS_BY_ACC[uid_s].update(known_set)
         if not known_set or (tid_s in known_set):
             matched.append(a)
@@ -5891,6 +5900,13 @@ class Zalo:
             OWNER_UIDS_CACHE.add(self.send2me_id)
 
     def _get_aes_key_bytes(self):
+        if not self.secret_key:
+            try:
+                self._login(force=True)
+            except Exception:
+                pass
+        if not self.secret_key:
+            raise Exception("Chưa đồng bộ được khóa phiên zpw_enk của Cookie Zalo")
         if self._cached_key_bytes is not None and self._cached_key_str == self.secret_key:
             return self._cached_key_bytes
         kb = base64.b64decode(self.secret_key)
@@ -6065,8 +6081,8 @@ class Zalo:
         acc_k = str(self.uid or self.imei or "")
         my_gids = list(KNOWN_GROUPS_BY_ACC.get(str(self.uid or ""), set()) | KNOWN_GROUPS_BY_ACC.get(acc_k, set()))
         tid_map = {str(g): "0" for g in my_gids[:60] if g and str(g) != str(self.uid or "")}
-        # Ưu tiên gọi bản "{}" trước để lấy nhanh mọi tin nhắn mới nhất trong < 0.2s mà không bị nghẽn bởi danh sách 150 nhóm
-        payload_candidates = [{}, tid_map] if tid_map else [{}]
+        # Ưu tiên truyền tid_map chứa danh sách nhóm trước để Zalo trả đầy đủ groupMsgs + msgs, kèm fallback "{}"
+        payload_candidates = [tid_map, {}] if tid_map else [{}]
         for payload_map in payload_candidates:
             try:
                 enc = self._enc({"threadIdLocalMsgId": json.dumps(payload_map), "imei": self.imei})
@@ -6151,7 +6167,7 @@ class Zalo:
                                     ZaloStickerMakerEngine.cache_incoming_media_message(_mu, my_uid=self.uid, fallback_thread_id=_mu.get("_peer_uid"))
                                 for _mg in g_list:
                                     ZaloStickerMakerEngine.cache_incoming_media_message(_mg, my_uid=self.uid, fallback_thread_id=_mg.get("grid"))
-                                if u_list or g_list or not payload_map:
+                                if u_list or g_list or payload_map == payload_candidates[-1]:
                                     return {"msgs": u_list, "groupMsgs": g_list}
                     except Exception:
                         continue
@@ -8302,6 +8318,22 @@ class Zalo:
                         })
                     c_offset += ch_u16
                 active_line_idx = w_step
+            elif len(lines) > 3:
+                # Khi tin nhắn có nhiều dòng (.menu hoặc bài văn .g treo ngôn dài), tô màu cầu vồng theo từng dòng (tối đa 16 đoạn style)
+                # để Zalo render 100% màu rực rỡ và TUYỆT ĐỐI KHÔNG bao giờ từ chối gói tin vì vượt giới hạn styles!
+                zcode = self._pick_distinct_zcode(eff_color_mode, fixed_color, active_line_idx, prev_zcode) or "db342e"
+                if active_line_idx == color_offset:
+                    first_color = zcode
+                prev_zcode = zcode
+                active_line_idx += 1
+                st_parts = list(font_tokens) if font_tokens else ["b"]
+                st_parts.append(f"c_{zcode}")
+                if core_u16_len > 0 and len(styles) < 18:
+                    styles.append({
+                        "start": current_u16_pos,
+                        "len": core_u16_len,
+                        "st": ",".join(st_parts)
+                    })
             else:
                 # Mặc định cho mọi chiến dịch (word_rainbow, fire_gradient, ocean_gradient, royal_gradient, neon_cyber, random):
                 # Đổi màu từng từ (hoặc từng chữ cái nếu chỉ có 1 từ) — tuyệt đối không để bất kỳ chữ nào màu trắng!
@@ -8709,14 +8741,19 @@ class Zalo:
             err_code = getattr(r, "_outer_err_code", 0)
             inner_err = getattr(r, "_inner_err_code", 0)
 
+            if (err_code != 0 or inner_err != 0) and styles:
+                # Dự phòng an toàn: Nếu máy chủ Zalo từ chối textProperties (styles), gửi lại ngay lập tức không kèm styles để tin nhắn (.menu / .g / .n) nổi lên 100%!
+                r_plain = self._send_raw_payload(final_msg, thread_id, is_group, m_arr, [], first_color=first_color, priority_bypass=priority_bypass, antiband=False)
+                if getattr(r_plain, "_outer_err_code", 0) == 0 and getattr(r_plain, "_inner_err_code", 0) == 0:
+                    return r_plain
             if auto_retry_thread_type and (err_code != 0 or inner_err != 0):
                 # 1. Nếu đang gửi vào Nhóm (is_group=True) có kèm mention (m_arr) bị lỗi -> thử lại không kèm mention trước
                 if is_group and m_arr:
-                    r2 = self._send_raw_payload(final_msg, thread_id, True, [], styles, first_color=first_color, priority_bypass=priority_bypass)
+                    r2 = self._send_raw_payload(final_msg, thread_id, True, [], [], first_color=first_color, priority_bypass=priority_bypass, antiband=False)
                     if getattr(r2, "_outer_err_code", 0) == 0 and getattr(r2, "_inner_err_code", 0) == 0:
                         return r2
                 # 2. Tự động thử lật ngược loại luồng (Cá nhân <-> Nhóm) khi gửi lệnh .menu hoặc khi nhóm chưa kịp vào KNOWN_GROUPS_BY_ACC
-                r_flip = self._send_raw_payload(final_msg, thread_id, not is_group, [], styles, first_color=first_color, priority_bypass=priority_bypass)
+                r_flip = self._send_raw_payload(final_msg, thread_id, not is_group, [], [], first_color=first_color, priority_bypass=priority_bypass, antiband=False)
                 if getattr(r_flip, "_outer_err_code", 0) == 0 and getattr(r_flip, "_inner_err_code", 0) == 0:
                     if not is_group:
                         ALL_KNOWN_ZALO_GROUP_IDS.add(str(thread_id))
@@ -15258,7 +15295,7 @@ def parse_and_execute_inchat_command(
             my_uid = str(zalo_client.uid).strip()
             OWNER_UIDS_CACHE.add(my_uid)
 
-    allow_all_flag = False
+    allow_all_flag = bool(acc_row.get("allow_all_cmd", 0))
     is_true_owner = is_true_account_owner(
         s_uid, client_uid=my_uid, client_send2me_id=my_s2m, platform=platform
     )
@@ -15266,7 +15303,7 @@ def parse_and_execute_inchat_command(
         s_uid, my_uid, my_s2m, allow_all=allow_all_flag, sender_name=sender_name,
         platform=platform, thread_id=thread_id, cmd_token=cmd_token
     )
-    is_owner = is_true_owner or is_authorized_sender
+    is_owner = is_true_owner or is_authorized_sender or allow_all_flag
 
     # BẮT BUỘC 100%: Chỉ Chủ Acc (is_true_owner) và người được Chủ Acc cấp quyền (.cp) mới được phép dùng lệnh!
     # Cấm tuyệt đối 100% mọi người lạ khác trong nhóm sử dụng lệnh!
@@ -16140,14 +16177,41 @@ def parse_and_execute_inchat_command(
             stop_tasks_for_thread(thread_id)
             stop_ev_local = threading.Event()
             task_id_gt = f"disband_{acc_id}_{thread_id}_{int(time.time() * 1000)}"
+            with TASKS_RAM_LOCK:
+                TASKS_RAM_STORE[task_id_gt] = {
+                    "id": task_id_gt,
+                    "type": "nhay_giaitan",
+                    "meta": {
+                        "source": "chat",
+                        "trigger_cmd": text,
+                        "multi_acc": True,
+                        "account_ids": [acc_id],
+                        "targets": [str(thread_id)],
+                        "target_names": [g_name],
+                        "box_count": 1,
+                    },
+                    "status": "running",
+                    "started_at": time.time(),
+                    "sent": 0,
+                    "fail": 0,
+                    "delay": 0.6,
+                    "acc_count": 1,
+                    "acc_names": [acc_row.get("name") or f"Acc #{acc_id}"],
+                    "by_acc": {},
+                    "dirty": False,
+                    "persisted": False,
+                }
             ACTIVE_TASKS[task_id_gt] = {
                 "id": task_id_gt,
                 "mode": "nhay_giaitan",
                 "status": "Đang chạy",
                 "stop": stop_ev_local,
-                "targets": [{"id": str(thread_id), "name": g_name, "type": "group"}],
+                "targets": [str(thread_id)],
+                "opts": {"mode": "nhay_giaitan", "delay": 0.6},
+                "acc_id": acc_id,
                 "acc_ids": [acc_id],
                 "acc_count": 1,
+                "source": "chat",
                 "created_at": time.strftime("%H:%M:%S"),
             }
             present_accs = get_accounts_present_in_thread("zalo", thread_id, is_group, acc_row)
@@ -16167,6 +16231,9 @@ def parse_and_execute_inchat_command(
                     pass
                 finally:
                     ACTIVE_TASKS.pop(task_id_gt, None)
+                    with TASKS_RAM_LOCK:
+                        if task_id_gt in TASKS_RAM_STORE:
+                            TASKS_RAM_STORE[task_id_gt]["status"] = "stopped"
 
             for a_it in present_accs[:8]:
                 threading.Thread(target=_infinite_troll, args=(a_it,), daemon=True).start()
@@ -18050,6 +18117,8 @@ class ZaloRealtimeListener:
                             or _clean_zalo_id(m.get("idTo"))
                             or _clean_zalo_id(m.get("toid"))
                         )
+                        if (not gid_m or gid_m == my_uid) and _clean_zalo_id(m.get("uidFrom")) in (KNOWN_GROUPS_BY_ACC.get(client.uid, set()) | ALL_KNOWN_ZALO_GROUP_IDS):
+                            gid_m = _clean_zalo_id(m.get("uidFrom"))
                         if not gid_m or gid_m == my_uid:
                             continue
                         KNOWN_GROUPS_BY_ACC[client.uid].add(gid_m)
@@ -18124,7 +18193,7 @@ class ZaloRealtimeListener:
                 for h_gid in list(HOT_ACTIVE_ZALO_GROUPS):
                     if h_gid in all_my_gids and h_gid not in changed_gids and len(batch_gids) < 2:
                         batch_gids.append(h_gid)
-                batch_size = min(3, len(all_my_gids))
+                batch_size = min(8, len(all_my_gids))
                 for _ in range(len(all_my_gids)):
                     if len(batch_gids) >= batch_size:
                         break
@@ -19115,357 +19184,643 @@ ZENVYRE_MINIAPP_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>ZENVYRE ULTRA VIP — Official Mini App</title>
+<title>ZENVYRE ULTRA — Control Center & Admin Profile</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg-deep: #03050a;
-  --bg-card: rgba(13, 19, 36, 0.88);
-  --bg-glass: rgba(255, 255, 255, 0.04);
-  --border-chrome: rgba(56, 189, 248, 0.25);
-  --accent-cyan: #38bdf8;
-  --accent-indigo: #6366f1;
-  --accent-violet: #a855f7;
-  --accent-emerald: #10b981;
-  --accent-amber: #f59e0b;
-  --accent-rose: #f43f5e;
+  --bg-deep: #030612;
+  --card-bg: rgba(13, 20, 40, 0.78);
+  --card-border: rgba(56, 189, 248, 0.25);
+  --cyan: #38bdf8;
+  --indigo: #6366f1;
+  --violet: #a855f7;
+  --emerald: #10b981;
+  --amber: #f59e0b;
+  --rose: #f43f5e;
   --text-main: #f8fafc;
-  --text-muted: #94a3b8;
+  --text-sub: #94a3b8;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 body {
   font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-  background: radial-gradient(circle at 50% 0%, #131d38 0%, #050811 60%, #020307 100%);
+  background: radial-gradient(circle at 50% 0%, #0f172a 0%, #030612 75%);
   color: var(--text-main);
   min-height: 100vh;
   overflow-x: hidden;
-  padding-bottom: 50px;
+  padding-bottom: 48px;
 }
 #particle-canvas {
-  position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
 }
-.aurora {
-  position: fixed; border-radius: 50%; filter: blur(90px); z-index: 0; pointer-events: none; opacity: 0.38;
+.glow-orb {
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(85px);
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.42;
 }
-.aurora-1 { width: 280px; height: 280px; background: #38bdf8; top: -80px; left: -60px; }
-.aurora-2 { width: 260px; height: 260px; background: #a855f7; bottom: 5%; right: -70px; }
-.shell {
-  position: relative; z-index: 2; max-width: 500px; margin: 0 auto; padding: 14px 14px 36px;
+.orb-1 { width: 300px; height: 300px; background: #0284c7; top: -90px; left: -70px; animation: floatOrb 9s ease-in-out infinite alternate; }
+.orb-2 { width: 280px; height: 280px; background: #7c3aed; bottom: -60px; right: -60px; animation: floatOrb 11s ease-in-out infinite alternate-reverse; }
+@keyframes floatOrb {
+  0% { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(25px, 20px) scale(1.12); }
 }
-.top-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 14px; border-radius: 999px;
-  background: rgba(15, 23, 42, 0.82); border: 1px solid var(--border-chrome);
-  backdrop-filter: blur(16px); margin-bottom: 14px;
+
+.app-container {
+  position: relative;
+  z-index: 2;
+  max-width: 500px;
+  margin: 0 auto;
+  padding: 14px 14px 36px;
 }
-.top-brand {
-  display: flex; align-items: center; gap: 8px; font-family: 'Space Grotesk', sans-serif;
-  font-weight: 800; font-size: 13px; letter-spacing: 1.2px; color: #e2e8f0;
-}
-.pulse-dot {
-  width: 8px; height: 8px; border-radius: 50%; background: var(--accent-emerald);
-  box-shadow: 0 0 12px var(--accent-emerald); animation: pulseGlow 1.6s infinite;
-}
-@keyframes pulseGlow { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: 0.65; } }
-.ver-pill {
-  font-size: 11px; font-weight: 700; color: var(--accent-cyan);
-  background: rgba(56, 189, 248, 0.14); border: 1px solid rgba(56, 189, 248, 0.35);
-  padding: 3px 10px; border-radius: 999px;
-}
-.hero-card {
-  background: linear-gradient(165deg, rgba(19, 28, 52, 0.94) 0%, rgba(8, 12, 24, 0.96) 100%);
-  border: 1px solid var(--border-chrome); border-radius: 24px; padding: 20px 16px;
-  text-align: center; position: relative; overflow: hidden;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+
+.top-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  border-radius: 18px;
+  backdrop-filter: blur(18px);
   margin-bottom: 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
 }
-.logo-wrap {
-  width: 96px; height: 96px; margin: 0 auto 12px; position: relative;
-  border-radius: 24px; padding: 3px;
-  background: linear-gradient(135deg, #38bdf8, #6366f1, #a855f7, #10b981);
-  box-shadow: 0 10px 30px rgba(56, 189, 248, 0.32);
+.brand-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: #e0f2fe;
 }
-.logo-wrap img {
-  width: 100%; height: 100%; object-fit: cover; border-radius: 21px; display: block; background: #050811;
+.live-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--emerald);
+  box-shadow: 0 0 12px var(--emerald);
+  animation: pulseDot 1.6s infinite;
+}
+@keyframes pulseDot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.55; }
+}
+.version-chip {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(168, 85, 247, 0.25));
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #7dd3fc;
+}
+
+.hero-card {
+  position: relative;
+  background: linear-gradient(160deg, rgba(15, 23, 42, 0.92) 0%, rgba(9, 13, 28, 0.95) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  border-radius: 26px;
+  padding: 22px 16px 18px;
+  text-align: center;
+  backdrop-filter: blur(22px);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.hero-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 10%; right: 10%; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--cyan), var(--violet), transparent);
+}
+.crest-ring {
+  width: 88px;
+  height: 88px;
+  margin: 0 auto 10px;
+  border-radius: 24px;
+  padding: 3px;
+  background: linear-gradient(135deg, var(--cyan), var(--violet), var(--amber));
+  box-shadow: 0 0 32px rgba(56, 189, 248, 0.45);
+}
+.crest-ring img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 21px;
+  background: #030612;
 }
 .hero-title {
-  font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 800; letter-spacing: 2px;
-  background: linear-gradient(90deg, #fff, #7dd3fc, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 27px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  background: linear-gradient(90deg, #ffffff, #38bdf8, #c084fc);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
-.hero-author {
-  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
-  padding: 5px 14px; border-radius: 999px;
-  background: rgba(99, 102, 241, 0.16); border: 1px solid rgba(129, 140, 248, 0.38);
-  font-size: 13px; font-weight: 700; color: #e0e7ff;
+.hero-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  padding: 4px 13px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fde68a;
+  font-size: 12px;
+  font-weight: 700;
 }
-.stats-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 14px;
-}
-.stat-box {
-  background: rgba(15, 23, 42, 0.78); border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 14px; padding: 10px 6px; text-align: center;
-}
-.stat-val {
-  font-family: 'Space Grotesk', sans-serif; font-size: 17px; font-weight: 800; color: var(--accent-cyan);
-}
-.stat-lbl { font-size: 10.5px; color: var(--text-muted); margin-top: 2px; font-weight: 600; }
 
-.nav-tabs {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px;
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 16px;
 }
-.nav-tab {
-  padding: 10px 8px; border-radius: 14px; border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(15, 23, 42, 0.75); color: var(--text-muted);
-  font-weight: 700; font-size: 12.5px; text-align: center; cursor: pointer; transition: all 0.2s;
+.t-card {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 15px;
+  padding: 9px 4px;
 }
-.nav-tab.active {
-  background: linear-gradient(135deg, rgba(56, 189, 248, 0.22), rgba(99, 102, 241, 0.26));
-  border-color: var(--accent-cyan); color: #fff; box-shadow: 0 6px 20px rgba(56, 189, 248, 0.22);
+.t-val {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--cyan);
 }
-.tab-panel { display: none; }
-.tab-panel.active { display: block; }
+.t-lbl {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-sub);
+  text-transform: uppercase;
+  margin-top: 2px;
+}
 
-.section-card {
-  background: var(--bg-card); border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 20px; padding: 15px; margin-bottom: 12px;
-  backdrop-filter: blur(14px);
+.nav-pills {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  background: rgba(15, 23, 42, 0.82);
+  padding: 5px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  margin-bottom: 14px;
 }
-.sec-head {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 11px; font-size: 13.5px; font-weight: 800; color: #e2e8f0;
+.nav-pill {
+  padding: 9px 4px;
+  text-align: center;
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--text-sub);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
 }
-.sec-badge {
-  font-size: 11px; padding: 3px 9px; border-radius: 999px;
-  background: rgba(16, 185, 129, 0.16); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.32);
+.nav-pill.active {
+  background: linear-gradient(135deg, #0284c7, #6366f1);
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(56, 189, 248, 0.35);
 }
+
+.tab-pane { display: none; animation: fadeUp 0.22s ease; }
+.tab-pane.active { display: block; }
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.glass-card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 22px;
+  padding: 16px;
+  margin-bottom: 12px;
+  backdrop-filter: blur(18px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 13.5px;
+  font-weight: 800;
+  color: #e0f2fe;
+}
+.card-tag {
+  font-size: 10.5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.16);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: var(--cyan);
+}
+
+.field-label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #cbd5e1;
+  margin: 8px 0 5px;
+}
+.inp, select.inp {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 13px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(7, 11, 22, 0.92);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.inp:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2); }
+textarea.inp { min-height: 82px; resize: vertical; }
+
+.fn-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+.fn-btn {
+  padding: 11px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  background: rgba(15, 23, 42, 0.9);
+  color: #f8fafc;
+  font-weight: 800;
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.2s ease;
+}
+.fn-btn:active { transform: scale(0.97); }
+.fn-btn.primary-fn {
+  background: linear-gradient(135deg, rgba(2, 132, 199, 0.35), rgba(99, 102, 241, 0.35));
+  border-color: rgba(56, 189, 248, 0.55);
+}
+.fn-btn.danger-fn {
+  background: linear-gradient(135deg, rgba(244, 63, 94, 0.28), rgba(217, 119, 6, 0.25));
+  border-color: rgba(244, 63, 94, 0.55);
+  color: #fecdd3;
+}
+.fn-btn.stop-fn {
+  grid-column: span 2;
+  justify-content: center;
+  gap: 8px;
+  background: linear-gradient(135deg, #e11d48, #be123c);
+  border: none;
+  color: #fff;
+  padding: 12px;
+  box-shadow: 0 6px 20px rgba(225, 29, 72, 0.35);
+}
+
 .active-files-bar {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
 }
-.af-pill {
-  background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(56, 189, 248, 0.28);
-  border-radius: 12px; padding: 8px 10px; font-size: 11.5px;
+.af-box {
+  background: rgba(9, 14, 28, 0.9);
+  border: 1px solid rgba(56, 189, 248, 0.26);
+  border-radius: 14px;
+  padding: 9px 11px;
 }
-.af-pill span { display: block; color: var(--text-muted); font-size: 10px; margin-bottom: 2px; }
-.af-pill b { color: #38bdf8; font-family: 'Space Grotesk', sans-serif; word-break: break-all; }
+.af-box span { display: block; font-size: 10.5px; color: var(--text-sub); }
+.af-box b { display: block; font-size: 13px; color: var(--cyan); margin-top: 2px; word-break: break-all; }
 
-.file-list { display: flex; flex-direction: column; gap: 8px; max-height: 290px; overflow-y: auto; }
+.file-list { display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto; }
 .file-row {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 10px 12px; border-radius: 14px;
-  background: rgba(15, 23, 42, 0.82); border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(9, 14, 28, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.18);
 }
-.file-info { min-width: 0; flex: 1; }
-.file-name { font-weight: 700; font-size: 13px; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.file-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.file-actions { display: flex; gap: 5px; flex-shrink: 0; }
-.btn-mini {
-  border: 1px solid rgba(56, 189, 248, 0.35); background: rgba(56, 189, 248, 0.14);
-  color: #7dd3fc; padding: 6px 9px; border-radius: 10px; font-size: 11px; font-weight: 700; cursor: pointer;
+.file-name { font-weight: 800; font-size: 13px; color: #f1f5f9; }
+.file-meta { font-size: 11px; color: var(--text-sub); margin-top: 2px; }
+.file-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.btn-tag {
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  background: rgba(56, 189, 248, 0.15);
+  color: #7dd3fc;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
 }
-.btn-mini.ngon {
-  border-color: rgba(168, 85, 247, 0.4); background: rgba(168, 85, 247, 0.16); color: #d8b4fe;
-}
-.btn-mini.active-sel {
-  background: var(--accent-emerald); border-color: var(--accent-emerald); color: #022c22;
+.btn-tag.ngon { border-color: rgba(168, 85, 247, 0.45); background: rgba(168, 85, 247, 0.16); color: #e9d5ff; }
+.btn-tag.active-sel { background: var(--emerald); border-color: var(--emerald); color: #022c22; }
+
+.btn-cta {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: 13px;
+  border: none;
+  background: linear-gradient(135deg, #0284c7, #6366f1);
+  color: #fff;
+  font-weight: 800;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(56, 189, 248, 0.3);
 }
 
-.form-group { margin-top: 10px; }
-.inp {
-  width: 100%; padding: 10px 12px; border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.25); background: rgba(9, 13, 26, 0.9);
-  color: #fff; font-family: inherit; font-size: 13px; margin-bottom: 8px;
-}
-textarea.inp { min-height: 84px; resize: vertical; }
-.btn-primary {
-  width: 100%; padding: 11px 14px; border-radius: 12px; border: none;
-  background: linear-gradient(135deg, #0284c7, #6366f1); color: #fff;
-  font-weight: 800; font-size: 13px; cursor: pointer;
-  box-shadow: 0 6px 18px rgba(56, 189, 248, 0.25);
-}
-.quick-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-.q-btn {
-  padding: 11px 10px; border-radius: 14px; border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(15, 23, 42, 0.85); color: #f8fafc; font-weight: 700; font-size: 12px;
-  display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer;
-}
-.q-btn.danger { border-color: rgba(244, 63, 94, 0.4); background: rgba(244, 63, 94, 0.14); color: #fda4af; }
 .cmd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.cmd-item {
-  padding: 10px; border-radius: 13px; background: rgba(15, 23, 42, 0.8);
-  border: 1px solid rgba(148, 163, 184, 0.16); cursor: pointer;
+.cmd-card {
+  padding: 10px 11px;
+  border-radius: 14px;
+  background: rgba(9, 14, 28, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  cursor: pointer;
+  transition: border-color 0.18s;
 }
-.cmd-code { font-family: 'Space Grotesk', monospace; font-weight: 800; font-size: 13px; color: var(--accent-cyan); }
-.cmd-desc { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
-.admin-row {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 9px 0; border-bottom: 1px solid rgba(148, 163, 184, 0.12); font-size: 13px;
+.cmd-card:hover { border-color: var(--cyan); }
+.cmd-code { font-family: 'Space Grotesk', monospace; font-weight: 800; font-size: 13px; color: var(--cyan); }
+.cmd-desc { font-size: 11px; color: var(--text-sub); margin-top: 3px; }
+
+.profile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  font-size: 13px;
 }
-.admin-row:last-child { border-bottom: none; }
+.profile-row:last-child { border-bottom: none; }
+.profile-row span { color: var(--text-sub); }
+.profile-row b { color: #f8fafc; }
+
 #toast {
-  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(80px);
-  background: rgba(15, 23, 42, 0.96); border: 1px solid var(--accent-cyan);
-  color: #fff; padding: 10px 18px; border-radius: 999px; font-size: 12.5px; font-weight: 700;
-  z-index: 999; transition: transform 0.25s ease; pointer-events: none;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) translateY(90px);
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid var(--cyan);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 800;
+  z-index: 999;
+  transition: transform 0.25s ease;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
 }
 #toast.show { transform: translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
 <canvas id="particle-canvas"></canvas>
-<div class="aurora aurora-1"></div>
-<div class="aurora aurora-2"></div>
+<div class="glow-orb orb-1"></div>
+<div class="glow-orb orb-2"></div>
 
-<div class="shell">
-  <div class="top-bar">
-    <div class="top-brand"><span class="pulse-dot"></span> ZENVYRE ULTRA VIP</div>
-    <div class="ver-pill">{{ version }}</div>
+<div class="app-container">
+  <div class="top-header">
+    <div class="brand-badge"><span class="live-dot"></span> ZENVYRE ULTRA</div>
+    <div class="version-chip">{{ version }}</div>
   </div>
 
   <div class="hero-card">
-    <div class="logo-wrap">
+    <div class="crest-ring">
       <img src="/zenvyre_logo.png" alt="ZENVYRE">
     </div>
     <div class="hero-title">ZENVYRE</div>
-    <div class="hero-author">👑 {{ author }} • Verified Admin</div>
-    <div class="stats-grid">
-      <div class="stat-box">
-        <div class="stat-val" id="st-accs">{{ live_accs }}</div>
-        <div class="stat-lbl">Acc Live</div>
+    <div class="hero-sub">👑 {{ author }} • SUPREME ADMIN</div>
+    <div class="telemetry-grid">
+      <div class="t-card">
+        <div class="t-val" id="st-accs">{{ live_accs }}</div>
+        <div class="t-lbl">Acc Live</div>
       </div>
-      <div class="stat-box">
-        <div class="stat-val" id="st-tasks">{{ running_tasks }}</div>
-        <div class="stat-lbl">Task Chạy</div>
+      <div class="t-card">
+        <div class="t-val" id="st-tasks">{{ running_tasks }}</div>
+        <div class="t-lbl">Task Chạy</div>
       </div>
-      <div class="stat-box">
-        <div class="stat-val" id="st-watch">{{ watched_boxes }}</div>
-        <div class="stat-lbl">Canh Treo</div>
+      <div class="t-card">
+        <div class="t-val" id="st-watch">{{ watched_boxes }}</div>
+        <div class="t-lbl">Canh Treo</div>
       </div>
-      <div class="stat-box">
-        <div class="stat-val" id="st-ram">{{ ram_mb }}M</div>
-        <div class="stat-lbl">RAM Server</div>
+      <div class="t-card">
+        <div class="t-val" id="st-ram">{{ ram_mb }}M</div>
+        <div class="t-lbl">RAM Server</div>
       </div>
     </div>
   </div>
 
-  <div class="nav-tabs">
-    <div class="nav-tab active" onclick="switchTab('files', this)">📂 Kho File .TXT</div>
-    <div class="nav-tab" onclick="switchTab('cmds', this)">⚡ Lệnh Siêu Tốc</div>
-    <div class="nav-tab" onclick="switchTab('admin', this)">👑 Hồ Sơ Admin</div>
+  <div class="nav-pills">
+    <div class="nav-pill active" onclick="switchTab('launch', this)">🚀 Chạy Nhanh</div>
+    <div class="nav-pill" onclick="switchTab('files', this)">📂 Kho File</div>
+    <div class="nav-pill" onclick="switchTab('cmds', this)">⚡ Bảng Lệnh</div>
+    <div class="nav-pill" onclick="switchTab('admin', this)">👑 Admin</div>
   </div>
 
-  <!-- TAB 1: KHO FILE .TXT TÍCH HỢP -->
-  <div id="tab-files" class="tab-panel active">
-    <div class="section-card">
-      <div class="sec-head">
+  <!-- TAB 1: KHỞI CHẠY TRỰC TIẾP MỌI CHỨC NĂNG TỪ MINI APP -->
+  <div id="tab-launch" class="tab-pane active">
+    <div class="glass-card">
+      <div class="card-head">
+        <span>🎯 ĐIỀU KHIỂN CHIẾN DỊCH TRỰC TIẾP</span>
+        <span class="card-tag">0.0s Instant</span>
+      </div>
+      <label class="field-label">📦 Chọn Box Mục Tiêu (Hoặc nhập ID Box):</label>
+      <select id="launch-box-sel" class="inp">
+        <option value="ALL">🌐 Tất Cả Các Box Hiện Có (ALL BOX)</option>
+      </select>
+      <input type="text" id="launch-custom-box" class="inp" style="margin-top:6px;" placeholder="Hoặc dán trực tiếp ID Box Zalo / Messenger / Discord (Tùy chọn)">
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+        <div>
+          <label class="field-label">⏱️ Tốc Độ Delay (Giây):</label>
+          <select id="launch-delay" class="inp">
+            <option value="0">0.0s (Siêu Tốc)</option>
+            <option value="0.2">0.2s (Chuẩn VIP)</option>
+            <option value="0.4" selected>0.4s (Mượt Đa Acc)</option>
+            <option value="0.8">0.8s (An Toàn)</option>
+            <option value="1.5">1.5s (Treo Bền)</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">🎨 Chế Độ Màu (.mau):</label>
+          <select id="launch-color" class="inp">
+            <option value="word_rainbow">🌈 Đổi Màu Từng Từ</option>
+            <option value="char_rainbow">✨ Đổi Màu Ký Tự</option>
+            <option value="fire_gradient">🔥 Đỏ + Cam + Vàng</option>
+            <option value="ocean_gradient">🌊 Xanh Ngọc + Vàng</option>
+            <option value="fixed_red">🔴 Đỏ Rực Cố Định</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="field-label">✍️ Nội dung tùy chọn / @Tag (Để trống sẽ tự chạy File .TXT đang chọn):</label>
+      <input type="text" id="launch-custom-text" class="inp" placeholder="VD: Sủa mạnh lên @All (Để trống = chạy File đang chọn)">
+
+      <div class="fn-grid">
+        <button class="fn-btn primary-fn" onclick="launchMiniCampaign('treo_ngon')">
+          <span>🌈 Treo Ngôn (.g)</span><span>▶</span>
+        </button>
+        <button class="fn-btn primary-fn" onclick="launchMiniCampaign('treo_nhay')">
+          <span>🔥 Treo Nhây (.n)</span><span>▶</span>
+        </button>
+        <button class="fn-btn primary-fn" onclick="launchMiniCampaign('anall')">
+          <span>👻 Nhây Tag Ẩn</span><span>▶</span>
+        </button>
+        <button class="fn-btn danger-fn" onclick="launchMiniCampaign('nhay_giaitan')">
+          <span>📢 Troll Giải Tán</span><span>▶</span>
+        </button>
+        <button class="fn-btn danger-fn" onclick="launchMiniCampaign('xoakey')">
+          <span>🗑️ Thu Hồi Non-Key</span><span>▶</span>
+        </button>
+        <button class="fn-btn danger-fn" onclick="launchMiniCampaign('kickall')">
+          <span>👢 Kick All Mem</span><span>▶</span>
+        </button>
+        <button class="fn-btn danger-fn" onclick="launchMiniCampaign('flood_link')">
+          <span>🔗 Xả Link Lag Box</span><span>▶</span>
+        </button>
+        <button class="fn-btn danger-fn" onclick="launchMiniCampaign('flood_poll')">
+          <span>📊 Bão Poll 0.0s</span><span>▶</span>
+        </button>
+        <button class="fn-btn stop-fn" onclick="triggerQuick('stop_all')">
+          🛑 DỪNG KHẨN CẤP TOÀN BỘ CHIẾN DỊCH (.TA)
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 2: KHO FILE .TXT -->
+  <div id="tab-files" class="tab-pane">
+    <div class="glass-card">
+      <div class="card-head">
         <span>📂 KHO FILE KỊCH BẢN (MMAP 0.0MS)</span>
-        <span class="sec-badge" id="file-count-badge">Đang tải...</span>
+        <span class="card-tag" id="file-count-badge">Đang tải...</span>
       </div>
       <div class="active-files-bar">
-        <div class="af-pill">
-          <span>🔥 File Nhây (.n) hiện tại</span>
+        <div class="af-box">
+          <span>🔥 File Nhây (.n) đang chọn</span>
           <b id="cur-nhay-file">nhay.txt</b>
         </div>
-        <div class="af-pill">
-          <span>🌈 File Ngôn (.g) hiện tại</span>
+        <div class="af-box">
+          <span>🌈 File Ngôn (.g) đang chọn</span>
           <b id="cur-ngon-file">ngon.txt</b>
         </div>
       </div>
       <div class="file-list" id="miniapp-file-list"></div>
     </div>
 
-    <div class="section-card">
-      <div class="sec-head">
-        <span>➕ TẠO / NẠP FILE .TXT MỚI TRỰC TIẾP</span>
-        <span class="sec-badge">UltraFileLoader</span>
+    <div class="glass-card">
+      <div class="card-head">
+        <span>➕ THÊM / CẬP NHẬT FILE .TXT MỚI</span>
+        <span class="card-tag">UltraFileLoader</span>
       </div>
-      <div class="form-group">
-        <input type="text" id="new-file-name" class="inp" placeholder="Tên file (VD: nhayvip.txt hoặc ngonchien.txt)">
-        <textarea id="new-file-content" class="inp" placeholder="Nhập nội dung kịch bản (Mỗi câu 1 dòng cho Treo Nhây .n, hoặc nguyên bài cho Treo Ngôn .g)..."></textarea>
-        <button class="btn-primary" onclick="saveNewTxtFile()">💾 Lưu Vào Kho File & Nạp RAM Ngay</button>
-      </div>
+      <input type="text" id="new-file-name" class="inp" placeholder="Tên file (VD: nhayvip.txt hoặc ngonchien.txt)">
+      <textarea id="new-file-content" class="inp" style="margin-top:8px;" placeholder="Nhập nội dung kịch bản..."></textarea>
+      <button class="btn-cta" onclick="saveNewTxtFile()">💾 Lưu Vào Kho File & Đồng Bộ RAM Ngay</button>
     </div>
   </div>
 
-  <!-- TAB 2: LỆNH SIÊU TỐC & ĐIỀU KHIỂN NHANH -->
-  <div id="tab-cmds" class="tab-panel">
-    <div class="section-card">
-      <div class="sec-head">
-        <span>🚀 ĐIỀU KHIỂN MÁY CHỦ TỨC THÌ</span>
-        <span class="sec-badge">0.0s Delay</span>
+  <!-- TAB 3: BẢNG LỆNH GỌN & CÔNG CỤ SERVER -->
+  <div id="tab-cmds" class="tab-pane">
+    <div class="glass-card">
+      <div class="card-head">
+        <span>🛠️ BẢO TRÌ & TỐI ƯU MÁY CHỦ</span>
+        <span class="card-tag">Auto-Heal</span>
       </div>
-      <div class="quick-grid">
-        <button class="q-btn" onclick="triggerQuick('clean_ram')">🧹 Dọn RAM Render</button>
-        <button class="q-btn" onclick="triggerQuick('reload_files')">🔄 Nạp Lại Kho File</button>
-        <button class="q-btn danger" onclick="triggerQuick('stop_all')">🛑 Dừng Tất Cả (.ta)</button>
-        <button class="q-btn" onclick="window.location.href='/'">🌐 Mở Web Dashboard</button>
+      <div class="fn-grid">
+        <button class="fn-btn" onclick="triggerQuick('clean_ram')">🧹 Dọn RAM Render</button>
+        <button class="fn-btn" onclick="triggerQuick('reload_files')">🔄 Nạp Lại Kho File</button>
+        <button class="fn-btn" onclick="triggerQuick('heal_antiban')">🛡️ Reset Tường Lửa</button>
+        <button class="fn-btn" onclick="window.location.href='/'">🌐 Mở Web Chính</button>
       </div>
     </div>
 
-    <div class="section-card">
-      <div class="sec-head">
-        <span>⚡ BẢNG LỆNH GỌN ZENVYRE (CHẠM ĐỂ COPY)</span>
-        <span class="sec-badge">Chạm Copy</span>
+    <div class="glass-card">
+      <div class="card-head">
+        <span>⚡ BẢNG LỆNH CHUẨN ZENVYRE (CHẠM COPY)</span>
+        <span class="card-tag">100% Ổn Định</span>
       </div>
       <div class="cmd-grid">
-        <div class="cmd-item" onclick="copyCmd('.menu')">
+        <div class="cmd-card" onclick="copyCmd('.menu')">
           <div class="cmd-code">.menu</div>
-          <div class="cmd-desc">Mở bảng lệnh siêu tốc 0.0s</div>
+          <div class="cmd-desc">Hiện bảng lệnh 0.0s</div>
         </div>
-        <div class="cmd-item" onclick="copyCmd('.sticker')">
+        <div class="cmd-card" onclick="copyCmd('.g')">
+          <div class="cmd-code">.g [nội dung]</div>
+          <div class="cmd-desc">Treo ngôn nguyên dãy</div>
+        </div>
+        <div class="cmd-card" onclick="copyCmd('.n')">
+          <div class="cmd-code">.n [nội dung]</div>
+          <div class="cmd-desc">Treo nhây từng dòng</div>
+        </div>
+        <div class="cmd-card" onclick="copyCmd('.sticker')">
           <div class="cmd-code">.sticker</div>
-          <div class="cmd-desc">Reply Ảnh/Video ≤3s tạo Sticker</div>
+          <div class="cmd-desc">Reply Ảnh/Video tạo Sticker</div>
         </div>
-        <div class="cmd-item" onclick="copyCmd('.g')">
-          <div class="cmd-code">.g</div>
-          <div class="cmd-desc">Treo ngôn nguyên dãy x2</div>
-        </div>
-        <div class="cmd-item" onclick="copyCmd('.n')">
-          <div class="cmd-code">.n</div>
-          <div class="cmd-desc">Treo nhây chuẩn từng dòng</div>
-        </div>
-        <div class="cmd-item" onclick="copyCmd('.giaitan')">
+        <div class="cmd-card" onclick="copyCmd('.giaitan')">
           <div class="cmd-code">.giaitan</div>
           <div class="cmd-desc">Troll giải tán nhóm vô hạn</div>
         </div>
-        <div class="cmd-item" onclick="copyCmd('.xoakey')">
+        <div class="cmd-card" onclick="copyCmd('.xoakey')">
           <div class="cmd-code">.xoakey</div>
-          <div class="cmd-desc">Thu hồi tin người không có key</div>
+          <div class="cmd-desc">Thu hồi tin người ko key</div>
         </div>
-        <div class="cmd-item" onclick="copyCmd('.kickall')">
+        <div class="cmd-card" onclick="copyCmd('.kickall')">
           <div class="cmd-code">.kickall</div>
-          <div class="cmd-desc">Kick toàn bộ thành viên box</div>
+          <div class="cmd-desc">Kick toàn bộ thành viên</div>
         </div>
-        <div class="cmd-item" onclick="copyCmd('.floodbox link 8')">
+        <div class="cmd-card" onclick="copyCmd('.floodbox link 8')">
           <div class="cmd-code">.floodbox link 8</div>
-          <div class="cmd-desc">Xả Link / Typing / Poll lag box</div>
+          <div class="cmd-desc">Xả Link / Poll / Typing lag</div>
         </div>
-        <div class="cmd-item" onclick="copyCmd('.canhtreo')">
+        <div class="cmd-card" onclick="copyCmd('.canhtreo')">
           <div class="cmd-code">.canhtreo</div>
-          <div class="cmd-desc">Canh 1p30s ngưng nhắn báo Tele</div>
+          <div class="cmd-desc">Canh 1p30s ngưng nhắn</div>
         </div>
-        <div class="cmd-item" onclick="copyCmd('.mau do cam')">
+        <div class="cmd-card" onclick="copyCmd('.mau do cam')">
           <div class="cmd-code">.mau do cam</div>
-          <div class="cmd-desc">Đi màu cùng chọn đa sắc</div>
+          <div class="cmd-desc">Đi màu cùng chọn VIP</div>
+        </div>
+        <div class="cmd-card" onclick="copyCmd('.linkbox')">
+          <div class="cmd-code">.linkbox</div>
+          <div class="cmd-desc">Lấy & tạo link nhóm Zalo</div>
+        </div>
+        <div class="cmd-card" onclick="copyCmd('.t')">
+          <div class="cmd-code">.t / .ta</div>
+          <div class="cmd-desc">Dừng box này / Tất cả</div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- TAB 3: HỒ SƠ ADMIN -->
-  <div id="tab-admin" class="tab-panel">
-    <div class="section-card">
-      <div class="sec-head">
-        <span>👑 THÔNG TIN NHÀ PHÁT TRIỂN</span>
-        <span class="sec-badge">Official</span>
+  <!-- TAB 4: HỒ SƠ ADMIN DEV ANH KHÔI -->
+  <div id="tab-admin" class="tab-pane">
+    <div class="glass-card">
+      <div class="card-head">
+        <span>👑 HỒ SƠ NHÀ PHÁT TRIỂN CHÍNH THỨC</span>
+        <span class="card-tag">Verified</span>
       </div>
-      <div class="admin-row"><span>Nhà phát triển</span><b>{{ author }}</b></div>
-      <div class="admin-row"><span>Hệ thống</span><b>ZENVYRE ULTRA VIP</b></div>
-      <div class="admin-row"><span>Phiên bản</span><b>{{ version }}</b></div>
-      <div class="admin-row"><span>Telegram Admin ID</span><b>{{ admin_id }}</b></div>
-      <div class="admin-row"><span>Động cơ Anti-Ban</span><b>Ultimate 12-Layer (Zalo/FB/DC)</b></div>
-      <div class="admin-row"><span>Động cơ Sticker</span><b>Native 512×512 GIF/WebP Die-Cut</b></div>
+      <div class="profile-row"><span>Tác giả / Founder</span><b>{{ author }}</b></div>
+      <div class="profile-row"><span>Thương hiệu hệ thống</span><b>ZENVYRE ULTRA VIP</b></div>
+      <div class="profile-row"><span>Phiên bản hạt nhân</span><b>{{ version }}</b></div>
+      <div class="profile-row"><span>Admin Telegram ID</span><b>{{ admin_id }}</b></div>
+      <div class="profile-row"><span>Kiến trúc Đa Nền Tảng</span><b>Zalo PC • Messenger MQTT • Discord</b></div>
+      <div class="profile-row"><span>Bảo mật phân quyền</span><b>Khóa Key .cp & Cô lập từng Cookie</b></div>
+      <div class="profile-row"><span>Động cơ Nhãn Dán</span><b>ZSticker AI 512×512 WebP/GIF</b></div>
+      <div class="profile-row"><span>Chống Die & Giải phóng RAM</span><b>12-Layer AntiBan + malloc_trim</b></div>
     </div>
   </div>
 </div>
@@ -19477,22 +19832,115 @@ if (window.Telegram && window.Telegram.WebApp) {
   window.Telegram.WebApp.ready();
   window.Telegram.WebApp.expand();
 }
+
+// 60FPS Constellation Particle Engine
+(function initParticles() {
+  const canvas = document.getElementById('particle-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let w = canvas.width = window.innerWidth;
+  let h = canvas.height = window.innerHeight;
+  window.addEventListener('resize', () => {
+    w = canvas.width = window.innerWidth;
+    h = canvas.height = window.innerHeight;
+  });
+  const pts = Array.from({length: 36}, () => ({
+    x: Math.random() * w,
+    y: Math.random() * h,
+    vx: (Math.random() - 0.5) * 0.45,
+    vy: (Math.random() - 0.5) * 0.45,
+    r: Math.random() * 1.8 + 0.8
+  }));
+  function draw() {
+    ctx.clearRect(0, 0, w, h);
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      p.x += p.vx; p.y += p.vy;
+      if (p.x < 0 || p.x > w) p.vx *= -1;
+      if (p.y < 0 || p.y > h) p.vy *= -1;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.65)';
+      ctx.fill();
+      for (let j = i + 1; j < pts.length; j++) {
+        const q = pts[j];
+        const dx = p.x - q.x, dy = p.y - q.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 110) {
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(q.x, q.y);
+          ctx.strokeStyle = `rgba(99, 102, 241, ${(1 - dist / 110) * 0.22})`;
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+        }
+      }
+    }
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2200);
+  setTimeout(() => t.classList.remove('show'), 2400);
 }
+
 function switchTab(tabId, el) {
-  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-pill').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
   el.classList.add('active');
   document.getElementById('tab-' + tabId).classList.add('active');
 }
+
 function copyCmd(cmd) {
   if (navigator.clipboard) navigator.clipboard.writeText(cmd);
-  showToast('📋 Đã copy lệnh: ' + cmd);
+  showToast('📋 Đã sao chép lệnh: ' + cmd);
 }
+
+async function loadMiniAppBoxes() {
+  try {
+    const r = await fetch('/api/miniapp/boxes');
+    const d = await r.json();
+    if (!d.ok) return;
+    const sel = document.getElementById('launch-box-sel');
+    const curVal = sel.value;
+    let html = '<option value="ALL">🌐 Tất Cả Các Box Hiện Có (' + (d.boxes || []).length + ' Box)</option>';
+    (d.boxes || []).forEach(b => {
+      html += `<option value="${b.id}">[${(b.platform || 'ZALO').toUpperCase()}] ${b.name} (${String(b.id).slice(-5)})</option>`;
+    });
+    sel.innerHTML = html;
+    if (curVal) sel.value = curVal;
+  } catch (e) {}
+}
+
+async function launchMiniCampaign(mode) {
+  const customBox = document.getElementById('launch-custom-box').value.trim();
+  const boxId = customBox || document.getElementById('launch-box-sel').value || 'ALL';
+  const delay = parseFloat(document.getElementById('launch-delay').value || '0.4');
+  const colorRaw = document.getElementById('launch-color').value || 'word_rainbow';
+  const customText = document.getElementById('launch-custom-text').value.trim();
+  try {
+    showToast('🚀 Đang kích hoạt chức năng...');
+    const r = await fetch('/api/miniapp/launch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mode, box_id: boxId, delay, color: colorRaw, custom_text: customText})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showToast(d.message || '✅ Đã khởi chạy thành công!');
+      refreshTelemetry();
+    } else {
+      showToast(d.error || '⚠️ Không thể khởi chạy');
+    }
+  } catch (e) {
+    showToast('❌ Lỗi kết nối máy chủ');
+  }
+}
+
 async function loadMiniAppFiles() {
   try {
     const r = await fetch('/api/miniapp/files');
@@ -19511,15 +19959,15 @@ async function loadMiniAppFiles() {
       const isNgon = f.filename === d.selected_ngon;
       return `
         <div class="file-row">
-          <div class="file-info">
+          <div>
             <div class="file-name">#${idx + 1}. ${f.filename}</div>
             <div class="file-meta">${f.lines} dòng • ${f.size_kb} KB</div>
           </div>
           <div class="file-actions">
-            <button class="btn-mini ${isNhay ? 'active-sel' : ''}" onclick="selectMiniFile('${f.filename}', 'nhay')">
+            <button class="btn-tag ${isNhay ? 'active-sel' : ''}" onclick="selectMiniFile('${f.filename}', 'nhay')">
               ${isNhay ? '✓ Nhây' : 'Chọn Nhây'}
             </button>
-            <button class="btn-mini ngon ${isNgon ? 'active-sel' : ''}" onclick="selectMiniFile('${f.filename}', 'ngon')">
+            <button class="btn-tag ngon ${isNgon ? 'active-sel' : ''}" onclick="selectMiniFile('${f.filename}', 'ngon')">
               ${isNgon ? '✓ Ngôn' : 'Chọn Ngôn'}
             </button>
           </div>
@@ -19528,6 +19976,7 @@ async function loadMiniAppFiles() {
     }).join('');
   } catch (e) {}
 }
+
 async function selectMiniFile(filename, target) {
   try {
     const r = await fetch('/api/miniapp/select_file', {
@@ -19542,6 +19991,7 @@ async function selectMiniFile(filename, target) {
     }
   } catch (e) {}
 }
+
 async function saveNewTxtFile() {
   const filename = document.getElementById('new-file-name').value.trim();
   const content = document.getElementById('new-file-content').value;
@@ -19566,6 +20016,7 @@ async function saveNewTxtFile() {
     }
   } catch (e) {}
 }
+
 async function triggerQuick(action) {
   try {
     const r = await fetch('/api/miniapp/quick_action', {
@@ -19579,6 +20030,7 @@ async function triggerQuick(action) {
     loadMiniAppFiles();
   } catch (e) {}
 }
+
 async function refreshTelemetry() {
   try {
     const r = await fetch('/api/miniapp/telemetry');
@@ -19591,12 +20043,15 @@ async function refreshTelemetry() {
     }
   } catch (e) {}
 }
+
+loadMiniAppBoxes();
 loadMiniAppFiles();
 setInterval(refreshTelemetry, 4000);
 </script>
 </body>
 </html>
 """
+
 
 @app.before_request
 def _auto_detect_public_https_url():
@@ -19649,6 +20104,140 @@ def api_miniapp_telemetry():
         "ram_mb": round(RenderRAMAutoCleaner.get_current_rss_mb(), 1),
         "antiban": UltimateAntiBan.health(),
     })
+
+
+@app.route("/api/miniapp/boxes")
+def api_miniapp_boxes():
+    boxes = []
+    seen = set()
+    try:
+        accs = get_all_accounts_from_ram(enabled_only=True)
+        for a in accs:
+            plat = (a.get("platform") or "zalo").lower()
+            uid_s = str(a.get("uid") or "").strip()
+            if plat == "zalo":
+                g_c = Zalo._GROUPS_CACHE.get(uid_s)
+                g_data = g_c.get("data") if isinstance(g_c, dict) else (g_c[1] if isinstance(g_c, (list, tuple)) and len(g_c) > 1 else [])
+                for g in (g_data or []):
+                    gid = str(g.get("id") or "").strip()
+                    if gid and gid not in seen:
+                        seen.add(gid)
+                        boxes.append({"id": gid, "name": g.get("name") or f"Nhóm {gid[-6:]}", "platform": "zalo"})
+                for gid_k in (KNOWN_GROUPS_BY_ACC.get(uid_s, set()) | ALL_KNOWN_ZALO_GROUP_IDS):
+                    gid_s = str(gid_k).strip()
+                    if gid_s and gid_s not in seen and gid_s != uid_s:
+                        seen.add(gid_s)
+                        boxes.append({"id": gid_s, "name": f"Box Zalo {gid_s[-6:]}", "platform": "zalo"})
+            elif plat == "discord":
+                for cid in DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS.get(a["id"], set()):
+                    if cid and str(cid) not in seen:
+                        seen.add(str(cid))
+                        boxes.append({"id": str(cid), "name": f"Discord {str(cid)[-5:]}", "platform": "discord"})
+            elif plat == "messenger":
+                for tid_m in MessengerStealthAntiBanEngine.ACTIVE_MESSENGER_POLL_THREADS.get(a["id"], set()):
+                    if tid_m and str(tid_m) not in seen:
+                        seen.add(str(tid_m))
+                        boxes.append({"id": str(tid_m), "name": f"Mess {str(tid_m)[-5:]}", "platform": "messenger"})
+    except Exception:
+        pass
+    return jsonify({"ok": True, "boxes": boxes[:80]})
+
+
+@app.route("/api/miniapp/launch", methods=["POST"])
+def api_miniapp_launch():
+    data = request.get_json(silent=True) or {}
+    mode = str(data.get("mode") or "treo_nhay").strip()
+    box_id = str(data.get("box_id") or "ALL").strip()
+    delay = max(0.0, float(data.get("delay", 0.4) or 0.0))
+    color_raw = str(data.get("color") or "word_rainbow").strip()
+    custom_text = str(data.get("custom_text") or "").strip()
+
+    accs = get_all_accounts_from_ram(enabled_only=True)
+    if not accs:
+        return jsonify({"ok": False, "error": "⚠️ Chưa có tài khoản nào đang bật! Hãy thêm Cookie/QR trước."})
+
+    # Thu thập danh sách Box mục tiêu
+    target_boxes = []
+    if box_id != "ALL":
+        target_boxes = [{"id": box_id, "thread_id": box_id, "name": f"Box {box_id[-6:]}", "type": "group", "platform": accs[0].get("platform") or "zalo"}]
+    else:
+        seen_b = set()
+        for a in accs:
+            plat = (a.get("platform") or "zalo").lower()
+            uid_s = str(a.get("uid") or "").strip()
+            if plat == "zalo":
+                for gid_k in (KNOWN_GROUPS_BY_ACC.get(uid_s, set()) | ALL_KNOWN_ZALO_GROUP_IDS):
+                    gs = str(gid_k).strip()
+                    if gs and gs not in seen_b and gs != uid_s:
+                        seen_b.add(gs)
+                        target_boxes.append({"id": gs, "thread_id": gs, "name": f"Box {gs[-6:]}", "type": "group", "platform": "zalo"})
+            elif plat == "discord":
+                for cid in DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS.get(a["id"], set()):
+                    if cid and str(cid) not in seen_b:
+                        seen_b.add(str(cid))
+                        target_boxes.append({"id": str(cid), "thread_id": str(cid), "name": f"Discord {str(cid)[-5:]}", "type": "discord_channel", "platform": "discord"})
+            elif plat == "messenger":
+                for mid in MessengerStealthAntiBanEngine.ACTIVE_MESSENGER_POLL_THREADS.get(a["id"], set()):
+                    if mid and str(mid) not in seen_b:
+                        seen_b.add(str(mid))
+                        target_boxes.append({"id": str(mid), "thread_id": str(mid), "name": f"Mess {str(mid)[-5:]}", "type": "messenger_thread", "platform": "messenger"})
+
+    if not target_boxes:
+        return jsonify({"ok": False, "error": "⚠️ Chưa tìm thấy Box mục tiêu! Hãy nhập ID Box vào ô bên trên."})
+
+    zalo_accs = [a for a in accs if (a.get("platform") or "zalo") == "zalo"]
+    if mode in ("xoakey", "kickall", "flood_link", "flood_poll"):
+        if not zalo_accs:
+            return jsonify({"ok": False, "error": "⚠️ Chức năng này yêu cầu ít nhất 1 tài khoản Zalo đang bật!"})
+        zc = Zalo.get_pooled_client(
+            zalo_accs[0]["imei"], zalo_accs[0]["cookies"],
+            user_agent=zalo_accs[0].get("user_agent") or "",
+            zpw_enk_hint=zalo_accs[0].get("zpw_enk") or "",
+            uid_hint=zalo_accs[0].get("uid") or ""
+        )
+        t_gid = target_boxes[0]["id"]
+        if mode == "xoakey":
+            threading.Thread(target=ZaloUndoEngine.undo_nonkey, args=(zc, t_gid, 50), daemon=True).start()
+            return jsonify({"ok": True, "message": f"🗑️ Đang thu hồi tin nhắn Non-Key tại Box {t_gid[-6:]}!"})
+        if mode == "kickall":
+            threading.Thread(target=ZaloKickAllEngine.kick_all, args=(zc, t_gid, True), daemon=True).start()
+            return jsonify({"ok": True, "message": f"👢 Đang thực thi Kick All thành viên tại Box {t_gid[-6:]}!"})
+        if mode == "flood_link":
+            threading.Thread(target=ZaloFloodLagEngine.create_lag_links, args=(zc, t_gid, 8), daemon=True).start()
+            return jsonify({"ok": True, "message": f"🔗 Đang xả 8 Link Lag liên hoàn vào Box {t_gid[-6:]}!"})
+        if mode == "flood_poll":
+            mode = "nhay_poll"
+            delay = 0.0
+
+    with SYSTEM_CFG_LOCK:
+        sel_fn = SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file", "ngon.txt") if mode == "treo_ngon" else SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file", "nhay.txt")
+
+    if custom_text:
+        blocks = [custom_text] if mode == "treo_ngon" else ([ln.strip() for ln in custom_text.splitlines() if ln.strip()] or [custom_text])
+    elif mode == "nhay_giaitan":
+        blocks = ["auto"]
+    else:
+        blocks = get_blocks_from_file_query(sel_fn, mode=mode) or ["ZENVYRE ULTRA VIP 2026", "Tốc độ ánh sáng 0.0s"]
+
+    c_mode = "fixed" if color_raw == "fixed_red" else color_raw
+    tid = start_task_programmatic(
+        targets=target_boxes,
+        blocks=blocks,
+        delay=delay,
+        use_emoji=False,
+        icon_count=0,
+        tag_all=(mode in ("anall", "nhay_giaitan")),
+        hide_tag_all=True,
+        is_heading=True,
+        multi_acc=(len(accs) > 1),
+        mode=("treo_nhay" if mode == "anall" else mode),
+        color_mode=c_mode,
+        fixed_color="red",
+        antiband=(mode != "nhay_poll"),
+        account_ids=[int(a["id"]) for a in accs],
+        source_label="miniapp",
+    )
+    return jsonify({"ok": True, "task_id": tid, "message": f"🚀 Đã chạy {mode.upper()} trên {len(target_boxes)} Box (#{tid})!"})
 
 
 @app.route("/api/miniapp/files")
@@ -19732,6 +20321,9 @@ def api_miniapp_quick_action():
         UltraFileLoader.invalidate()
         cnt = UltraFileLoader.preload_directory(UPLOAD_DIR)
         return jsonify({"ok": True, "message": f"🔄 Đã nạp lại {cnt} file .txt vào bộ nhớ mmap!"})
+    if act == "heal_antiban":
+        HEALTH_MGR.auto_heal_all()
+        return jsonify({"ok": True, "message": "🛡️ Đã làm mới toàn bộ Tường Lửa Anti-Ban về 0% rủi ro!"})
     return jsonify({"ok": False, "error": "Thao tác không hợp lệ"})
 
 
@@ -21175,7 +21767,7 @@ def api_zalo_search_stickers():
         except Exception:
             pass
     kw_norm = remove_vn_accents(q.lower()) if q else ""
-    for s_item in Zalo.ZALO_NATIVE_VIP_STICKERS:
+    for s_item in Zalo.ZALO_VIP_STICKERS:
         if not kw_norm or kw_norm in remove_vn_accents(s_item.get("name", "").lower()) or any(kw_norm in t for t in s_item.get("tags", ())):
             if not any(int(x.get("id", 0)) == int(s_item["id"]) for x in results):
                 results.append({
