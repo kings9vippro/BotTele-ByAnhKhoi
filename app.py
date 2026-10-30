@@ -4673,39 +4673,29 @@ class ZaloStickerMakerEngine:
             return None
 
         params_d = {}
-        for pk in ("params", "propertyExt", "extra", "attach", "content", "data", "raw", "msgInfo"):
-            raw_p = item.get(pk)
-            if isinstance(raw_p, dict):
-                params_d.update(raw_p)
-                for sub_k in ("params", "attach", "content", "data"):
-                    sub_v = raw_p.get(sub_k)
-                    if isinstance(sub_v, dict):
-                        params_d.update(sub_v)
-                    elif isinstance(sub_v, str) and sub_v.strip().startswith("{"):
-                        try:
-                            sub_dec = json.loads(sub_v.strip())
-                            if isinstance(sub_dec, dict):
-                                params_d.update(sub_dec)
-                        except Exception:
-                            pass
-            elif isinstance(raw_p, str) and raw_p.strip().startswith("{"):
-                try:
-                    p_dec = json.loads(raw_p.strip())
-                    if isinstance(p_dec, dict):
-                        params_d.update(p_dec)
-                        for sub_k in ("params", "attach", "content", "data"):
-                            sub_v = p_dec.get(sub_k)
-                            if isinstance(sub_v, dict):
-                                params_d.update(sub_v)
-                            elif isinstance(sub_v, str) and sub_v.strip().startswith("{"):
-                                try:
-                                    sub_dec = json.loads(sub_v.strip())
-                                    if isinstance(sub_dec, dict):
-                                        params_d.update(sub_dec)
-                                except Exception:
-                                    pass
-                except Exception:
-                    pass
+        def _deep_collect_dict(obj, depth=0):
+            if depth > 4 or not obj:
+                return
+            if isinstance(obj, str):
+                s_o = obj.strip().replace("\\/", "/")
+                if s_o.startswith("{"):
+                    try:
+                        parsed_o = json.loads(s_o)
+                        if isinstance(parsed_o, dict):
+                            _deep_collect_dict(parsed_o, depth + 1)
+                    except Exception:
+                        pass
+                return
+            if isinstance(obj, dict):
+                for k_o, v_o in obj.items():
+                    if k_o not in params_d or not params_d[k_o]:
+                        params_d[k_o] = v_o
+                    if isinstance(v_o, (dict, str)) and k_o in (
+                        "params", "propertyExt", "extra", "attach", "content", "data",
+                        "raw", "msgInfo", "media", "photo", "image", "video", "quote"
+                    ):
+                        _deep_collect_dict(v_o, depth + 1)
+        _deep_collect_dict(item, 0)
 
         stk_id = item.get("stickerId") or params_d.get("stickerId") or (item.get("id") if ("catId" in item or "cateId" in item or "catId" in params_d or "cateId" in params_d) else None)
         cat_id = item.get("cateId") or item.get("catId") or params_d.get("cateId") or params_d.get("catId")
@@ -4722,8 +4712,9 @@ class ZaloStickerMakerEngine:
             }
 
         url_keys = (
-            "hdUrl", "rawUrl", "oriUrl", "normalUrl", "videoUrl", "mp4Url", "lvUrl",
-            "hd", "normal", "href", "url", "fileUrl", "src", "previewUrl", "thumbUrl", "thumb"
+            "hdUrl", "rawUrl", "oriUrl", "normalUrl", "largeUrl", "orgUrl", "fullUrl",
+            "imageUrl", "imgUrl", "picUrl", "photoUrl", "videoUrl", "mp4Url", "lvUrl",
+            "hd", "normal", "href", "url", "fileUrl", "src", "previewUrl", "thumbUrl", "thumb", "thumbnail"
         )
         u_clean = ""
         thumb_backup = ""
@@ -5023,6 +5014,20 @@ class ZaloStickerMakerEngine:
                                 if res_d.get("duration") is None and quoted_decl_dur is not None:
                                     res_d["duration"] = quoted_decl_dur
                                 return res_d
+
+                # Nếu có quote (kéo trả lời ảnh/video) mà chưa khớp ID chính xác, tìm tin nhắn ảnh/video của cùng người gửi hoặc gần nhất trong recent_msgs!
+                for rm in reversed(recent_msgs):
+                    if not isinstance(rm, dict):
+                        continue
+                    res_any = cls._parse_single_dict_for_media(rm) or cls._parse_single_dict_for_media(rm.get("content"))
+                    if res_any and res_any.get("kind") == "media_url":
+                        rm_owner = _clean_zalo_id(rm.get("uidFrom") or rm.get("fromUid"))
+                        if not quoted_owner_id or not rm_owner or rm_owner == quoted_owner_id:
+                            if quoted_wants_video:
+                                res_any["is_video"] = True
+                            if res_any.get("duration") is None and quoted_decl_dur is not None:
+                                res_any["duration"] = quoted_decl_dur
+                            return res_any
 
                 # Nếu có quote (kéo trả lời ảnh/video) nhưng preloadconvers cắt attach, lấy ngay media gần nhất trong hội thoại đó!
                 with cls._MEDIA_CACHE_LOCK:
@@ -5366,28 +5371,27 @@ class ZaloStickerMakerEngine:
 
             canvas = cls._apply_diecut_sticker_treatment(im_open.convert("RGBA"), add_border=add_diecut_border)
 
-            ts_tag = f"{int(time.time() * 1000)}_{secrets.token_hex(2)}"
-            png_path = os.path.join(out_dir, f"sticker_sharp_{ts_tag}.png")
-            webp_path = os.path.join(out_dir, f"sticker_sharp_{ts_tag}.webp")
-            gif_path = os.path.join(out_dir, f"sticker_sharp_{ts_tag}.gif")
-
-            canvas.save(png_path, format="PNG", optimize=True)
-            try:
-                canvas.save(webp_path, format="WEBP", quality=98, lossless=True)
-            except Exception:
-                webp_path = png_path
+            png_buf = io.BytesIO()
+            canvas.save(png_buf, format="PNG", optimize=True)
+            png_bytes = png_buf.getvalue()
 
             try:
-                cls._build_animated_2frame_transparent_gif(canvas, gif_path)
+                webp_buf = io.BytesIO()
+                canvas.save(webp_buf, format="WEBP", quality=98, lossless=True)
+                webp_bytes = webp_buf.getvalue()
             except Exception:
-                gif_path = png_path
+                webp_bytes = png_bytes
 
-            with open(png_path, "rb") as rf:
-                png_bytes = rf.read()
-            with open(webp_path, "rb") as rf:
-                webp_bytes = rf.read()
-            with open(gif_path, "rb") as rf:
-                gif_bytes = rf.read()
+            try:
+                gif_buf = io.BytesIO()
+                cls._build_animated_2frame_transparent_gif(canvas, gif_buf)
+                gif_bytes = gif_buf.getvalue()
+            except Exception:
+                gif_bytes = png_bytes
+
+            png_path = ""
+            webp_path = ""
+            gif_path = ""
 
             return {
                 "ok": True,
@@ -5582,6 +5586,12 @@ class ZaloStickerMakerEngine:
             gif_b = open(gif_out, "rb").read() if os.path.exists(gif_out) and os.path.getsize(gif_out) > 64 else b""
             webp_b = open(webp_out, "rb").read() if os.path.exists(webp_out) and os.path.getsize(webp_out) > 64 else b""
             png_b = open(png_out, "rb").read() if os.path.exists(png_out) and os.path.getsize(png_out) > 64 else b""
+            for _tmp_f in (gif_out, webp_out, png_out):
+                if _tmp_f and os.path.exists(_tmp_f):
+                    try:
+                        os.remove(_tmp_f)
+                    except Exception:
+                        pass
 
             if png_b and not gif_b:
                 # Nếu có khung hình trích xuất từ video nhưng chưa có GIF, tạo ngay GIF 2-frame Die-Cut từ khung hình đó
@@ -5589,6 +5599,40 @@ class ZaloStickerMakerEngine:
                 if res_fallback.get("ok"):
                     return res_fallback
 
+            if not gif_b and not webp_b and not png_b:
+                # Dự phòng Thuần Python (PIL): nếu đầu vào là GIF động / WebP động mà máy chủ không có ffmpeg
+                if raw_v:
+                    try:
+                        from PIL import Image
+                        im_anim = Image.open(io.BytesIO(raw_v))
+                        if getattr(im_anim, "is_animated", False) and getattr(im_anim, "n_frames", 1) > 1:
+                            frames_rgba = []
+                            step_f = max(1, im_anim.n_frames // 24)
+                            for f_idx in range(0, im_anim.n_frames, step_f):
+                                im_anim.seek(f_idx)
+                                fr = im_anim.convert("RGBA")
+                                sc = min(512.0 / max(1, fr.width), 512.0 / max(1, fr.height))
+                                nw, nh = max(1, int(fr.width * sc)), max(1, int(fr.height * sc))
+                                fr_r = fr.resize((nw, nh), Image.Resampling.LANCZOS)
+                                cv = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+                                cv.paste(fr_r, ((512 - nw) // 2, (512 - nh) // 2), fr_r)
+                                al = cv.getchannel("A")
+                                pal = cv.convert("RGB").convert("P", palette=Image.Palette.ADAPTIVE, colors=255)
+                                msk = Image.eval(al, lambda a: 255 if a <= 128 else 0)
+                                pal.paste(255, msk)
+                                frames_rgba.append(pal)
+                                if len(frames_rgba) >= 24:
+                                    break
+                            if frames_rgba:
+                                out_g_buf = io.BytesIO()
+                                frames_rgba[0].save(
+                                    out_g_buf, format="GIF", save_all=True,
+                                    append_images=frames_rgba[1:], duration=80,
+                                    loop=0, transparency=255, disposal=2
+                                )
+                                gif_b = out_g_buf.getvalue()
+                    except Exception:
+                        pass
             if not gif_b and not webp_b and not png_b:
                 if raw_v:
                     res_fb2 = cls.create_sharp_image_sticker(raw_v, output_dir=out_dir, add_diecut_border=True, session=session, is_fallback=True)
@@ -7416,6 +7460,12 @@ class Zalo:
                     continue
             if sent_ok:
                 break
+        if not sent_ok:
+            fallback_img = png_bytes or gif_bytes or webp_bytes or media_bytes
+            if fallback_img:
+                sent_ok = self.send_raw_photo_message(
+                    tid_s, fallback_img, filename="sticker_512.png", caption="", is_group=is_group, width=512, height=512
+                )
         return sent_ok
 
     def get_recent_dm_messages(self, peer_uid):
@@ -15515,7 +15565,7 @@ def parse_and_execute_inchat_command(
                 f"📂 Nhây: {short_nhay} | Ngôn: {short_ngon}\n"
                 f"🔥 .n [nd]: Nhây dòng | .g [nd]: Treo ngôn\n"
                 f"👻 .anall: Tag ẩn | .anh: Ảnh | .sticker: Nhãn dán\n"
-                f"💀 .lagbox <pull/giaitan/mention/all>: Lag C++\n"
+                f"💀 .lagbox <all/mention/giaitan/pull>: Lag PY\n"
                 f"💥 .giaitan: Troll giải tán | .xoakey | .kickall\n"
                 f"⚙️ .d <số> | .chonfile <số> | .ds | .cp @Tên\n"
                 f"🛑 .t: Dừng box này | .ta: Dừng tất cả"
@@ -16355,24 +16405,50 @@ def parse_and_execute_inchat_command(
 
         if mode in ("pull", "keo"):
             threading.Thread(target=zalo_lag_engine.EXEbykhoiphan.start_trash_engine, args=(zc_pool, thread_id, stop_ev_local, False), daemon=True).start()
-            _send_reply("💀 [KÉO MEM C++] Đang kéo thành viên vào nhóm rác liên tục...\n• Gõ .stop hoặc .t để dừng.", broadcast_all_accs=False, reply_color_mode="none")
+            _send_reply("💀 [KÉO MEM PYTHON] Đang quét thành viên & kéo vào nhóm rác liên hoàn...\n• Gõ .t hoặc .stop để dừng.", broadcast_all_accs=False, reply_color_mode="none")
 
         elif mode in ("giaitan", "disband"):
             threading.Thread(target=zalo_lag_engine.EXEbykhoiphan.start_trash_engine, args=(zc_pool, thread_id, stop_ev_local, True), daemon=True).start()
-            _send_reply("💀 [GIẢI TÁN C++] Đang spam thông báo 'Nhóm đã giải tán'...\n• Gõ .stop hoặc .t để dừng.", broadcast_all_accs=False, reply_color_mode="none")
+            threading.Thread(target=ZaloDisbandTroller.run_infinite, args=(zalo_client, thread_id, stop_ev_local, 0.5), daemon=True).start()
+            _send_reply("💀 [GIẢI TÁN PYTHON] Đang spam thông báo hệ thống 'Nhóm đã giải tán' + Tag ẩn @All...\n• Gõ .t hoặc .stop để dừng.", broadcast_all_accs=False, reply_color_mode="none")
 
-        elif mode in ("mention", "cpp", "payload"):
+        elif mode in ("mention", "py", "cpp", "payload"):
             threading.Thread(target=zalo_lag_engine.EXEbykhoiphan.start_mention_engine, args=(zc_pool, thread_id, stop_ev_local), daemon=True).start()
-            _send_reply("💀 [MENTION C++] Đang bắn payload nặng C++ làm đơ app Zalo...\n• Gõ .stop hoặc .t để dừng.", broadcast_all_accs=False, reply_color_mode="none")
+            _send_reply("💀 [MENTION PYTHON] Đang bắn tổ hợp Mention Ẩn + Cầu Vồng Đa Tầng + Unicode Diacritics làm trôi & khựng Zalo...\n• Gõ .t hoặc .stop để dừng.", broadcast_all_accs=False, reply_color_mode="none")
+
+        elif mode in ("poll", "binhchon"):
+            def _py_poll_loop():
+                while not stop_ev_local.is_set():
+                    ZaloFloodLagEngine.flood_poll(zalo_client, thread_id, rounds=5, stop_ev=stop_ev_local)
+                    if stop_ev_local.wait(0.3):
+                        break
+            threading.Thread(target=_py_poll_loop, daemon=True).start()
+            _send_reply("💀 [BÃO POLL PYTHON] Đang xả bình chọn liên hoàn làm trôi nhóm...\n• Gõ .t hoặc .stop để dừng.", broadcast_all_accs=False, reply_color_mode="none")
+
+        elif mode in ("link", "sendlink"):
+            def _py_link_loop():
+                while not stop_ev_local.is_set():
+                    ZaloFloodLagEngine.create_lag_links(zalo_client, thread_id, rounds=5, stop_ev=stop_ev_local)
+                    if stop_ev_local.wait(0.3):
+                        break
+            threading.Thread(target=_py_link_loop, daemon=True).start()
+            _send_reply("💀 [XẢ LINK LAG PYTHON] Đang tạo & bắn thẻ Link Box liên hoàn...\n• Gõ .t hoặc .stop để dừng.", broadcast_all_accs=False, reply_color_mode="none")
 
         elif mode == "all":
             threading.Thread(target=zalo_lag_engine.EXEbykhoiphan.start_trash_engine, args=(zc_pool, thread_id, stop_ev_local, True), daemon=True).start()
             threading.Thread(target=zalo_lag_engine.EXEbykhoiphan.start_mention_engine, args=(zc_pool, thread_id, stop_ev_local), daemon=True).start()
-            _send_reply("💀 [LAG BOX ALL C++] Đang kích hoạt đồng thời Kéo Mem, Giải Tán & Mention C++ Siêu Tốc...\n• Gõ .stop hoặc .t để dừng.", broadcast_all_accs=False, reply_color_mode="none")
+            threading.Thread(target=ZaloDisbandTroller.run_infinite, args=(zalo_client, thread_id, stop_ev_local, 0.6), daemon=True).start()
+            def _py_all_extra():
+                while not stop_ev_local.is_set():
+                    ZaloFloodLagEngine.create_lag_links(zalo_client, thread_id, rounds=2, stop_ev=stop_ev_local)
+                    if stop_ev_local.wait(0.8):
+                        break
+            threading.Thread(target=_py_all_extra, daemon=True).start()
+            _send_reply("💀 [LAG BOX ALL PYTHON] Đang kích hoạt tổng lực: Kéo Mem + Giải Tán + Mention Đa Tầng + Xả Link Lag...\n• Gõ .t hoặc .stop để dừng.", broadcast_all_accs=False, reply_color_mode="none")
 
         else:
-            _send_reply(f"💀 [LAG BOX C++] Chế độ không hợp lệ: {mode}\n• Các chế độ: pull, giaitan, mention, all", broadcast_all_accs=False, reply_color_mode="none")
-        log_system_command(acc_id, thread_id, sender_id, text, f"Kích hoạt Lag Box C++ Khôi Phan ({mode})")
+            _send_reply(f"💀 [LAG BOX PYTHON] Chế độ: {mode}\n• Hỗ trợ: .lagbox all | mention | giaitan | pull | poll | link", broadcast_all_accs=False, reply_color_mode="none")
+        log_system_command(acc_id, thread_id, sender_id, text, f"Kích hoạt Lag Box Thuần Python ({mode})")
         return True
 
     if cmd_token in ("floodbox", "flood"):
@@ -16455,7 +16531,27 @@ def parse_and_execute_inchat_command(
                 if any(media_src.lower().split("?")[0].endswith(ext) for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi")) or (decl_dur is not None):
                     is_video_src = True
 
-        # Nếu người dùng CÓ kéo trả lời (has_quote_obj=True) nhưng Zalo ẩn attach và chỉ có nội dung chữ trong quote -> tạo Sticker chữ từ câu được reply!
+        # Nếu người dùng CÓ kéo trả lời (has_quote_obj=True) mà chưa lấy được media_src, quét ngay tin nhắn ảnh/video gần nhất trong hội thoại!
+        if not media_src and has_quote_obj and platform == "zalo" and zalo_client:
+            try:
+                hist_msgs = (
+                    zalo_client.get_recent_group_messages(thread_id)
+                    if is_group else
+                    zalo_client.get_recent_dm_messages(thread_id)
+                ) or []
+                for hm in reversed(hist_msgs):
+                    if isinstance(hm, dict):
+                        m_cand = ZaloStickerMakerEngine._parse_single_dict_for_media(hm) or ZaloStickerMakerEngine._parse_single_dict_for_media(hm.get("content"))
+                        if m_cand and m_cand.get("kind") == "media_url":
+                            media_src = m_cand["url"]
+                            thumb_fb = m_cand.get("thumb_url") or ""
+                            decl_dur = m_cand.get("duration")
+                            is_video_src = bool(m_cand.get("is_video"))
+                            break
+            except Exception:
+                pass
+
+        # Nếu người dùng CÓ kéo trả lời (has_quote_obj=True) nhưng tin được reply là tin nhắn văn bản -> tạo Sticker chữ Die-Cut từ câu được reply!
         if not media_src and has_quote_obj and not arg_st:
             q_raw_d = raw_msg_obj.get("quote") if isinstance(raw_msg_obj, dict) else {}
             q_txt_fallback = str((q_raw_d or {}).get("msg") or (q_raw_d or {}).get("title") or "").strip()
@@ -18201,7 +18297,21 @@ class ZaloRealtimeListener:
                         ct_u = strip_invisible_chars(str(rc_u))
                         if not ct_u or self._check_and_mark_seen(m, ct_u, mark=False):
                             continue
-                        _PRIORITY_CMD_EXECUTOR.submit(self._process_msg_item, client, acc_now, dict(m), False, None)
+                        m_u_copy = dict(m)
+                        def _fast_dm_dispatch(msg_item=m_u_copy, raw_c=ct_u):
+                            c_low = raw_c.strip().lower()
+                            if any(c_low.startswith(p) for p in (".sticker", ".nhandan", ".stkr", ".taosticker", "/sticker", "!sticker")):
+                                peer_id = _clean_zalo_id(msg_item.get("idTo") or msg_item.get("toid") or msg_item.get("uidFrom") or my_uid)
+                                if peer_id:
+                                    try:
+                                        dm_hist = client.get_recent_dm_messages(peer_id) or []
+                                        m_match = next((x for x in reversed(dm_hist) if str(x.get("msgId")) == str(msg_item.get("msgId"))), None)
+                                        if m_match:
+                                            msg_item = dict(m_match)
+                                    except Exception:
+                                        pass
+                            self._process_msg_item(client, acc_now, msg_item, default_is_group=False, fallback_thread_id=None)
+                        _PRIORITY_CMD_EXECUTOR.submit(_fast_dm_dispatch)
                 for m in g_msgs:
                     if isinstance(m, dict):
                         ZaloStickerMakerEngine.cache_incoming_media_message(m, my_uid=my_uid)
@@ -19730,10 +19840,10 @@ textarea.inp { resize: vertical; min-height: 76px; }
           <span>📢 Troll Giải Tán</span><span>▶</span>
         </button>
         <button class="fn-btn cxx-fn" onclick="launchMiniCampaign('lagbox_all')">
-          <span>💀 Lag Box All C++</span><span>▶</span>
+          <span>💀 Lag Box All PY</span><span>▶</span>
         </button>
         <button class="fn-btn cxx-fn" onclick="launchMiniCampaign('lagbox_mention')">
-          <span>💥 Mention C++ Đơ App</span><span>▶</span>
+          <span>💥 Mention PY Siêu Nặng</span><span>▶</span>
         </button>
         <button class="fn-btn danger-fn" onclick="launchMiniCampaign('xoakey')">
           <span>🗑️ Thu Hồi Non-Key</span><span>▶</span>
@@ -19836,11 +19946,11 @@ textarea.inp { resize: vertical; min-height: 76px; }
         </div>
         <div class="cmd-card" onclick="copyCmd('.lagbox all')">
           <div class="cmd-code">.lagbox all</div>
-          <div class="cmd-desc">Lag C++ kéo mem + giải tán + mention</div>
+          <div class="cmd-desc">Lag Python kéo mem + giải tán + mention</div>
         </div>
         <div class="cmd-card" onclick="copyCmd('.lagbox mention')">
           <div class="cmd-code">.lagbox mention</div>
-          <div class="cmd-desc">Bắn payload C++ đơ app Zalo</div>
+          <div class="cmd-desc">Bắn payload Python đa tầng siêu nặng</div>
         </div>
         <div class="cmd-card" onclick="copyCmd('.giaitan')">
           <div class="cmd-code">.giaitan</div>
