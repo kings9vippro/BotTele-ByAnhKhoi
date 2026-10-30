@@ -529,7 +529,7 @@ def init_db():
         uid TEXT DEFAULT '',
         chat_cmd_enabled INTEGER DEFAULT 1,
         cmd_prefix TEXT DEFAULT '.',
-        allow_all_cmd INTEGER DEFAULT 1,
+        allow_all_cmd INTEGER DEFAULT 0,
         enabled INTEGER DEFAULT 1,
         created_at REAL
     )
@@ -706,7 +706,7 @@ def init_db():
 
     try:
         cur.execute("UPDATE accounts SET chat_cmd_enabled = 1")
-        cur.execute("UPDATE accounts SET allow_all_cmd = 1")
+        cur.execute("UPDATE accounts SET allow_all_cmd = 0")
         # Tự động nạp sẵn 8 kho kịch bản VIP từ 3 file zip (nhay.txt, so.txt, chui.txt, codelag.txt, nhayicon.txt, nhaynamebox.txt, ngon.txt, 2c.txt)
         presets_dir = os.path.join(BASE_DIR, "presets")
         default_preset_contents = {
@@ -1035,10 +1035,11 @@ def claim_command_execution_slot(platform, thread_id, sender_id, raw_msg, msg_id
                     return False
         if mts_key and (now - GLOBAL_CMD_DEDUPE_CACHE.get(mts_key, 0.0) < 600.0):
             return False
-        if now - GLOBAL_CMD_DEDUPE_CACHE.get(box_cmd_key, 0.0) < 2.2:
-            return False
-        if now - GLOBAL_CMD_DEDUPE_CACHE.get(cmd_key, 0.0) < 2.2:
-            return False
+        if not mid_s and not cmid_s:
+            if now - GLOBAL_CMD_DEDUPE_CACHE.get(box_cmd_key, 0.0) < 0.35:
+                return False
+            if now - GLOBAL_CMD_DEDUPE_CACHE.get(cmd_key, 0.0) < 0.35:
+                return False
 
         if mid_s:
             GLOBAL_CMD_DEDUPE_CACHE[f"mid:{acc_scope}:{plat_s}:{tid_s}:{mid_s}"] = now
@@ -2322,11 +2323,10 @@ class ZaloDisbandTroller:
         members = cached_members if cached_members is not None else cls.scan_full_members(zalo_client, gid_s)
         mem_cnt = max(len(members) + 1, 2)
         cls._call_disperse_api(zalo_client, gid_s)
-        if round_idx % 2 == 0:
-            try:
-                zalo_client.spam_group_disband_notification(gid_s, group_name=real_name, send_inbox_alert=False)
-            except Exception:
-                pass
+        try:
+            zalo_client.spam_group_disband_notification(gid_s, group_name=real_name, send_inbox_alert=False)
+        except Exception:
+            pass
         tpl = cls._VARIANTS[round_idx % len(cls._VARIANTS)]
         msg_body = tpl.format(box=real_name, count=mem_cnt)
         mentions = []
@@ -2642,6 +2642,17 @@ def resolve_file_record(query_val):
     for f in files:
         if f["filename"].lower() == q_low or q_low in f["filename"].lower():
             return f
+    # Dự phòng trực tiếp từ thư mục UPLOAD_DIR nếu file vừa tải lên chưa kịp vào bảng SQLite
+    direct_fp = os.path.join(UPLOAD_DIR, os.path.basename(q))
+    if os.path.exists(direct_fp) and os.path.isfile(direct_fp):
+        return {
+            "id": 999,
+            "display_num": len(files) + 1,
+            "filename": os.path.basename(q),
+            "filepath": direct_fp,
+            "lines_count": 1,
+            "file_type": "ngon" if "ngon" in q_low else "nhay",
+        }
     return None
 
 def get_blocks_from_file_query(query_val, mode="fast"):
@@ -4647,7 +4658,7 @@ class ZaloStickerMakerEngine:
                 try:
                     item = json.loads(s_it)
                 except Exception:
-                    m_u = re.search(r'(https?://[^\\s"\\\'<>\\\\]+)', s_it)
+                    m_u = re.search(r'(https?://[^\s"\'<>\\]+)', s_it)
                     if m_u:
                         u_found = m_u.group(1)
                         is_v = any(x in u_found.lower() for x in (".mp4", ".mov", ".webm", "video"))
@@ -4731,7 +4742,7 @@ class ZaloStickerMakerEngine:
         if not u_clean:
             # Quét sâu bằng Regex nếu URL nằm ẩn trong chuỗi JSON lồng nhau
             raw_dump = json.dumps({"a": item, "b": params_d}, ensure_ascii=False).replace("\\/", "/")
-            urls_found = re.findall(r'(https?://[^\\s"\\\'<>\\\\]+)', raw_dump)
+            urls_found = re.findall(r'(https?://[^\s"\'<>\\]+)', raw_dump)
             for uf in urls_found:
                 uf_c = uf.rstrip(",;})]")
                 if any(k_cdn in uf_c.lower() for k_cdn in ("zalo", "zadn", "zdns", "photo", "video", "gif", "webp", "png", "jpg", "jpeg", "mp4", "imgur", "giphy", "tenor")):
@@ -4898,7 +4909,7 @@ class ZaloStickerMakerEngine:
                     except Exception:
                         pass
                 if "http" in att_s:
-                    m_u = re.search(r'(https?://[^\\s"\\\'<>\\\\]+)', att_s)
+                    m_u = re.search(r'(https?://[^\s"\'<>\\]+)', att_s)
                     if m_u:
                         candidates.append({
                             "href": m_u.group(1).rstrip(",;})]"),
@@ -5055,15 +5066,36 @@ class ZaloStickerMakerEngine:
             except Exception as e:
                 return None, f"Data URI không hợp lệ: {e}"
         if src_s.startswith(("http://", "https://")):
-            sess = session or requests.Session()
-            hdrs = {
+            src_s = src_s.replace("\\/", "/").strip().rstrip('",;})]&\'')
+            hdrs_zalo = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                 "Accept": "image/avif,image/webp,image/apng,image/*,video/*,*/*;q=0.8",
                 "Referer": "https://chat.zalo.me/",
             }
+            hdrs_clean = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "*/*",
+            }
+            clean_sess = requests.Session()
+            url_variants = [src_s]
+            if "?" in src_s:
+                url_variants.append(src_s.split("?", 1)[0])
             try:
-                r = sess.get(src_s, headers=hdrs, timeout=12, stream=True)
-                if r.status_code == 200:
+                r = None
+                for u_try in url_variants:
+                    for s_try, h_try in ((clean_sess, hdrs_zalo), (clean_sess, hdrs_clean), (session or clean_sess, hdrs_zalo)):
+                        try:
+                            r_cand = s_try.get(u_try, headers=h_try, timeout=10, stream=True)
+                            if r_cand.status_code == 200:
+                                r = r_cand
+                                break
+                            elif r is None:
+                                r = r_cand
+                        except Exception:
+                            continue
+                    if r is not None and r.status_code == 200:
+                        break
+                if r is not None and r.status_code == 200:
                     chunks = []
                     total_b = 0
                     for ch in r.iter_content(chunk_size=65536):
@@ -5309,7 +5341,7 @@ class ZaloStickerMakerEngine:
         )
 
     @classmethod
-    def create_sharp_image_sticker(cls, image_bytes_or_path, output_dir=None, add_diecut_border=True, session=None, is_fallback=False):
+    def create_sharp_image_sticker(cls, image_bytes_or_path, output_dir=None, add_diecut_border=True, session=None, is_fallback=False, thumb_fallback_url=None):
         """Tạo Sticker Ảnh Sắc Nét 512×512 (Animated GIF 2-frame trong suốt + WebP lossless + PNG) chuẩn Nhãn Dán Zalo & Telegram."""
         out_dir = output_dir or UPLOAD_DIR
         os.makedirs(out_dir, exist_ok=True)
@@ -5319,6 +5351,8 @@ class ZaloStickerMakerEngine:
                 raw_bytes_in = bytes(image_bytes_or_path)
             else:
                 raw_bytes_in, err_f = cls.fetch_media_from_url_or_path(image_bytes_or_path, session=session)
+                if not raw_bytes_in and thumb_fallback_url and thumb_fallback_url != image_bytes_or_path:
+                    raw_bytes_in, err_f = cls.fetch_media_from_url_or_path(thumb_fallback_url, session=session)
                 if not raw_bytes_in:
                     return {"ok": False, "error": f"❌ {err_f}"}
 
@@ -6097,12 +6131,17 @@ class Zalo:
                     enc = self._enc({"threadIdLocalMsgId": json.dumps(payload_map), "imei": self.imei})
                 except Exception:
                     return {"msgs": [], "groupMsgs": []}
-            for ep_conv in (
-                "https://tt-convers-wpa.chat.zalo.me/api/preloadconvers/get-last-msgs",
-                "https://convers-wpa.chat.zalo.me/api/preloadconvers/get-last-msgs",
-                "https://wpa.chat.zalo.me/api/preloadconvers/get-last-msgs",
-            ):
-                for use_post in (False, True):
+            conv_eps = [
+                ("https://tt-convers-wpa.chat.zalo.me/api/preloadconvers/get-last-msgs", False),
+                ("https://tt-convers-wpa.chat.zalo.me/api/preloadconvers/get-last-msgs", True),
+                ("https://convers-wpa.chat.zalo.me/api/preloadconvers/get-last-msgs", False),
+                ("https://wpa.chat.zalo.me/api/preloadconvers/get-last-msgs", False),
+            ]
+            if getattr(self, "_fast_conv_ep", None) in conv_eps:
+                conv_eps.remove(self._fast_conv_ep)
+                conv_eps.insert(0, self._fast_conv_ep)
+            for ep_conv, use_post in conv_eps:
+                if True:
                     try:
                         if not use_post:
                             r = active_s.get(
@@ -6173,6 +6212,7 @@ class Zalo:
                                 for _mg in g_list:
                                     ZaloStickerMakerEngine.cache_incoming_media_message(_mg, my_uid=self.uid, fallback_thread_id=_mg.get("grid"))
                                 if u_list or g_list or payload_map == payload_candidates[-1]:
+                                    self._fast_conv_ep = (ep_conv, use_post)
                                     return {"msgs": u_list, "groupMsgs": g_list}
                     except Exception:
                         continue
@@ -9275,7 +9315,7 @@ class DiscordImmortalRegTool:
         return s, fingerprint
 
     @classmethod
-    def immortalize_tokens_batch(cls, raw_input, custom_name="", auto_save=True, chat_cmd_enabled=1, allow_all_cmd=1):
+    def immortalize_tokens_batch(cls, raw_input, custom_name="", auto_save=True, chat_cmd_enabled=1, allow_all_cmd=0):
         tokens = extract_discord_tokens_from_reg_or_raw(raw_input)
         if not tokens:
             return {"ok": False, "error": "Không tìm thấy Token hợp lệ trong dữ liệu nhập vào!"}
@@ -15303,15 +15343,17 @@ def parse_and_execute_inchat_command(
             my_uid = str(zalo_client.uid).strip()
             OWNER_UIDS_CACHE.add(my_uid)
 
-    allow_all_flag = bool(acc_row.get("allow_all_cmd", 0))
+    # KHÓA BẢO MẬT TUYỆT ĐỐI 100%: Chỉ Admin Cookie (is_true_owner) và người được cấp quyền (.cp) mới được dùng lệnh!
+    # Mọi người lạ chưa được cấp phép sẽ bị chặn 100%, không bao giờ dùng được bất kỳ lệnh nào!
+    allow_all_flag = False
     is_true_owner = is_true_account_owner(
         s_uid, client_uid=my_uid, client_send2me_id=my_s2m, platform=platform
     )
     is_authorized_sender = is_user_authorized_for_cmd(
-        s_uid, my_uid, my_s2m, allow_all=allow_all_flag, sender_name=sender_name,
+        s_uid, my_uid, my_s2m, allow_all=False, sender_name=sender_name,
         platform=platform, thread_id=thread_id, cmd_token=cmd_token
     )
-    is_owner = is_true_owner or is_authorized_sender or allow_all_flag
+    is_owner = is_true_owner or is_authorized_sender
 
     # BẮT BUỘC 100%: Chỉ Chủ Acc (is_true_owner) và người được Chủ Acc cấp quyền (.cp) mới được phép dùng lệnh!
     # Cấm tuyệt đối 100% mọi người lạ khác trong nhóm sử dụng lệnh!
@@ -15360,7 +15402,7 @@ def parse_and_execute_inchat_command(
         rep_norm = _normalize_for_echo_hash(msg_txt)
         rep_key = f"outrep:acc{acc_id}:{platform}:{_clean_zalo_id(thread_id) or thread_id}:{rep_norm}"
         with GLOBAL_CMD_DEDUPE_LOCK:
-            if now_rep - GLOBAL_CMD_DEDUPE_CACHE.get(rep_key, 0.0) < 3.5:
+            if now_rep - GLOBAL_CMD_DEDUPE_CACHE.get(rep_key, 0.0) < 0.25:
                 return
             GLOBAL_CMD_DEDUPE_CACHE[rep_key] = now_rep
         register_system_sent_message(text=msg_txt)
@@ -15466,18 +15508,17 @@ def parse_and_execute_inchat_command(
                 f"🛑 .t : Dừng box này | .ta : Dừng tất cả"
             )
         else:
+            short_nhay = (nhay_f_now[:16] + "..") if len(str(nhay_f_now)) > 18 else nhay_f_now
+            short_ngon = (ngon_f_now[:16] + "..") if len(str(ngon_f_now)) > 18 else ngon_f_now
             help_txt = (
-                f"⚡ ZENVYRE ULTRA ({APP_VERSION})\n"
-                f"👑 Dev Anh Khôi • {flt_lbl} • Delay: {cur_d}s\n"
-                f"📂 Nhây: {nhay_f_now} | Ngôn: {ngon_f_now}\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"🔥 .n [nd] : Nhây dòng | .g [nd] : Treo ngôn\n"
-                f"👻 .anall : Nhây tag ẩn | .anh : Treo ảnh\n"
-                f"🎨 .sticker : Reply ảnh/video ≤3s tạo sticker\n"
-                f"💀 .lagbox <pull/giaitan/mention/all> : Lag C++\n"
-                f"🗑️ .xoakey : Thu hồi | .kickall : Kick mem\n"
-                f"⚙️ .d <giây> | .chonfile <số> | .ds | .cp @Tên\n"
-                f"🛑 .t : Dừng box này | .ta : Dừng tất cả"
+                f"⚡ ZENVYRE VIP • Dev Anh Khôi ({flt_lbl} | {cur_d}s)\n"
+                f"📂 Nhây: {short_nhay} | Ngôn: {short_ngon}\n"
+                f"🔥 .n [nd]: Nhây dòng | .g [nd]: Treo ngôn\n"
+                f"👻 .anall: Tag ẩn | .anh: Ảnh | .sticker: Nhãn dán\n"
+                f"💀 .lagbox <pull/giaitan/mention/all>: Lag C++\n"
+                f"💥 .giaitan: Troll giải tán | .xoakey | .kickall\n"
+                f"⚙️ .d <số> | .chonfile <số> | .ds | .cp @Tên\n"
+                f"🛑 .t: Dừng box này | .ta: Dừng tất cả"
             )
         _send_reply(help_txt, broadcast_all_accs=False, reply_color_mode="none")
         log_system_command(acc_id, thread_id, sender_id, text, f"Hiển thị .menu gọn 0ms ({platform})")
@@ -16456,7 +16497,7 @@ def parse_and_execute_inchat_command(
                 )
             else:
                 res_st = ZaloStickerMakerEngine.create_sharp_image_sticker(
-                    media_src, add_diecut_border=True, session=z_sess
+                    media_src, add_diecut_border=True, session=z_sess, thumb_fallback_url=thumb_fb
                 )
         elif arg_st:
             q_kw = remove_vn_accents(arg_st.lower().strip())
@@ -18212,7 +18253,7 @@ class ZaloRealtimeListener:
         changed_gids = []
         if not hasattr(self, "_grid_ver_cache"):
             self._grid_ver_cache = {}
-        if not acc_gids or (now_t - getattr(self, "_last_gmap_check_ts", 0.0) >= 0.45):
+        if not acc_gids or (now_t - getattr(self, "_last_gmap_check_ts", 0.0) >= 0.22):
             self._last_gmap_check_ts = now_t
             try:
                 gmap = client.get_grid_ver_map() or {}
@@ -18234,7 +18275,7 @@ class ZaloRealtimeListener:
         for c_gid in changed_gids[:10]:
             _PRIORITY_CMD_EXECUTOR.submit(self._poll_single_group, client, acc_now, c_gid, True)
 
-        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.45:
+        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.22:
             self._last_rot_group_poll_ts = now_t
             own_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(client.uid, set())
             all_my_gids = sorted(
@@ -18304,7 +18345,7 @@ class ZaloRealtimeListener:
                 if "Phiên đăng nhập" in str(e) or "zpw_enk" in str(e):
                     self.ws_status = "Cần cập nhật lại Cookie Zalo"
             active_z_cnt = max(1, len(ACTIVE_LISTENERS))
-            poll_sleep = 0.12 + min(0.20, max(0, active_z_cnt - 1) * 0.025)
+            poll_sleep = 0.06 + min(0.12, max(0, active_z_cnt - 1) * 0.015)
             self.stop_ev.wait(poll_sleep)
 
     def _run_ws_session(self, client, acc_row, ws_url):
@@ -19260,111 +19301,115 @@ ZENVYRE_MINIAPP_HTML = """<!DOCTYPE html>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root {
-  --bg-deep: #070b19;
-  --card-bg: rgba(15, 23, 42, 0.85);
-  --card-border: rgba(56, 189, 248, 0.22);
-  --cyan: #38bdf8;
-  --cyan-glow: rgba(56, 189, 248, 0.35);
-  --indigo: #6366f1;
-  --purple: #a855f7;
-  --emerald: #10b981;
-  --amber: #f59e0b;
-  --rose: #f43f5e;
-  --text-main: #f8fafc;
-  --text-sub: #94a3b8;
+  --bg-page: #f8fafc;
+  --card-bg: #ffffff;
+  --card-alt: #f1f5f9;
+  --card-border: #e2e8f0;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-soft: #eff6ff;
+  --indigo: #4f46e5;
+  --purple: #7c3aed;
+  --purple-soft: #f5f3ff;
+  --emerald: #059669;
+  --emerald-soft: #ecfdf5;
+  --amber: #d97706;
+  --rose: #e11d48;
+  --rose-soft: #fff1f2;
+  --text-main: #0f172a;
+  --text-sub: #475569;
+  --text-muted: #64748b;
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  background: radial-gradient(circle at 50% 0%, #0f172a 0%, #030612 85%);
+  background: var(--bg-page);
   color: var(--text-main);
   min-height: 100vh;
   overflow-x: hidden;
-  padding-bottom: 50px;
+  padding-bottom: 48px;
   -webkit-font-smoothing: antialiased;
 }
 .app-container {
-  max-width: 540px;
+  max-width: 520px;
   margin: 0 auto;
-  padding: 12px 14px 40px;
+  padding: 12px 12px 36px;
 }
 .top-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  background: rgba(15, 23, 42, 0.8);
+  background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 16px;
-  backdrop-filter: blur(16px);
-  margin-bottom: 12px;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+  border-radius: 14px;
+  margin-bottom: 10px;
+  box-shadow: var(--shadow-sm);
 }
 .brand-badge {
   display: flex;
   align-items: center;
   gap: 8px;
   font-weight: 800;
-  font-size: 15px;
-  color: var(--cyan);
-  letter-spacing: 0.5px;
+  font-size: 14.5px;
+  color: var(--primary);
+  letter-spacing: 0.3px;
 }
 .live-dot {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   background: var(--emerald);
   border-radius: 50%;
-  box-shadow: 0 0 10px var(--emerald);
   display: inline-block;
-  animation: pulseLive 1.8s infinite;
 }
-@keyframes pulseLive { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(1.18); } }
 .version-chip {
-  background: rgba(56, 189, 248, 0.15);
-  color: var(--cyan);
-  border: 1px solid rgba(56, 189, 248, 0.3);
+  background: var(--primary-soft);
+  color: var(--primary);
+  border: 1px solid #bfdbfe;
   padding: 3px 9px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 700;
 }
 .hero-card {
-  background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.85));
+  background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 18px;
-  padding: 16px 14px;
-  margin-bottom: 14px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  border-radius: 16px;
+  padding: 14px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow-sm);
   text-align: center;
 }
 .hero-title {
-  font-size: 20px;
-  font-weight: 900;
-  color: #fff;
-  letter-spacing: 0.8px;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-main);
+  letter-spacing: 0.3px;
 }
 .hero-sub {
   font-size: 12px;
   color: var(--text-sub);
-  margin-top: 3px;
+  margin-top: 2px;
   font-weight: 600;
 }
 .telemetry-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  margin-top: 14px;
+  gap: 6px;
+  margin-top: 12px;
 }
 .t-card {
-  background: rgba(7, 11, 25, 0.7);
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  border-radius: 12px;
+  background: var(--card-alt);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
   padding: 8px 4px;
 }
 .t-val {
   font-size: 15px;
   font-weight: 800;
-  color: var(--cyan);
+  color: var(--primary);
 }
 .t-lbl {
   font-size: 10px;
@@ -19376,25 +19421,25 @@ body {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 6px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 .nav-pill {
-  padding: 10px 4px;
+  padding: 9px 4px;
   text-align: center;
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
   font-size: 12px;
   font-weight: 700;
   color: var(--text-sub);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
 }
 .nav-pill.active {
-  background: linear-gradient(135deg, rgba(2, 132, 199, 0.35), rgba(99, 102, 241, 0.35));
-  border-color: var(--cyan);
-  color: #fff;
-  box-shadow: 0 4px 14px var(--cyan-glow);
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
 }
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
@@ -19402,11 +19447,10 @@ body {
 .glass-card {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 16px;
+  border-radius: 14px;
   padding: 14px;
-  margin-bottom: 12px;
-  backdrop-filter: blur(14px);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  margin-bottom: 10px;
+  box-shadow: var(--shadow-sm);
 }
 .card-head {
   display: flex;
@@ -19415,179 +19459,180 @@ body {
   margin-bottom: 10px;
   font-size: 13px;
   font-weight: 800;
-  color: #fff;
+  color: var(--text-main);
 }
 .card-tag {
   font-size: 11px;
   font-weight: 700;
-  color: var(--cyan);
-  background: rgba(56, 189, 248, 0.14);
+  color: var(--primary);
+  background: var(--primary-soft);
+  border: 1px solid #bfdbfe;
   padding: 2px 8px;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 .field-label {
   display: block;
   font-size: 12px;
   font-weight: 700;
   color: var(--text-sub);
-  margin-top: 10px;
+  margin-top: 8px;
   margin-bottom: 4px;
 }
 .inp {
   width: 100%;
-  background: rgba(7, 11, 25, 0.85);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
   padding: 9px 11px;
-  color: #fff;
+  color: var(--text-main);
   font-size: 13px;
   outline: none;
-  transition: border-color 0.2s;
+  transition: border-color 0.15s;
 }
-.inp:focus { border-color: var(--cyan); }
-textarea.inp { resize: vertical; min-height: 80px; }
+.inp:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12); }
+textarea.inp { resize: vertical; min-height: 76px; }
 
 .fn-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 7px;
   margin-top: 10px;
 }
 .fn-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
-  border-radius: 11px;
-  border: 1px solid rgba(56, 189, 248, 0.25);
-  background: rgba(13, 20, 40, 0.8);
-  color: #fff;
+  padding: 10px 11px;
+  border-radius: 10px;
+  border: 1px solid var(--card-border);
+  background: var(--card-alt);
+  color: var(--text-main);
   font-weight: 700;
   font-size: 12.5px;
   cursor: pointer;
-  transition: all 0.18s;
+  transition: all 0.15s;
 }
-.fn-btn:hover { border-color: var(--cyan); transform: translateY(-1px); }
-.fn-btn.primary-fn { border-color: rgba(56, 189, 248, 0.4); background: rgba(2, 132, 199, 0.18); color: #e0f2fe; }
-.fn-btn.danger-fn { border-color: rgba(244, 63, 94, 0.4); background: rgba(244, 63, 94, 0.16); color: #ffe4e6; }
-.fn-btn.cxx-fn { border-color: rgba(168, 85, 247, 0.4); background: rgba(168, 85, 247, 0.2); color: #f3e8ff; }
+.fn-btn:hover { border-color: var(--primary); background: var(--primary-soft); }
+.fn-btn.primary-fn { border-color: #bfdbfe; background: var(--primary-soft); color: #1e40af; }
+.fn-btn.danger-fn { border-color: #fecdd3; background: var(--rose-soft); color: #be123c; }
+.fn-btn.cxx-fn { border-color: #ddd6fe; background: var(--purple-soft); color: #5b21b6; }
 .fn-btn.stop-fn {
   grid-column: 1 / -1;
-  background: linear-gradient(135deg, #e11d48, #be123c);
+  background: var(--rose);
+  color: #ffffff;
   border: none;
-  padding: 12px;
+  padding: 11px;
   font-size: 13px;
   font-weight: 800;
   justify-content: center;
   gap: 8px;
-  box-shadow: 0 4px 16px rgba(225, 29, 72, 0.35);
 }
+.fn-btn.stop-fn:hover { background: #be123c; }
 
 .upload-box {
-  border: 2px dashed rgba(56, 189, 248, 0.35);
-  border-radius: 14px;
-  padding: 18px 12px;
+  border: 2px dashed #93c5fd;
+  border-radius: 12px;
+  padding: 16px 12px;
   text-align: center;
   cursor: pointer;
-  background: rgba(7, 11, 25, 0.5);
-  transition: all 0.2s;
+  background: var(--primary-soft);
+  transition: all 0.15s;
   margin-top: 8px;
 }
-.upload-box:hover { border-color: var(--cyan); background: rgba(56, 189, 248, 0.08); }
-.upload-icon { font-size: 28px; margin-bottom: 4px; }
-.upload-text { font-size: 13px; font-weight: 700; color: #fff; }
-.upload-hint { font-size: 11px; color: var(--text-sub); margin-top: 3px; }
+.upload-box:hover { border-color: var(--primary); background: #dbeafe; }
+.upload-icon { font-size: 24px; margin-bottom: 4px; }
+.upload-text { font-size: 13px; font-weight: 700; color: var(--primary); }
+.upload-hint { font-size: 11px; color: var(--text-sub); margin-top: 2px; }
 
 .progress-wrap {
   display: none;
-  margin-top: 10px;
-  background: rgba(7, 11, 25, 0.8);
+  margin-top: 8px;
+  background: var(--card-alt);
   border-radius: 999px;
-  height: 8px;
+  height: 7px;
   overflow: hidden;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid var(--card-border);
 }
 .progress-bar {
   width: 0%;
   height: 100%;
-  background: linear-gradient(90deg, var(--cyan), var(--emerald));
+  background: var(--primary);
   transition: width 0.2s ease;
 }
 
 .active-files-bar {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-bottom: 10px;
+  gap: 7px;
+  margin-bottom: 8px;
 }
 .af-box {
-  background: rgba(7, 11, 25, 0.85);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 11px;
+  background: var(--card-alt);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
   padding: 8px 10px;
 }
 .af-box span { font-size: 10.5px; color: var(--text-sub); display: block; font-weight: 600; }
-.af-box b { font-size: 12.5px; color: #fff; word-break: break-all; }
+.af-box b { font-size: 12.5px; color: var(--primary); word-break: break-all; }
 
 .file-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 9px 10px;
-  background: rgba(7, 11, 25, 0.8);
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  border-radius: 11px;
+  padding: 8px 10px;
+  background: var(--card-alt);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
   margin-bottom: 6px;
   gap: 8px;
 }
-.file-name { font-weight: 700; font-size: 12.5px; color: #fff; word-break: break-all; }
+.file-name { font-weight: 700; font-size: 12.5px; color: var(--text-main); word-break: break-all; }
 .file-meta { font-size: 10.5px; color: var(--text-sub); margin-top: 2px; }
 .file-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .btn-tag {
   padding: 4px 8px;
-  border-radius: 8px;
+  border-radius: 7px;
   font-size: 11px;
   font-weight: 700;
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  background: transparent;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
   color: var(--text-sub);
   cursor: pointer;
 }
-.btn-tag.nhay { border-color: rgba(56, 189, 248, 0.4); background: rgba(56, 189, 248, 0.15); color: #bae6fd; }
-.btn-tag.ngon { border-color: rgba(168, 85, 247, 0.4); background: rgba(168, 85, 247, 0.15); color: #e9d5ff; }
-.btn-tag.del { border-color: rgba(244, 63, 94, 0.4); background: rgba(244, 63, 94, 0.15); color: #fecdd3; }
-.btn-tag.active-sel { background: var(--emerald); border-color: var(--emerald); color: #022c22; font-weight: 800; }
+.btn-tag.nhay { border-color: #93c5fd; background: var(--primary-soft); color: #1d4ed8; }
+.btn-tag.ngon { border-color: #c4b5fd; background: var(--purple-soft); color: #6d28d9; }
+.btn-tag.del { border-color: #fecdd3; background: var(--rose-soft); color: #e11d48; }
+.btn-tag.active-sel { background: var(--emerald); border-color: var(--emerald); color: #ffffff; font-weight: 800; }
 
-.cmd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.cmd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .cmd-card {
-  padding: 9px 10px;
-  border-radius: 11px;
-  background: rgba(7, 11, 25, 0.8);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--card-alt);
+  border: 1px solid var(--card-border);
   cursor: pointer;
-  transition: all 0.18s;
+  transition: all 0.15s;
 }
-.cmd-card:hover { border-color: var(--cyan); }
-.cmd-code { font-weight: 800; font-size: 12.5px; color: var(--cyan); }
+.cmd-card:hover { border-color: var(--primary); background: var(--primary-soft); }
+.cmd-code { font-weight: 800; font-size: 12.5px; color: var(--primary); }
 .cmd-desc { font-size: 10.5px; color: var(--text-sub); margin-top: 2px; }
 
 #toast {
   position: fixed;
-  bottom: 24px;
+  bottom: 20px;
   left: 50%;
   transform: translateX(-50%) translateY(90px);
-  background: rgba(15, 23, 42, 0.98);
-  border: 1px solid var(--cyan);
-  color: #fff;
-  padding: 10px 18px;
+  background: #0f172a;
+  color: #ffffff;
+  padding: 9px 16px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 700;
   z-index: 999;
-  transition: transform 0.25s ease;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  transition: transform 0.22s ease;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.25);
   white-space: nowrap;
-  max-width: 90vw;
+  max-width: 92vw;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -19597,13 +19642,13 @@ textarea.inp { resize: vertical; min-height: 80px; }
 <body>
 <div class="app-container">
   <div class="top-header">
-    <div class="brand-badge"><span class="live-dot"></span> ZENVYRE ULTRA</div>
+    <div class="brand-badge"><span class="live-dot"></span> ZENVYRE WHITE VIP</div>
     <div class="version-chip">{{ version }}</div>
   </div>
 
   <div class="hero-card">
-    <div class="hero-title">ZENVYRE CONTROL CENTER</div>
-    <div class="hero-sub">👑 {{ author }} • Siêu Hệ Thống Bot Zalo Đa Acc</div>
+    <div class="hero-title">TRUNG TÂM ĐIỀU KHIỂN ZENVYRE</div>
+    <div class="hero-sub">👑 {{ author }} • Giao Diện Trắng Tinh Gọn Siêu Nhẹ</div>
     <div class="telemetry-grid">
       <div class="t-card">
         <div class="t-val" id="st-accs">{{ live_accs }}</div>
@@ -19611,7 +19656,7 @@ textarea.inp { resize: vertical; min-height: 80px; }
       </div>
       <div class="t-card">
         <div class="t-val" id="st-tasks">{{ running_tasks }}</div>
-        <div class="t-lbl">Tác Vụ Chạy</div>
+        <div class="t-lbl">Đang Chạy</div>
       </div>
       <div class="t-card">
         <div class="t-val" id="st-watch">{{ watched_boxes }}</div>
@@ -19619,7 +19664,7 @@ textarea.inp { resize: vertical; min-height: 80px; }
       </div>
       <div class="t-card">
         <div class="t-val" id="st-ram">{{ ram_mb }}M</div>
-        <div class="t-lbl">RAM Server</div>
+        <div class="t-lbl">RAM Render</div>
       </div>
     </div>
   </div>
@@ -19636,7 +19681,7 @@ textarea.inp { resize: vertical; min-height: 80px; }
     <div class="glass-card">
       <div class="card-head">
         <span>🎯 ĐIỀU KHIỂN CHIẾN DỊCH TỨC THÌ</span>
-        <span class="card-tag">0.0s Bypass</span>
+        <span class="card-tag">0.0s Instant</span>
       </div>
       <label class="field-label">📦 Chọn Box Mục Tiêu:</label>
       <select id="launch-box-sel" class="inp">
@@ -19663,13 +19708,13 @@ textarea.inp { resize: vertical; min-height: 80px; }
             <option value="fire_gradient">🔥 Lửa Đỏ Cam</option>
             <option value="ocean_gradient">🌊 Đại Dương</option>
             <option value="fixed_red">🔴 Đỏ Cố Định</option>
-            <option value="none">⚪ Chữ Trắng Chuẩn</option>
+            <option value="none">⚪ Chữ Mặc Định</option>
           </select>
         </div>
       </div>
 
       <label class="field-label">✍️ Nội Dung Tùy Chọn (Để trống = chạy File .txt đang chọn):</label>
-      <input type="text" id="launch-custom-text" class="inp" placeholder="Nhập câu chửi / treo hoặc để trống chạy file">
+      <input type="text" id="launch-custom-text" class="inp" placeholder="Nhập câu nhây / ngôn hoặc để trống chạy file">
 
       <div class="fn-grid">
         <button class="fn-btn primary-fn" onclick="launchMiniCampaign('treo_nhay')">
@@ -19725,18 +19770,18 @@ textarea.inp { resize: vertical; min-height: 80px; }
     <div class="glass-card">
       <div class="card-head">
         <span>⬆️ TẢI FILE NHÂY / NGÔN DUNG LƯỢNG CAO</span>
-        <span class="card-tag">Hỗ trợ MB lớn</span>
+        <span class="card-tag">Đồng bộ .n / .g</span>
       </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px;">
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px; font-size:12.5px; font-weight:600;">
         <label><input type="radio" name="upload_target" value="nhay" checked> Gán làm File Nhây (.n)</label>
         <label><input type="radio" name="upload_target" value="ngon"> Gán làm File Ngôn (.g)</label>
       </div>
 
       <input type="file" id="file-uploader-input" accept=".txt" onchange="handleFileUpload(event)" style="display:none">
       <div class="upload-box" onclick="document.getElementById('file-uploader-input').click()">
-        <div class="upload-icon">☁️</div>
-        <div class="upload-text">Bấm vào đây để chọn File .txt từ máy</div>
-        <div class="upload-hint">Tự động nạp cực nhanh mọi file có dung lượng cao không lag</div>
+        <div class="upload-icon">📄</div>
+        <div class="upload-text">Bấm để chọn File .txt từ thiết bị</div>
+        <div class="upload-hint">Tự động liên kết thẳng vào lệnh .n, .g và .chonfile ngay lập tức</div>
       </div>
       <div class="progress-wrap" id="upload-progress-wrap">
         <div class="progress-bar" id="upload-progress-bar"></div>
@@ -19755,12 +19800,12 @@ textarea.inp { resize: vertical; min-height: 80px; }
 
     <div class="glass-card">
       <div class="card-head">
-        <span>✍️ TẠO FILE NHANH TẠI ĐÂY</span>
+        <span>✍️ TẠO FILE NHANH</span>
       </div>
       <input type="text" id="new-file-name" class="inp" placeholder="Tên file (VD: nhay_chien.txt hoặc ngon_vip.txt)">
       <textarea id="new-file-content" class="inp" style="margin-top:8px;" placeholder="Dán nội dung các câu nhây hoặc bài văn ngôn..."></textarea>
       <button class="fn-btn primary-fn" style="width:100%; margin-top:8px; justify-content:center;" onclick="saveNewTxtFile()">
-        💾 Lưu Vào Kho File & Sử Dụng Ngay
+        💾 Lưu Vào Kho File & Đồng Bộ Ngay
       </button>
     </div>
   </div>
@@ -19769,13 +19814,13 @@ textarea.inp { resize: vertical; min-height: 80px; }
   <div id="tab-cmds" class="tab-pane">
     <div class="glass-card">
       <div class="card-head">
-        <span>⚡ BẢNG LỆNH CHUẨN ZENVYRE (CHẠM ĐỂ COPY)</span>
-        <span class="card-tag">Phản hồi 0ms</span>
+        <span>⚡ BẢNG LỆNH CHUẨN ZENVYRE (CHẠM COPY)</span>
+        <span class="card-tag">Chỉ Admin & .cp</span>
       </div>
       <div class="cmd-grid">
         <div class="cmd-card" onclick="copyCmd('.menu')">
           <div class="cmd-code">.menu</div>
-          <div class="cmd-desc">Hiện menu gọn siêu tốc</div>
+          <div class="cmd-desc">Hiện menu gọn 0ms</div>
         </div>
         <div class="cmd-card" onclick="copyCmd('.n')">
           <div class="cmd-code">.n [nd]</div>
@@ -19787,7 +19832,7 @@ textarea.inp { resize: vertical; min-height: 80px; }
         </div>
         <div class="cmd-card" onclick="copyCmd('.sticker')">
           <div class="cmd-code">.sticker</div>
-          <div class="cmd-desc">Reply ảnh/video ≤3s tạo nhãn dán</div>
+          <div class="cmd-desc">Reply ảnh/video ≤3s tạo sticker</div>
         </div>
         <div class="cmd-card" onclick="copyCmd('.lagbox all')">
           <div class="cmd-code">.lagbox all</div>
@@ -19797,6 +19842,10 @@ textarea.inp { resize: vertical; min-height: 80px; }
           <div class="cmd-code">.lagbox mention</div>
           <div class="cmd-desc">Bắn payload C++ đơ app Zalo</div>
         </div>
+        <div class="cmd-card" onclick="copyCmd('.giaitan')">
+          <div class="cmd-code">.giaitan</div>
+          <div class="cmd-desc">Spam thông báo giải tán thật</div>
+        </div>
         <div class="cmd-card" onclick="copyCmd('.xoakey')">
           <div class="cmd-code">.xoakey</div>
           <div class="cmd-desc">Thu hồi tin người không có key</div>
@@ -19805,13 +19854,9 @@ textarea.inp { resize: vertical; min-height: 80px; }
           <div class="cmd-code">.kickall</div>
           <div class="cmd-desc">Kick toàn bộ thành viên box</div>
         </div>
-        <div class="cmd-card" onclick="copyCmd('.anall')">
-          <div class="cmd-code">.anall</div>
-          <div class="cmd-desc">Nhây ẩn tag toàn bộ thành viên</div>
-        </div>
-        <div class="cmd-card" onclick="copyCmd('.t')">
-          <div class="cmd-code">.t</div>
-          <div class="cmd-desc">Dừng box hiện tại (.ta = tất cả)</div>
+        <div class="cmd-card" onclick="copyCmd('.cp')">
+          <div class="cmd-code">.cp @Tên</div>
+          <div class="cmd-desc">Cấp quyền dùng lệnh (.xq = thu hồi)</div>
         </div>
       </div>
     </div>
@@ -19822,10 +19867,10 @@ textarea.inp { resize: vertical; min-height: 80px; }
     <div class="glass-card">
       <div class="card-head">
         <span>🧹 TỐI ƯU RENDER FREE & RAM SERVER</span>
-        <span class="card-tag">glibc malloc_trim</span>
+        <span class="card-tag">Siêu Nhẹ</span>
       </div>
       <p style="font-size:12px; color:var(--text-sub); margin-bottom:10px;">
-        Giải phóng ngay lập tức các trang bộ nhớ RAM thừa và xóa file sticker tạm để server Render Free không bao giờ bị vượt GB.
+        Giải phóng ngay lập tức các trang bộ nhớ RAM thừa và xóa file sticker tạm để server Render Free luôn hoạt động mượt mà.
       </p>
       <div class="fn-grid">
         <button class="fn-btn primary-fn" onclick="triggerQuick('clean_ram')">
@@ -19862,7 +19907,7 @@ function showToast(msg) {
   t.innerText = msg;
   t.classList.add('show');
   clearTimeout(window._toastT);
-  window._toastT = setTimeout(() => t.classList.remove('show'), 2600);
+  window._toastT = setTimeout(() => t.classList.remove('show'), 2500);
 }
 
 function switchTab(tabKey, el) {
@@ -19907,7 +19952,7 @@ async function loadMiniAppFiles() {
       div.innerHTML = `
         <div style="flex:1; min-width:0;">
           <div class="file-name">${f.filename}</div>
-          <div class="file-meta">📊 ${f.lines.toLocaleString()} dòng • 💾 ${f.size_kb} KB ${isNhay ? ' • <span style="color:var(--cyan)">🔥 Nhây</span>' : ''} ${isNgon ? ' • <span style="color:var(--purple)">🌈 Ngôn</span>' : ''}</div>
+          <div class="file-meta">📊 ${f.lines.toLocaleString()} dòng • 💾 ${f.size_kb} KB ${isNhay ? ' • <b style="color:var(--primary)">🔥 Nhây</b>' : ''} ${isNgon ? ' • <b style="color:var(--purple)">🌈 Ngôn</b>' : ''}</div>
         </div>
         <div class="file-actions">
           <button class="btn-tag nhay ${isNhay ? 'active-sel' : ''}" onclick="selectFile('${f.filename}', 'nhay')">🔥 Nhây</button>
@@ -20375,6 +20420,23 @@ def api_miniapp_add_file():
         f.write(content.strip() + "\n")
     UltraFileLoader.invalidate(fp)
     info = UltraFileLoader.load(fp)
+    f_type_add = "ngon" if "ngon" in raw_name.lower() else "nhay"
+    try:
+        conn_a = db()
+        ex_a = conn_a.execute("SELECT id FROM files WHERE lower(filename)=?", (raw_name.lower(),)).fetchone()
+        if ex_a:
+            conn_a.execute(
+                "UPDATE files SET filepath=?, lines_count=?, created_at=?, file_type=? WHERE id=?",
+                (fp, info.get("line_count", 0), time.time(), f_type_add, ex_a["id"])
+            )
+        else:
+            conn_a.execute(
+                "INSERT INTO files (filename, filepath, lines_count, created_at, file_type) VALUES (?, ?, ?, ?, ?)",
+                (raw_name, fp, info.get("line_count", 0), time.time(), f_type_add)
+            )
+        conn_a.commit()
+    except Exception:
+        pass
     return jsonify({
         "ok": True,
         "filename": raw_name,
@@ -20424,6 +20486,23 @@ def api_miniapp_upload_file():
             SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = filename
             SYSTEM_RUNTIME_CONFIG["selected_file"] = filename
             SYSTEM_RUNTIME_CONFIG["selected_nhay_by_acc"].clear()
+
+    try:
+        conn_f = db()
+        existing_f = conn_f.execute("SELECT id FROM files WHERE lower(filename)=?", (filename.lower(),)).fetchone()
+        if existing_f:
+            conn_f.execute(
+                "UPDATE files SET filepath=?, lines_count=?, created_at=?, file_type=? WHERE id=?",
+                (dest_path, line_count, time.time(), target_type, existing_f["id"])
+            )
+        else:
+            conn_f.execute(
+                "INSERT INTO files (filename, filepath, lines_count, created_at, file_type) VALUES (?, ?, ?, ?, ?)",
+                (filename, dest_path, line_count, time.time(), target_type)
+            )
+        conn_f.commit()
+    except Exception:
+        pass
 
     UltraFileLoader.invalidate(dest_path)
     return jsonify({
@@ -20577,21 +20656,21 @@ LOGIN_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{{ custom_title or 'Đăng Nhập Hệ Thống Điều Phối Đa Tài Khoản 4APP VIP' }}</title>
 <style>
-:root{--bg:#0b0f19;--card:#131b2e;--border:#26334d;--text:#f0f6fc;--muted:#94a3b8;--accent:#3b82f6;--success:#10b981;--danger:#ef4444}
+:root{--bg:#f8fafc;--card:#ffffff;--border:#e2e8f0;--text:#0f172a;--muted:#475569;--accent:#2563eb;--success:#059669;--danger:#e11d48}
 *{box-sizing:border-box}
-body{margin:0;background:radial-gradient(circle at top,#172554 0%,#0b0f19 65%);color:var(--text);font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
-.login-card{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:36px 32px;width:100%;max-width:440px;box-shadow:0 20px 50px rgba(0,0,0,0.55)}
-.badge{display:inline-flex;align-items:center;gap:6px;background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.35);padding:6px 14px;border-radius:999px;font-size:13px;font-weight:700;margin-bottom:16px}
-h1{font-size:24px;font-weight:800;margin:0 0 8px;color:#60a5fa;letter-spacing:-0.3px}
-p.sub{font-size:14.5px;color:var(--muted);line-height:1.55;margin:0 0 24px}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.login-card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:34px 30px;width:100%;max-width:440px;box-shadow:0 10px 30px rgba(15,23,42,0.07)}
+.badge{display:inline-flex;align-items:center;gap:6px;background:#ecfdf5;color:var(--success);border:1px solid #a7f3d0;padding:6px 14px;border-radius:999px;font-size:12.5px;font-weight:700;margin-bottom:16px}
+h1{font-size:22px;font-weight:800;margin:0 0 8px;color:var(--accent);letter-spacing:-0.3px}
+p.sub{font-size:14px;color:var(--muted);line-height:1.55;margin:0 0 22px}
 .form-group{margin-bottom:18px;text-align:left}
-label{display:block;font-size:14px;font-weight:600;margin-bottom:8px;color:#cbd5e1}
-input[type="password"]{width:100%;padding:13px 16px;font-size:15px;border-radius:12px;border:1px solid var(--border);background:#090d16;color:var(--text);outline:none;transition:border-color 0.2s}
-input[type="password"]:focus{border-color:var(--accent)}
-.btn{width:100%;padding:13px 18px;font-size:15px;font-weight:700;border:none;border-radius:12px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;cursor:pointer;transition:transform 0.15s,opacity 0.15s}
-.btn:hover{opacity:0.95;transform:translateY(-1px)}
-.err{background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.4);color:#fca5a5;padding:12px 14px;border-radius:12px;font-size:14px;margin-bottom:16px;font-weight:600}
-.quick-link{display:inline-block;margin-top:16px;font-size:13.5px;color:#93c5fd;text-decoration:none}
+label{display:block;font-size:13.5px;font-weight:700;margin-bottom:8px;color:var(--text)}
+input[type="password"]{width:100%;padding:12px 15px;font-size:14.5px;border-radius:10px;border:1px solid #cbd5e1;background:#ffffff;color:var(--text);outline:none;transition:border-color 0.2s}
+input[type="password"]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,0.12)}
+.btn{width:100%;padding:12px 18px;font-size:14.5px;font-weight:700;border:none;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer;transition:background 0.15s}
+.btn:hover{background:#1d4ed8}
+.err{background:#fff1f2;border:1px solid #fecdd3;color:var(--danger);padding:12px 14px;border-radius:10px;font-size:13.5px;margin-bottom:16px;font-weight:600}
+.quick-link{display:inline-block;margin-top:16px;font-size:13.5px;color:var(--accent);font-weight:600;text-decoration:none}
 </style>
 </head>
 <body>
@@ -20622,33 +20701,34 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <title>{{ custom_title or 'BẢNG ĐIỀU KHIỂN ĐA TÀI KHOẢN 4APP VIP 🇻🇳' }}</title>
 <style>
 :root{
-  --bg:#0b0f19;
-  --panel:#131b2e;
-  --panel-alt:#182238;
-  --border:#283655;
-  --text:#f8fafc;
-  --text-soft:#cbd5e1;
-  --muted:#94a3b8;
-  --primary:#3b82f6;
-  --primary-hover:#2563eb;
-  --success:#10b981;
-  --warning:#f59e0b;
-  --danger:#ef4444;
-  --purple:#8b5cf6;
+  --bg:#f8fafc;
+  --panel:#ffffff;
+  --panel-alt:#f1f5f9;
+  --border:#e2e8f0;
+  --text:#0f172a;
+  --text-soft:#334155;
+  --muted:#64748b;
+  --primary:#2563eb;
+  --primary-hover:#1d4ed8;
+  --success:#059669;
+  --warning:#d97706;
+  --danger:#e11d48;
+  --purple:#7c3aed;
 }
 *{box-sizing:border-box}
 body{
   margin:0;
   background:var(--bg);
   color:var(--text);
-  font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-  font-size:15px;
-  line-height:1.55;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  font-size:14.5px;
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
 }
 .topbar{
-  background:rgba(19,27,46,0.95);
+  background:rgba(255,255,255,0.96);
   border-bottom:1px solid var(--border);
-  padding:14px 24px;
+  padding:12px 22px;
   position:sticky;
   top:0;
   z-index:100;
@@ -20656,42 +20736,42 @@ body{
   flex-wrap:wrap;
   align-items:center;
   justify-content:space-between;
-  gap:14px;
-  backdrop-filter:blur(10px);
+  gap:12px;
+  box-shadow:0 1px 3px rgba(15,23,42,0.04);
 }
 .brand{display:flex;align-items:center;gap:12px}
 .brand-badge{
-  background:linear-gradient(135deg,#2563eb,#7c3aed);
-  color:#fff;
+  background:var(--primary);
+  color:#ffffff;
   font-weight:800;
-  font-size:16px;
-  padding:8px 14px;
-  border-radius:12px;
-  letter-spacing:0.5px;
+  font-size:14.5px;
+  padding:7px 13px;
+  border-radius:10px;
+  letter-spacing:0.3px;
 }
-.brand-title h1{font-size:18px;font-weight:800;margin:0;color:#fff}
-.brand-title p{font-size:13px;color:var(--muted);margin:2px 0 0}
-.stats-pills{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.brand-title h1{font-size:17px;font-weight:800;margin:0;color:var(--text)}
+.brand-title p{font-size:12.5px;color:var(--muted);margin:2px 0 0}
+.stats-pills{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .pill{
   background:var(--panel-alt);
   border:1px solid var(--border);
-  padding:7px 14px;
+  padding:6px 13px;
   border-radius:999px;
-  font-size:13.5px;
+  font-size:13px;
   font-weight:600;
   color:var(--text-soft);
 }
-.pill b{color:#60a5fa}
-.pill.ok b{color:#34d399}
-.container{max-width:1440px;margin:0 auto;padding:22px}
-.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}
+.pill b{color:var(--primary)}
+.pill.ok b{color:var(--success)}
+.container{max-width:1400px;margin:0 auto;padding:18px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
 @media(max-width:1024px){.grid-2{grid-template-columns:1fr}}
 .card{
   background:var(--panel);
   border:1px solid var(--border);
-  border-radius:16px;
-  padding:20px 22px;
-  box-shadow:0 10px 28px rgba(0,0,0,0.35);
+  border-radius:14px;
+  padding:18px 20px;
+  box-shadow:0 2px 8px rgba(15,23,42,0.04);
 }
 .card-header{
   display:flex;
@@ -20699,26 +20779,26 @@ body{
   align-items:center;
   justify-content:space-between;
   gap:10px;
-  margin-bottom:16px;
-  padding-bottom:12px;
+  margin-bottom:14px;
+  padding-bottom:10px;
   border-bottom:1px solid var(--border);
 }
 .card-header h2{
-  font-size:17px;
+  font-size:16px;
   font-weight:800;
   margin:0;
-  color:#93c5fd;
+  color:var(--primary);
   display:flex;
   align-items:center;
   gap:8px;
 }
-.btn-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn-row{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
 button,.btn{
   font-family:inherit;
-  font-size:14px;
+  font-size:13.5px;
   font-weight:700;
-  padding:9px 15px;
-  border-radius:10px;
+  padding:8px 14px;
+  border-radius:9px;
   border:1px solid transparent;
   cursor:pointer;
   transition:all 0.15s;
@@ -20728,87 +20808,89 @@ button,.btn{
   gap:6px;
   text-decoration:none;
 }
-.btn-primary{background:var(--primary);color:#fff}
+.btn-primary{background:var(--primary);color:#ffffff}
 .btn-primary:hover{background:var(--primary-hover)}
-.btn-success{background:var(--success);color:#052e16}
-.btn-success:hover{filter:brightness(1.08)}
-.btn-danger{background:var(--danger);color:#fff}
-.btn-danger:hover{filter:brightness(1.08)}
-.btn-warning{background:var(--warning);color:#1e1b4b}
-.btn-outline{background:var(--panel-alt);color:var(--text);border-color:var(--border)}
-.btn-outline:hover{border-color:#60a5fa;color:#60a5fa}
-.btn-sm{padding:6px 11px;font-size:13px;border-radius:8px}
+.btn-success{background:var(--success);color:#ffffff}
+.btn-success:hover{filter:brightness(1.06)}
+.btn-danger{background:var(--danger);color:#ffffff}
+.btn-danger:hover{filter:brightness(1.06)}
+.btn-warning{background:var(--warning);color:#ffffff}
+.btn-outline{background:#ffffff;color:var(--text-soft);border-color:#cbd5e1}
+.btn-outline:hover{border-color:var(--primary);color:var(--primary);background:#eff6ff}
+.btn-sm{padding:6px 10px;font-size:12.5px;border-radius:8px}
 input[type="text"],input[type="number"],select,textarea{
   width:100%;
-  padding:11px 14px;
-  font-size:14.5px;
+  padding:10px 13px;
+  font-size:14px;
   font-family:inherit;
   color:var(--text);
-  background:#090d16;
-  border:1px solid var(--border);
-  border-radius:10px;
+  background:#ffffff;
+  border:1px solid #cbd5e1;
+  border-radius:9px;
   outline:none;
 }
-input:focus,select:focus,textarea:focus{border-color:var(--primary)}
-label.field-lbl{display:block;font-size:13.5px;font-weight:700;color:var(--text-soft);margin:10px 0 6px}
+input:focus,select:focus,textarea:focus{border-color:var(--primary);box-shadow:0 0 0 2px rgba(37,99,235,0.12)}
+label.field-lbl{display:block;font-size:13px;font-weight:700;color:var(--text-soft);margin:9px 0 5px}
 .scroll-list{
-  max-height:310px;
+  max-height:300px;
   overflow-y:auto;
   border:1px solid var(--border);
-  border-radius:12px;
-  background:#090d16;
-  padding:8px;
+  border-radius:10px;
+  background:var(--panel-alt);
+  padding:6px;
 }
 .list-item{
   display:flex;
   align-items:center;
   justify-content:space-between;
   gap:10px;
-  padding:10px 12px;
-  border-bottom:1px solid rgba(40,54,85,0.55);
+  padding:9px 11px;
+  background:#ffffff;
+  border:1px solid var(--border);
+  margin-bottom:5px;
   border-radius:8px;
-  font-size:14px;
+  font-size:13.5px;
 }
-.list-item:last-child{border-bottom:none}
-.list-item:hover{background:rgba(59,130,246,0.08)}
+.list-item:last-child{margin-bottom:0}
+.list-item:hover{border-color:#1d4ed8;background:#eff6ff}
 .item-left{display:flex;align-items:center;gap:10px;min-width:0}
-.item-title{font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.item-sub{font-size:12.5px;color:var(--muted)}
+.item-title{font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item-sub{font-size:12px;color:var(--muted)}
 .tag-plat{
-  font-size:11.5px;
+  font-size:11px;
   font-weight:800;
-  padding:3px 8px;
+  padding:3px 7px;
   border-radius:6px;
   text-transform:uppercase;
 }
-.tag-zalo{background:rgba(59,130,246,0.2);color:#60a5fa;border:1px solid rgba(59,130,246,0.4)}
-.tag-discord{background:rgba(139,92,246,0.2);color:#c4b5fd;border:1px solid rgba(139,92,246,0.4)}
-.tag-messenger{background:rgba(14,165,233,0.2);color:#7dd3fc;border:1px solid rgba(14,165,233,0.4)}
+.tag-zalo{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+.tag-discord{background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe}
+.tag-messenger{background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd}
 .toast-bar{
   display:none;
-  margin-bottom:18px;
-  padding:13px 18px;
-  border-radius:12px;
-  background:rgba(16,185,129,0.18);
-  border:1px solid rgba(16,185,129,0.45);
-  color:#6ee7b7;
+  margin-bottom:16px;
+  padding:12px 16px;
+  border-radius:10px;
+  background:#ecfdf5;
+  border:1px solid #a7f3d0;
+  color:#047857;
   font-weight:700;
-  font-size:14.5px;
+  font-size:14px;
 }
 .table-wrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{padding:11px 12px;text-align:left;border-bottom:1px solid var(--border)}
-th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--primary);font-weight:800;background:var(--panel-alt)}
 .qr-box{
   display:none;
-  margin-top:14px;
-  padding:16px;
-  background:#090d16;
-  border:1px dashed #60a5fa;
-  border-radius:14px;
+  margin-top:12px;
+  padding:14px;
+  background:var(--panel-alt);
+  border:1px dashed var(--primary);
+  border-radius:12px;
   text-align:center;
 }
-.qr-box img{max-width:240px;border-radius:12px;border:6px solid #fff;margin:10px auto;display:block}
+.qr-box img{max-width:220px;border-radius:10px;border:4px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin:8px auto;display:block}
 </style>
 </head>
 <body>
@@ -20858,7 +20940,7 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
 
       <!-- Khung hiển thị QR Zalo PC trực tiếp -->
       <div id="qr-modal" class="qr-box">
-        <div style="font-weight:800;color:#60a5fa" id="qr-status-txt">⏳ Đang khởi tạo mã QR Máy Tính Singapore...</div>
+        <div style="font-weight:800;color:#2563eb" id="qr-status-txt">⏳ Đang khởi tạo mã QR Máy Tính Singapore...</div>
         <img id="qr-img" src="" alt="Zalo QR" style="display:none">
         <div style="font-size:13px;color:var(--muted)">Mở Zalo trên điện thoại ➔ Quét mã QR ➔ Tự động nạp vào danh sách Acc!</div>
       </div>
@@ -20890,9 +20972,9 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
 
       <!-- Khung 1: Nạp Nhanh Cookie Zalo (Tự nhận IMEI + Khóa Phiên + Bật Lệnh Độc Lập Ngay) -->
       <div style="margin-top:14px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(59,130,246,0.45)">
-        <div style="font-weight:800;color:#60a5fa;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:800;color:#2563eb;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
           <span>🍪 1. Nạp Nhanh Cookie Zalo (Tự Nhận IMEI & Ăn Lệnh .menu Ngay)</span>
-          <span style="font-size:12px;color:#34d399">Cô lập riêng từng Cookie</span>
+          <span style="font-size:12px;color:#059669">Cô lập riêng từng Cookie</span>
         </div>
         <div class="grid-2" style="gap:8px;margin-bottom:8px">
           <input type="text" id="fast-zalo-name" placeholder="Tên gợi nhớ (VD: Acc Zalo Chính)">
@@ -20908,7 +20990,7 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
       <div style="margin-top:10px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(14,165,233,0.45)">
         <div style="font-weight:800;color:#38bdf8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
           <span>💻 2. Nạp Cookie Facebook (Lấy Máy Tính Thông Báo Vào FB Chống Quét)</span>
-          <span style="font-size:12px;color:#34d399">Anti-Reg & Anti-Hack Active</span>
+          <span style="font-size:12px;color:#059669">Anti-Reg & Anti-Hack Active</span>
         </div>
         <div style="display:flex;gap:8px">
           <input type="text" id="fast-fb-name" placeholder="Tên FB (Tùy chọn)" style="max-width:165px">
@@ -20919,9 +21001,9 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
 
       <!-- Khung 3: Đúc Token & Anti-Reg Acc Discord (Chống Báo Tài Khoản Bị Hack / Đặt Lại Mật Khẩu) -->
       <div style="margin-top:10px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(139,92,246,0.45)">
-        <div style="font-weight:800;color:#c4b5fd;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:800;color:#6d28d9;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
           <span>🛡️ 3. Đúc Token & Anti-Reg Acc Discord (Chống Báo Hack / Reset Key)</span>
-          <span style="font-size:12px;color:#34d399">Chrome 131 PC Vault</span>
+          <span style="font-size:12px;color:#059669">Chrome 131 PC Vault</span>
         </div>
         <div style="display:flex;gap:8px">
           <input type="text" id="fast-dc-name" placeholder="Tên Discord" style="max-width:150px">
@@ -20990,7 +21072,7 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
     <div class="card">
       <div class="card-header">
         <h2>🚀 3. Khởi Chạy Chiến Dịch Đa Tài Khoản</h2>
-        <span style="font-size:13px;color:#34d399;font-weight:700">Chạy mượt nhiều Acc cùng lúc 0ms</span>
+        <span style="font-size:13px;color:#059669;font-weight:700">Chạy mượt nhiều Acc cùng lúc 0ms</span>
       </div>
 
       <div class="grid-2" style="gap:12px;margin-bottom:8px">
@@ -21092,12 +21174,12 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
         <button class="btn btn-outline" onclick="searchZaloStickersUI()" style="white-space:nowrap">🔍 Tìm API Sticker</button>
         <button class="btn btn-success" onclick="createAndSendCustomSticker()" style="white-space:nowrap">🎨 Bắn Nhãn Dán</button>
       </div>
-      <div id="sticker-search-results" style="display:none;margin-bottom:12px;padding:10px;background:#090d16;border:1px solid var(--border);border-radius:10px;max-height:150px;overflow-y:auto"></div>
+      <div id="sticker-search-results" style="display:none;margin-bottom:12px;padding:10px;background:#f8fafc;border:1px solid var(--border);border-radius:10px;max-height:150px;overflow-y:auto"></div>
 
       <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:8px">
-        <div style="font-weight:800;color:#93c5fd;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:800;color:#1d4ed8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
           <span>📂 Quản Lý Kho File (.txt), Test Lệnh .menu & 12 Nguồn Fake Typing</span>
-          <span style="font-size:12px;color:#34d399">Nhạy 100% Zalo • Mess • Discord</span>
+          <span style="font-size:12px;color:#059669">Nhạy 100% Zalo • Mess • Discord</span>
         </div>
         <div class="btn-row" style="margin-bottom:8px">
           <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.menu')">📋 Bắn .menu Vào Box</button>
@@ -21111,7 +21193,7 @@ th{color:#93c5fd;font-weight:800;background:var(--panel-alt)}
           <button class="btn btn-primary" onclick="dispatchWebCommand()" style="white-space:nowrap">⚡ Gửi Lệnh</button>
         </div>
         <details>
-          <summary style="cursor:pointer;font-weight:700;color:#34d399">➕ Tạo / Tải Lên File Kịch Bản (.txt) Mới</summary>
+          <summary style="cursor:pointer;font-weight:700;color:#059669">➕ Tạo / Tải Lên File Kịch Bản (.txt) Mới</summary>
           <form method="POST" action="/file/create" style="margin-top:8px;background:var(--panel-alt);padding:12px;border-radius:10px">
             <input type="text" name="filename" placeholder="Tên file (VD: nhay_vip.txt)" required style="margin-bottom:8px">
             <textarea name="content" rows="3" placeholder="Mỗi câu 1 dòng..." required style="margin-bottom:8px"></textarea>
@@ -21199,7 +21281,7 @@ function selectTopBoxes(n){
 
 async function scanBoxes(plat='zalo', force=false){
   const cont = document.getElementById('box-list-container');
-  cont.innerHTML = '<div style="padding:18px;text-align:center;color:#60a5fa">⏳ Đang quét danh sách Box ' + plat.toUpperCase() + '...</div>';
+  cont.innerHTML = '<div style="padding:18px;text-align:center;color:#2563eb">⏳ Đang quét danh sách Box ' + plat.toUpperCase() + '...</div>';
   try{
     let url = '/api/all_groups' + (force ? '?refresh=1' : '');
     if(plat === 'discord') url = '/api/discord_channels' + (force ? '?refresh=1' : '');
@@ -21378,7 +21460,7 @@ async function searchZaloStickersUI(){
   const q = (document.getElementById('sticker-input').value || '').trim();
   const box = document.getElementById('sticker-search-results');
   box.style.display = 'block';
-  box.innerHTML = '<span style="color:#60a5fa;font-size:13px">⏳ Đang tìm kiếm trên API Sticker Zalo...</span>';
+  box.innerHTML = '<span style="color:#2563eb;font-size:13px">⏳ Đang tìm kiếm trên API Sticker Zalo...</span>';
   try{
     const r = await fetch('/api/zalo/search_stickers?q=' + encodeURIComponent(q));
     const d = await r.json();
@@ -21387,7 +21469,7 @@ async function searchZaloStickersUI(){
       box.innerHTML = '<span style="color:var(--muted);font-size:13px">Không tìm thấy mẫu có sẵn — Bấm [🎨 Bắn Nhãn Dán] để cắt khung tạo Sticker mới từ chữ/ảnh này!</span>';
       return;
     }
-    box.innerHTML = '<div style="font-size:12.5px;color:#93c5fd;margin-bottom:6px;font-weight:700">Chạm vào mẫu bên dưới để bắn thẳng Nhãn Dán vào Box đang chọn:</div><div class="btn-row">' +
+    box.innerHTML = '<div style="font-size:12.5px;color:#1d4ed8;margin-bottom:6px;font-weight:700">Chạm vào mẫu bên dưới để bắn thẳng Nhãn Dán vào Box đang chọn:</div><div class="btn-row">' +
       list.map(s => `<button class="btn btn-outline btn-sm" onclick="fireNativeSticker('${s.id}')">🎯 ${s.name} (#${s.id})</button>`).join('') +
       '</div>';
   }catch(e){
@@ -21542,7 +21624,7 @@ async function refreshStatus(){
         <td><b>${t.mode}</b></td>
         <td>${t.acc_count} Acc</td>
         <td>${t.targets_count} Box</td>
-        <td><b style="color:#34d399">${t.sent}</b></td>
+        <td><b style="color:#059669">${t.sent}</b></td>
         <td>${t.delay}s</td>
         <td><span style="color:${t.status==='Đang chạy'?'#34d399':'#94a3b8'};font-weight:700">${t.status}</span></td>
         <td>${t.status==='Đang chạy' ? `<button class="btn btn-danger btn-sm" onclick="stopSingleTask('${t.id}')">🛑 Dừng</button>` : '-'}</td>
@@ -22433,7 +22515,7 @@ def api_messenger_verify_cookie():
             ).fetchone()
             if existing:
                 conn.execute(
-                    "UPDATE accounts SET name=?, cookies=?, pc_name=?, user_agent=?, chat_cmd_enabled=1, allow_all_cmd=1, enabled=1 WHERE id=?",
+                    "UPDATE accounts SET name=?, cookies=?, pc_name=?, user_agent=?, chat_cmd_enabled=1, allow_all_cmd=0, enabled=1 WHERE id=?",
                     (acc_name, json.dumps(m_bot.cookies_dict, ensure_ascii=False), pc_info["pc_name"], pc_info["ua"], existing["id"])
                 )
             else:
