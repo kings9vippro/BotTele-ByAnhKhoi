@@ -15617,7 +15617,7 @@ def parse_and_execute_inchat_command(
             ".xq @Tên : Xóa quyền điều khiển",
             ".status : Trạng thái tài nguyên và RAM"
         ]
-        help_txt = "\n".join(help_lines)
+        help_txt = chr(10).join(help_lines)
         _send_reply(help_txt, broadcast_all_accs=False, reply_color_mode="none")
         log_system_command(acc_id, thread_id, sender_id, text, f"Hiển thị .menu GLAZE ({platform})")
         return True
@@ -15642,39 +15642,16 @@ def parse_and_execute_inchat_command(
                         "elapsed": elapsed
                     })
         if not active_list:
-            _send_reply("⚡ GLAZE // Hiện tại KHÔNG CÓ tác vụ nào đang chạy.\n• Sử dụng .n hoặc .g để khởi chạy tác vụ mới.", broadcast_all_accs=False, reply_color_mode="none")
+            _send_reply("GLAZE: Hiện tại KHÔNG CÓ tác vụ nào đang chạy.\n• Sử dụng .n hoặc .g để khởi chạy tác vụ mới.", broadcast_all_accs=False, reply_color_mode="none")
         else:
-            lines = [f"⚡ GLAZE // BẢNG TÁC VỤ ĐANG CHẠY ({len(active_list)} active):"]
+            lines = [f"GLAZE: BẢNG TÁC VỤ ĐANG CHẠY ({len(active_list)} active):"]
             for i, it in enumerate(active_list[:12], 1):
                 m_txt = it['elapsed'] // 60
                 s_txt = it['elapsed'] % 60
                 lines.append(f"#{i} [{it['tid']}] {it['mode']} | Box: {it['box_lbl']} | Đã gửi: {it['sent']} tin | Delay: {it['delay']}s | {m_txt}m{s_txt}s")
             lines.append("\n🛑 Dừng: Gõ .t (dừng box này) hoặc .ta (dừng tất cả)")
-            _send_reply("\n".join(lines), broadcast_all_accs=False, reply_color_mode="none")
+            _send_reply(chr(10).join(lines), broadcast_all_accs=False, reply_color_mode="none")
         log_system_command(acc_id, thread_id, sender_id, text, f"Xem .running ({len(active_list)} tasks)")
-        return True
-
-    if cmd_token in ("stktxt", "textstk", "stktext"):
-        txt_stk = arg_body.strip()
-        if not txt_stk:
-            _send_reply("⚡ Cú pháp: .stktxt <nội dung chữ>", broadcast_all_accs=False, reply_color_mode="none")
-            return True
-        def _bg_gen_txt_sticker():
-            try:
-                res_st = ZaloStickerMakerEngine.create_text_sticker_512(txt_stk)
-                if res_st and res_st.get("ok"):
-                    w_bytes = res_st.get("webp_bytes") or res_st.get("png_bytes")
-                    if platform == "zalo" and zalo_client:
-                        zalo_client.send_custom_sticker_media(
-                            thread_id, w_bytes, filename="sticker.webp", is_group=is_group,
-                            caption=txt_stk, webp_bytes=w_bytes
-                        )
-                else:
-                    _send_reply("❌ Không thể tạo sticker chữ.", broadcast_all_accs=False, reply_color_mode="none")
-            except Exception as e:
-                pass
-        _PRIORITY_CMD_EXECUTOR.submit(_bg_gen_txt_sticker)
-        log_system_command(acc_id, thread_id, sender_id, text, f"Tạo sticker chữ (.stktxt: {txt_stk[:20]})")
         return True
 
     if cmd_token in ("prx", "proxy"):
@@ -19492,6 +19469,10 @@ _ensure_zenvyre_banner_files()
 
 @app.route("/api/glaze_logo.png")
 @app.route("/glaze_logo.png")
+@app.route("/api/glaze_logo.png")
+@app.route("/glaze_logo.png")
+@app.route("/api/glaze_logo.png")
+@app.route("/glaze_logo.png")
 @app.route("/api/zenvyre_logo.png")
 @app.route("/api/menu_banner.png")
 @app.route("/zenvyre_logo.png")
@@ -20742,958 +20723,10 @@ document.addEventListener('DOMContentLoaded', () => {
 </body>
 </html>
 """
+ZENVYRE_MINIAPP_HTML = GLAZE_MINIAPP_HTML
 
-DASHBOARD_HTML = r"""<!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>{{ custom_title or 'BẢNG ĐIỀU KHIỂN ĐA TÀI KHOẢN 4APP VIP 🇻🇳' }}</title>
-<style>
-:root{
-  --bg:#f8fafc;
-  --panel:#ffffff;
-  --panel-alt:#f1f5f9;
-  --border:#e2e8f0;
-  --text:#0f172a;
-  --text-soft:#334155;
-  --muted:#64748b;
-  --primary:#2563eb;
-  --primary-hover:#1d4ed8;
-  --success:#059669;
-  --warning:#d97706;
-  --danger:#e11d48;
-  --purple:#7c3aed;
-}
-*{box-sizing:border-box}
-body{
-  margin:0;
-  background:var(--bg);
-  color:var(--text);
-  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-  font-size:14.5px;
-  line-height:1.5;
-  -webkit-font-smoothing:antialiased;
-}
-.topbar{
-  background:rgba(255,255,255,0.96);
-  border-bottom:1px solid var(--border);
-  padding:12px 22px;
-  position:sticky;
-  top:0;
-  z-index:100;
-  display:flex;
-  flex-wrap:wrap;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-  box-shadow:0 1px 3px rgba(15,23,42,0.04);
-}
-.brand{display:flex;align-items:center;gap:12px}
-.brand-badge{
-  background:var(--primary);
-  color:#ffffff;
-  font-weight:800;
-  font-size:14.5px;
-  padding:7px 13px;
-  border-radius:10px;
-  letter-spacing:0.3px;
-}
-.brand-title h1{font-size:17px;font-weight:800;margin:0;color:var(--text)}
-.brand-title p{font-size:12.5px;color:var(--muted);margin:2px 0 0}
-.stats-pills{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.pill{
-  background:var(--panel-alt);
-  border:1px solid var(--border);
-  padding:6px 13px;
-  border-radius:999px;
-  font-size:13px;
-  font-weight:600;
-  color:var(--text-soft);
-}
-.pill b{color:var(--primary)}
-.pill.ok b{color:var(--success)}
-.container{max-width:1400px;margin:0 auto;padding:18px}
-.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
-@media(max-width:1024px){.grid-2{grid-template-columns:1fr}}
-.card{
-  background:var(--panel);
-  border:1px solid var(--border);
-  border-radius:14px;
-  padding:18px 20px;
-  box-shadow:0 2px 8px rgba(15,23,42,0.04);
-}
-.card-header{
-  display:flex;
-  flex-wrap:wrap;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  margin-bottom:14px;
-  padding-bottom:10px;
-  border-bottom:1px solid var(--border);
-}
-.card-header h2{
-  font-size:16px;
-  font-weight:800;
-  margin:0;
-  color:var(--primary);
-  display:flex;
-  align-items:center;
-  gap:8px;
-}
-.btn-row{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
-button,.btn{
-  font-family:inherit;
-  font-size:13.5px;
-  font-weight:700;
-  padding:8px 14px;
-  border-radius:9px;
-  border:1px solid transparent;
-  cursor:pointer;
-  transition:all 0.15s;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  gap:6px;
-  text-decoration:none;
-}
-.btn-primary{background:var(--primary);color:#ffffff}
-.btn-primary:hover{background:var(--primary-hover)}
-.btn-success{background:var(--success);color:#ffffff}
-.btn-success:hover{filter:brightness(1.06)}
-.btn-danger{background:var(--danger);color:#ffffff}
-.btn-danger:hover{filter:brightness(1.06)}
-.btn-warning{background:var(--warning);color:#ffffff}
-.btn-outline{background:#ffffff;color:var(--text-soft);border-color:#cbd5e1}
-.btn-outline:hover{border-color:var(--primary);color:var(--primary);background:#eff6ff}
-.btn-sm{padding:6px 10px;font-size:12.5px;border-radius:8px}
-input[type="text"],input[type="number"],select,textarea{
-  width:100%;
-  padding:10px 13px;
-  font-size:14px;
-  font-family:inherit;
-  color:var(--text);
-  background:#ffffff;
-  border:1px solid #cbd5e1;
-  border-radius:9px;
-  outline:none;
-}
-input:focus,select:focus,textarea:focus{border-color:var(--primary);box-shadow:0 0 0 2px rgba(37,99,235,0.12)}
-label.field-lbl{display:block;font-size:13px;font-weight:700;color:var(--text-soft);margin:9px 0 5px}
-.scroll-list{
-  max-height:300px;
-  overflow-y:auto;
-  border:1px solid var(--border);
-  border-radius:10px;
-  background:var(--panel-alt);
-  padding:6px;
-}
-.list-item{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  padding:9px 11px;
-  background:#ffffff;
-  border:1px solid var(--border);
-  margin-bottom:5px;
-  border-radius:8px;
-  font-size:13.5px;
-}
-.list-item:last-child{margin-bottom:0}
-.list-item:hover{border-color:#1d4ed8;background:#eff6ff}
-.item-left{display:flex;align-items:center;gap:10px;min-width:0}
-.item-title{font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.item-sub{font-size:12px;color:var(--muted)}
-.tag-plat{
-  font-size:11px;
-  font-weight:800;
-  padding:3px 7px;
-  border-radius:6px;
-  text-transform:uppercase;
-}
-.tag-zalo{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
-.tag-discord{background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe}
-.tag-messenger{background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd}
-.toast-bar{
-  display:none;
-  margin-bottom:16px;
-  padding:12px 16px;
-  border-radius:10px;
-  background:#ecfdf5;
-  border:1px solid #a7f3d0;
-  color:#047857;
-  font-weight:700;
-  font-size:14px;
-}
-.table-wrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:13.5px}
-th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)}
-th{color:var(--primary);font-weight:800;background:var(--panel-alt)}
-.qr-box{
-  display:none;
-  margin-top:12px;
-  padding:14px;
-  background:var(--panel-alt);
-  border:1px dashed var(--primary);
-  border-radius:12px;
-  text-align:center;
-}
-.qr-box img{max-width:220px;border-radius:10px;border:4px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin:8px auto;display:block}
-</style>
-</head>
-<body>
-<div class="topbar">
-  <div class="brand">
-    <div class="brand-badge">DEV ANH KHÔI • GLAZE CORE v2.5</div>
-    <div class="brand-title">
-      <h1>SIÊU HỆ THỐNG ĐA NỀN TẢNG ZALO • MESSENGER • DISCORD (GLAZE CORE v2.5)</h1>
-      <p>👨‍💻 Author: <b>Dev Anh Khôi</b> • 12 Nguồn Fake Soạn Tin Messenger • Khiên Anti-Ban Chống Die Cookie 9 Lớp • Lệnh .menu Nhạy 100% Cả 3 App</p>
-    </div>
-  </div>
-  <div class="stats-pills">
-    <div class="pill ok">🟢 Acc Kết Nối: <b id="stat-accs">{{ accounts|length }}</b></div>
-    <div class="pill">🚀 Chiến Dịch Đang Chạy: <b id="stat-tasks">0</b></div>
-    <div class="pill">⚡ Tốc Độ Gửi: <b id="stat-rpm">0</b> tin/phút</div>
-    <button class="btn btn-danger btn-sm" onclick="stopAllTasks()">🛑 DỪNG TẤT CẢ (.ta)</button>
-  </div>
-</div>
-
-<div class="container">
-  <div id="toast-box" class="toast-bar"></div>
-
-  <!-- HÀNG 1: QUẢN LÝ ĐA TÀI KHOẢN & QUÉT CHỌN NHÓM/BOX -->
-  <div class="grid-2">
-    <!-- CỘT 1: QUẢN LÝ ĐA TÀI KHOẢN -->
-    <div class="card">
-      <div class="card-header">
-        <h2>👥 1. Quản Lý & Chọn Đa Tài Khoản (<span id="sel-acc-count">Tất cả</span>)</h2>
-        <div class="btn-row">
-          <button class="btn btn-primary btn-sm" onclick="startZaloQR()">📲 Quét QR Zalo PC</button>
-          <button class="btn btn-success btn-sm" onclick="checkAllLive()">🔍 Check Sống/Die</button>
-          <button class="btn btn-outline btn-sm" onclick="reconnectAll()">🔄 Kết Nối Lại</button>
-        </div>
-      </div>
-
-      <!-- Chọn nhanh số lượng Acc -->
-      <div class="btn-row" style="margin-bottom:10px">
-        <span style="font-size:13px;color:var(--muted);font-weight:700">Chọn nhanh:</span>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(1)">1 Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(5)">5 Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(10)">10 Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(20)">20 Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(50)">50 Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(999)">✅ Tất Cả Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="bulkToggleCmd(true)">💬 Bật Lệnh Tất Cả</button>
-      </div>
-
-      <!-- Khung hiển thị QR Zalo PC trực tiếp -->
-      <div id="qr-modal" class="qr-box">
-        <div style="font-weight:800;color:#2563eb" id="qr-status-txt">⏳ Đang khởi tạo mã QR Máy Tính Singapore...</div>
-        <img id="qr-img" src="" alt="Zalo QR" style="display:none">
-        <div style="font-size:13px;color:var(--muted)">Mở Zalo trên điện thoại ➔ Quét mã QR ➔ Tự động nạp vào danh sách Acc!</div>
-      </div>
-
-      <!-- Danh sách tài khoản -->
-      <div class="scroll-list" id="acc-list-container">
-        {% if accounts %}
-          {% for a in accounts %}
-          <div class="list-item">
-            <div class="item-left">
-              <input type="checkbox" class="acc-chk" value="{{ a.id }}" checked onchange="updateSelectedCounts()" style="width:18px;height:18px;cursor:pointer">
-              <span class="tag-plat tag-{{ a.platform or 'zalo' }}">{{ a.platform or 'zalo' }}</span>
-              <div>
-                <div class="item-title">#{{ a.id }} — {{ a.name }}</div>
-                <div class="item-sub">UID: <code>{{ a.uid or a.imei or '-' }}</code> • Lệnh chat: <b style="color:{{ '#34d399' if a.chat_cmd_enabled else '#f87171' }}">{{ 'BẬT' if a.chat_cmd_enabled else 'TẮT' }}</b></div>
-              </div>
-            </div>
-            <div class="btn-row">
-              <button class="btn btn-outline btn-sm" onclick="testSingleAcc({{ a.id }})">Check</button>
-              <button class="btn btn-outline btn-sm" onclick="toggleSingleCmd({{ a.id }}, {{ 0 if a.chat_cmd_enabled else 1 }})">{{ 'Tắt Lệnh' if a.chat_cmd_enabled else 'Bật Lệnh' }}</button>
-              <a class="btn btn-danger btn-sm" href="/account/delete/{{ a.id }}" onclick="return confirm('Xoá tài khoản #{{ a.id }}?')">Xoá</a>
-            </div>
-          </div>
-          {% endfor %}
-        {% else %}
-          <div style="padding:18px;text-align:center;color:var(--muted)">Chưa có tài khoản nào. Hãy bấm <b>📲 Quét QR Zalo PC</b> hoặc thêm Cookie + IMEI bên dưới!</div>
-        {% endif %}
-      </div>
-
-      <!-- Khung 1: Nạp Nhanh Cookie Zalo (Tự nhận IMEI + Khóa Phiên + Bật Lệnh Độc Lập Ngay) -->
-      <div style="margin-top:14px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(59,130,246,0.45)">
-        <div style="font-weight:800;color:#2563eb;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
-          <span>🍪 1. Nạp Nhanh Cookie Zalo (Tự Nhận IMEI & Ăn Lệnh .menu Ngay)</span>
-          <span style="font-size:12px;color:#059669">Cô lập riêng từng Cookie</span>
-        </div>
-        <div class="grid-2" style="gap:8px;margin-bottom:8px">
-          <input type="text" id="fast-zalo-name" placeholder="Tên gợi nhớ (VD: Acc Zalo Chính)">
-          <input type="text" id="fast-zalo-imei" placeholder="IMEI (z_uuid) — Có thể để trống, tự nhận diện!">
-        </div>
-        <div style="display:flex;gap:8px">
-          <input type="text" id="fast-zalo-cookie" placeholder="Dán Cookie Zalo (zpw_sek / zpsid / JSON / Cookie|IMEI) vào đây...">
-          <button type="button" class="btn btn-success" onclick="quickAddZaloCookie()" style="white-space:nowrap">⚡ Nạp Zalo</button>
-        </div>
-      </div>
-
-      <!-- Khung 2: Nạp Nhanh Cookie Facebook (Tự Lấy Máy Tính Thông Báo Vào Facebook Chống Quét Checkpoint) -->
-      <div style="margin-top:10px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(14,165,233,0.45)">
-        <div style="font-weight:800;color:#38bdf8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
-          <span>💻 2. Nạp Cookie Facebook (Lấy Máy Tính Thông Báo Vào FB Chống Quét)</span>
-          <span style="font-size:12px;color:#059669">Anti-Reg & Anti-Hack Active</span>
-        </div>
-        <div style="display:flex;gap:8px">
-          <input type="text" id="fast-fb-name" placeholder="Tên FB (Tùy chọn)" style="max-width:165px">
-          <input type="text" id="fast-fb-cookie" placeholder="Dán Cookie Facebook (c_user=...; xs=...) hoặc JSON vào đây...">
-          <button type="button" class="btn btn-primary" onclick="quickAddFacebookCookie()" style="white-space:nowrap">💻 Nạp FB & Báo Máy Tính</button>
-        </div>
-      </div>
-
-      <!-- Khung 3: Đúc Token & Anti-Reg Acc Discord (Chống Báo Tài Khoản Bị Hack / Đặt Lại Mật Khẩu) -->
-      <div style="margin-top:10px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(139,92,246,0.45)">
-        <div style="font-weight:800;color:#6d28d9;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
-          <span>🛡️ 3. Đúc Token & Anti-Reg Acc Discord (Chống Báo Hack / Reset Key)</span>
-          <span style="font-size:12px;color:#059669">Chrome 131 PC Vault</span>
-        </div>
-        <div style="display:flex;gap:8px">
-          <input type="text" id="fast-dc-name" placeholder="Tên Discord" style="max-width:150px">
-          <input type="text" id="fast-dc-token" placeholder="Dán 1 hoặc nhiều Token Discord (hoặc Email|Pass) vào đây...">
-          <button type="button" class="btn btn-warning" onclick="quickAddDiscordToken()" style="white-space:nowrap">🛡️ Đúc Token Discord</button>
-        </div>
-      </div>
-
-      <!-- Form mở rộng cho Discord / Messenger -->
-      <details style="margin-top:10px">
-        <summary style="cursor:pointer;font-weight:700;color:var(--muted);padding:4px 0;font-size:13.5px">➕ Thêm Tài Khoản Phụ (Discord Token / Messenger Cookie)</summary>
-        <form method="POST" action="/account/add" style="margin-top:8px;background:var(--panel-alt);padding:12px;border-radius:12px;border:1px solid var(--border)">
-          <div class="grid-2" style="margin-bottom:8px;gap:8px">
-            <select name="platform" id="add-plat-sel">
-              <option value="zalo">Zalo PC (Cookie + IMEI)</option>
-              <option value="discord">Discord (Token)</option>
-              <option value="messenger">Facebook Messenger (Cookie)</option>
-            </select>
-            <input type="text" name="name" placeholder="Tên gợi nhớ">
-          </div>
-          <input type="text" name="imei" placeholder="IMEI Zalo (nếu có)" style="margin-bottom:8px">
-          <input type="text" name="cookies" placeholder="Cookie Zalo / Messenger..." style="margin-bottom:8px">
-          <input type="text" name="token" placeholder="Token Discord...">
-          <input type="hidden" name="chat_cmd_enabled" value="1">
-          <button type="submit" class="btn btn-primary btn-sm" style="width:100%;margin-top:10px">➕ Lưu Tài Khoản</button>
-        </form>
-      </details>
-    </div>
-
-    <!-- CỘT 2: QUÉT & CHỌN NHÓM / BOX MỤC TIÊU -->
-    <div class="card">
-      <div class="card-header">
-        <h2>📦 2. Chọn Nhóm / Box Mục Tiêu (<span id="sel-box-count">0 Box</span>)</h2>
-        <div class="btn-row">
-          <button class="btn btn-primary btn-sm" onclick="scanBoxes('zalo', true)">🔄 Quét Nhóm Zalo</button>
-          <button class="btn btn-outline btn-sm" onclick="scanBoxes('discord', true)">Quét Kênh Discord</button>
-          <button class="btn btn-outline btn-sm" onclick="scanBoxes('messenger', true)">Quét Box Messenger</button>
-        </div>
-      </div>
-
-      <div class="btn-row" style="margin-bottom:10px">
-        <span style="font-size:13px;color:var(--muted);font-weight:700">Chọn nhanh:</span>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(1)">1 Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(5)">5 Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(10)">10 Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(20)">20 Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(50)">50 Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(999)">✅ Tất Cả Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(0)">Bỏ Chọn</button>
-      </div>
-
-      <div style="display:flex;gap:8px;margin-bottom:10px">
-        <input type="text" id="box-search-inp" placeholder="🔍 Tìm kiếm tên nhóm hoặc nhập trực tiếp ID Box..." oninput="filterBoxList()">
-        <button class="btn btn-outline btn-sm" onclick="addManualBoxId()">+ Thêm ID</button>
-      </div>
-
-      <div class="scroll-list" id="box-list-container">
-        <div style="padding:18px;text-align:center;color:var(--muted)">Đang tự động tải danh sách Nhóm Zalo... Bấm <b>🔄 Quét Nhóm Zalo</b> để làm mới!</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- HÀNG 2: KHỞI CHẠY CHIẾN DỊCH ĐA ACC & TẠO STICKER CHUẨN NHÃN DÁN ZALO -->
-  <div class="grid-2">
-    <!-- CỘT 1: BẢNG KHỞI CHẠY CHIẾN DỊCH 38+ CHẾ ĐỘ -->
-    <div class="card">
-      <div class="card-header">
-        <h2>🚀 3. Khởi Chạy Chiến Dịch Đa Tài Khoản</h2>
-        <span style="font-size:13px;color:#059669;font-weight:700">Chạy mượt nhiều Acc cùng lúc 0ms</span>
-      </div>
-
-      <div class="grid-2" style="gap:12px;margin-bottom:8px">
-        <div>
-          <label class="field-lbl">Chế độ chạy (38+ Chức năng VIP):</label>
-          <select id="camp-mode">
-            <option value="treo_nhay">🔥 Treo Nhây Từng Dòng (.n / .nhay)</option>
-            <option value="treo_ngon">🌈 Treo Ngôn Đa Màu (.g / .damau)</option>
-            <option value="zalo_gif">⚡ Treo GIF + 68 Nhãn Dán Động Zalo (.gif)</option>
-            <option value="treo_sticker">🎨 Treo Nhãn Dán Gốc Zalo Liên Hoàn (.treosticker)</option>
-            <option value="nhay_giaitan">📢 Phát Thông Báo Giải Tán Hệ Thống Zalo (.nhaygiaitan)</option>
-            <option value="nhay_poll">📊 Treo Bình Chọn Poll 0.0s Không Nghỉ (.nhaypoll)</option>
-            <option value="nhay_namebox">✏️ Đổi Tên Box Zalo Liên Hoàn (.nhaynamebox)</option>
-            <option value="nhay_theme">🎨 Đổi Nền Box Zalo Liên Hoàn (.nhaynen)</option>
-            <option value="nhay_typing">⌨️ Giả Lập Soạn Tin Typing (.nhaytyping)</option>
-            <option value="zalo_todo">📋 Giao Việc Zalo To-Do (.todo)</option>
-            <option value="zalo_cardbank">🏦 Gửi Thẻ Ngân Hàng VietQR (.bank)</option>
-            <option value="share_contact">🪪 Chia Sẻ Danh Thiếp (.card)</option>
-            <option value="sieu_xa_nhieu_nhom">🚀 Siêu Xả Đa Nhóm Tốc Độ Ánh Sáng (.xa)</option>
-            <option value="combo_lien_thanh">⚡ Combo Liên Thanh 3 Câu/Nhịp (.combo)</option>
-            <option value="nhay_2c">🔥 Nhây Gộp 2 Câu (2c.txt) (.2c)</option>
-            <option value="treo_so">🔢 Treo Đếm Số Liên Hoàn (so.txt) (.so)</option>
-            <option value="so_tag">🎯 Treo Số Kèm Tag Mục Tiêu (.sotag)</option>
-            <option value="idea_mess">💥 Nhây Sát Thương Cực Mạnh (chui.txt) (.chui)</option>
-            <option value="nhay_icon">🌪️ Bão Ký Hiệu & Icon VIP (.nhayicon)</option>
-            <option value="code_lag">⚡ Code Lag Zalgo Siêu Nặng (.codelag)</option>
-          </select>
-        </div>
-        <div>
-          <label class="field-lbl">Chọn File kịch bản (.txt):</label>
-          <select id="camp-file">
-            {% for f in files %}
-            <option value="{{ f.filename }}">#{{ f.display_num }} — {{ f.filename }} ({{ f.lines_count }} dòng)</option>
-            {% endfor %}
-          </select>
-        </div>
-      </div>
-
-      <div class="grid-2" style="gap:12px;margin-bottom:8px">
-        <div>
-          <label class="field-lbl">Chế độ màu chữ Zalo:</label>
-          <select id="camp-color">
-            <option value="word_rainbow">🌈 Đổi Màu Từng Từ (Word Rainbow VIP)</option>
-            <option value="char_rainbow">✨ Đổi Màu Từng Ký Tự (Char Rainbow)</option>
-            <option value="rainbow">🎨 Cầu Vồng Theo Dòng (Line Rainbow)</option>
-            <option value="fire_gradient">🔥 Lửa Hoàng Kim (Đỏ - Cam - Vàng)</option>
-            <option value="ocean_gradient">🌊 Đại Dương Băng Tuyết</option>
-            <option value="royal_gradient">👑 Hoàng Gia Tối Thượng</option>
-            <option value="fixed">❤️‍🔥 Đỏ Rực Cố Định (db342e)</option>
-            <option value="none">⚪ Chữ Mặc Định</option>
-          </select>
-        </div>
-        <div>
-          <label class="field-lbl">Tốc độ Delay (giây — Hỗ trợ 0s):</label>
-          <input type="number" id="camp-delay" value="0.0" step="0.1" min="0">
-        </div>
-      </div>
-
-      <label class="field-lbl">Nội dung tùy chỉnh (Hoặc để trống để chạy theo File .txt đã chọn; kèm @All hoặc @Tên nếu muốn Tag):</label>
-      <textarea id="camp-raw-text" rows="3" placeholder="Nhập câu nhây (ngăn cách bằng dấu ;) hoặc đoạn văn ngôn, hoặc tên nhóm cho chế độ Giải Tán..."></textarea>
-
-      <div style="display:flex;flex-wrap:wrap;gap:16px;margin:12px 0">
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
-          <input type="checkbox" id="camp-multi-acc" checked style="width:17px;height:17px"> Chạy Đa Tài Khoản Đồng Loạt
-        </label>
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
-          <input type="checkbox" id="camp-tag-all" style="width:17px;height:17px"> Báo Chuông @All Ẩn
-        </label>
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
-          <input type="checkbox" id="camp-heading" checked style="width:17px;height:17px"> Chữ To In Đậm (f_18)
-        </label>
-      </div>
-
-      <button class="btn btn-primary" style="width:100%;padding:13px;font-size:15.5px" onclick="startCampaignNow()">🚀 BẮT ĐẦU CHẠY CHIẾN DỊCH NGAY</button>
-    </div>
-
-    <!-- CỘT 2: TẠO & BẮN NHÃN DÁN STICKER ZALO CHUẨN [STICKER] + QUẢN LÝ FILE -->
-    <div class="card">
-      <div class="card-header">
-        <h2>🎨 4. Tạo Sticker Thẳng Trên Zalo (Chuẩn Nhãn Dán Thật 100%)</h2>
-        <span style="font-size:13px;color:#fbbf24;font-weight:700">Nhảy ra [Sticker] thật không viền</span>
-      </div>
-
-      <label class="field-lbl">Chọn nhanh Bộ Nhãn Dán Động Zalo Gốc (68+ Mẫu):</label>
-      <div class="btn-row" style="margin-bottom:10px">
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('rong')">🐉 Rồng Lửa VIP</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('meo')">🐱 Mèo Ami Bụng Bự</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('khia')">😏 Quỳnh Aka Khịa</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('corgi')">🐶 Corgi Lắc Mông</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('vit')">🦆 Vịt Vàng Ducky</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('gau')">🐻 Gấu Brown</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('meme')">🐯 Hổ Vàng Meme</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('quay')">💃 Quẩy Party</button>
-      </div>
-
-      <label class="field-lbl">Tìm kiếm API Sticker Zalo theo từ khóa hoặc dán Link Ảnh / GIF / Video ≤3s / Chữ Die-Cut 512×512:</label>
-      <div style="display:flex;gap:8px;margin-bottom:10px">
-        <input type="text" id="sticker-input" placeholder="Nhập từ khóa Sticker Zalo, mã ID, link ảnh/video ≤3s hoặc chữ...">
-        <button class="btn btn-outline" onclick="searchZaloStickersUI()" style="white-space:nowrap">🔍 Tìm API Sticker</button>
-        <button class="btn btn-success" onclick="createAndSendCustomSticker()" style="white-space:nowrap">🎨 Bắn Nhãn Dán</button>
-      </div>
-      <div id="sticker-search-results" style="display:none;margin-bottom:12px;padding:10px;background:#f8fafc;border:1px solid var(--border);border-radius:10px;max-height:150px;overflow-y:auto"></div>
-
-      <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:8px">
-        <div style="font-weight:800;color:#1d4ed8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
-          <span>📂 Quản Lý Kho File (.txt), Test Lệnh .menu & 12 Nguồn Fake Typing</span>
-          <span style="font-size:12px;color:#059669">Nhạy 100% Zalo • Mess • Discord</span>
-        </div>
-        <div class="btn-row" style="margin-bottom:8px">
-          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.menu')">📋 Bắn .menu Vào Box</button>
-          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.typing on')">⌨️ Bật Fake Typing 12 Nguồn</button>
-          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.typing off')">🛑 Tắt Fake Typing</button>
-          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.ping')">🏓 Check .ping</button>
-          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.nhaygiaitan')">📢 Giải Tán Zalo</button>
-        </div>
-        <div style="display:flex;gap:8px;margin-bottom:10px">
-          <input type="text" id="web-cmd-inp" placeholder="Gõ lệnh trực tiếp (VD: .menu, .typing on, .sticker, .gif, .nhaygiaitan, .t, .ta)...">
-          <button class="btn btn-primary" onclick="dispatchWebCommand()" style="white-space:nowrap">⚡ Gửi Lệnh</button>
-        </div>
-        <details>
-          <summary style="cursor:pointer;font-weight:700;color:#059669">➕ Tạo / Tải Lên File Kịch Bản (.txt) Mới</summary>
-          <form method="POST" action="/file/create" style="margin-top:8px;background:var(--panel-alt);padding:12px;border-radius:10px">
-            <input type="text" name="filename" placeholder="Tên file (VD: nhay_vip.txt)" required style="margin-bottom:8px">
-            <textarea name="content" rows="3" placeholder="Mỗi câu 1 dòng..." required style="margin-bottom:8px"></textarea>
-            <button type="submit" class="btn btn-success btn-sm">💾 Lưu File .txt</button>
-          </form>
-        </details>
-      </div>
-    </div>
-  </div>
-
-  <!-- HÀNG 3: BẢNG GIÁM SÁT TIẾN TRÌNH & LỊCH SỬ LỆNH THỜI GIAN THỰC -->
-  <div class="card">
-    <div class="card-header">
-      <h2>📊 5. Giám Sát Chiến Dịch Đang Chạy & Nhật Ký Hệ Thống (Thời Gian Thực)</h2>
-      <div class="btn-row">
-        <button class="btn btn-danger btn-sm" onclick="stopAllTasks()">🛑 Dừng Tất Cả Chiến Dịch (.stopall)</button>
-      </div>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Mã Task</th>
-            <th>Chế Độ</th>
-            <th>Số Acc Chạy</th>
-            <th>Số Box</th>
-            <th>Đã Gửi</th>
-            <th>Delay</th>
-            <th>Trạng Thái</th>
-            <th>Thao Tác</th>
-          </tr>
-        </thead>
-        <tbody id="tasks-tbody">
-          <tr><td colspan="8" style="text-align:center;color:var(--muted)">Chưa có chiến dịch nào đang chạy.</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
-<script>
-let ALL_BOXES = [];
-let QR_POLL_TIMER = null;
-
-function showToast(msg, isErr=false){
-  const el = document.getElementById('toast-box');
-  el.style.display = 'block';
-  el.style.background = isErr ? 'rgba(239,68,68,0.18)' : 'rgba(16,185,129,0.18)';
-  el.style.borderColor = isErr ? 'rgba(239,68,68,0.45)' : 'rgba(16,185,129,0.45)';
-  el.style.color = isErr ? '#fca5a5' : '#6ee7b7';
-  el.textContent = msg;
-  setTimeout(()=>{ el.style.display = 'none'; }, 5000);
-}
-
-function getSelectedAccountIds(){
-  return Array.from(document.querySelectorAll('.acc-chk:checked')).map(el => parseInt(el.value));
-}
-
-function getSelectedTargets(){
-  return Array.from(document.querySelectorAll('.box-chk:checked')).map(el => ({
-    id: el.value,
-    name: el.getAttribute('data-name') || ('Box ' + el.value),
-    type: el.getAttribute('data-type') || 'group'
-  }));
-}
-
-function updateSelectedCounts(){
-  const aCnt = getSelectedAccountIds().length;
-  const bCnt = getSelectedTargets().length;
-  document.getElementById('sel-acc-count').textContent = aCnt + ' Acc đã chọn';
-  document.getElementById('sel-box-count').textContent = bCnt + ' Box đã chọn';
-}
-
-function selectTopAccounts(n){
-  const chks = Array.from(document.querySelectorAll('.acc-chk'));
-  chks.forEach((c, idx) => { c.checked = (idx < n); });
-  updateSelectedCounts();
-}
-
-function selectTopBoxes(n){
-  const chks = Array.from(document.querySelectorAll('.box-chk'));
-  chks.forEach((c, idx) => { c.checked = (idx < n); });
-  updateSelectedCounts();
-}
-
-async function scanBoxes(plat='zalo', force=false){
-  const cont = document.getElementById('box-list-container');
-  cont.innerHTML = '<div style="padding:18px;text-align:center;color:#2563eb">⏳ Đang quét danh sách Box ' + plat.toUpperCase() + '...</div>';
-  try{
-    let url = '/api/all_groups' + (force ? '?refresh=1' : '');
-    if(plat === 'discord') url = '/api/discord_channels' + (force ? '?refresh=1' : '');
-    if(plat === 'messenger') url = '/api/messenger_threads' + (force ? '?refresh=1' : '');
-    const r = await fetch(url);
-    const d = await r.json();
-    let items = [];
-    if(plat === 'zalo'){
-      (d.groups || []).forEach(g => items.push({id: g.id, name: g.name || ('Nhóm ' + g.id), type: 'group', plat: 'zalo', accs: (g.acc_names || []).join(', ')}));
-    }else if(plat === 'discord'){
-      (d.channels || []).forEach(c => items.push({id: c.id, name: c.name || ('Kênh ' + c.id), type: 'discord_channel', plat: 'discord', accs: (c.acc_names || []).join(', ')}));
-    }else{
-      (d.threads || []).forEach(t => items.push({id: t.id, name: t.name || ('Box ' + t.id), type: 'messenger_thread', plat: 'messenger', accs: (t.acc_names || []).join(', ')}));
-    }
-    ALL_BOXES = items;
-    renderBoxList(items);
-  }catch(e){
-    cont.innerHTML = '<div style="padding:18px;text-align:center;color:#f87171">Không thể quét danh sách Box: ' + e + '</div>';
-  }
-}
-
-function renderBoxList(items){
-  const cont = document.getElementById('box-list-container');
-  if(!items || !items.length){
-    cont.innerHTML = '<div style="padding:18px;text-align:center;color:var(--muted)">Chưa tìm thấy Box nào. Bạn có thể nhập trực tiếp ID Box vào ô phía trên và bấm <b>+ Thêm ID</b>!</div>';
-    updateSelectedCounts();
-    return;
-  }
-  cont.innerHTML = items.map((b, i) => `
-    <div class="list-item">
-      <div class="item-left">
-        <input type="checkbox" class="box-chk" value="${b.id}" data-name="${(b.name||'').replace(/"/g,'')}" data-type="${b.type}" ${i===0?'checked':''} onchange="updateSelectedCounts()" style="width:18px;height:18px;cursor:pointer">
-        <span class="tag-plat tag-${b.plat}">${b.plat}</span>
-        <div>
-          <div class="item-title">${b.name}</div>
-          <div class="item-sub">ID: <code>${b.id}</code> ${b.accs ? '• Acc: ' + b.accs : ''}</div>
-        </div>
-      </div>
-    </div>
-  `).join('');
-  updateSelectedCounts();
-}
-
-function filterBoxList(){
-  const q = (document.getElementById('box-search-inp').value || '').toLowerCase().trim();
-  if(!q){ renderBoxList(ALL_BOXES); return; }
-  renderBoxList(ALL_BOXES.filter(b => (b.name||'').toLowerCase().includes(q) || String(b.id).includes(q)));
-}
-
-function addManualBoxId(){
-  const inp = document.getElementById('box-search-inp');
-  const val = (inp.value || '').trim();
-  if(!val) return;
-  ALL_BOXES.unshift({id: val, name: 'Box Mục Tiêu #' + val.slice(-6), type: 'group', plat: 'zalo', accs: 'Tất cả Acc'});
-  inp.value = '';
-  renderBoxList(ALL_BOXES);
-}
-
-async function startCampaignNow(){
-  const targets = getSelectedTargets();
-  if(!targets.length){
-    showToast('⚠️ Vui lòng tích chọn ít nhất 1 Nhóm/Box mục tiêu ở mục 2!', true);
-    return;
-  }
-  const accIds = getSelectedAccountIds();
-  const payload = {
-    targets: targets,
-    account_ids: accIds,
-    multi_acc: document.getElementById('camp-multi-acc').checked && accIds.length !== 1,
-    mode: document.getElementById('camp-mode').value,
-    file_id: document.getElementById('camp-file').value,
-    color_mode: document.getElementById('camp-color').value,
-    delay: parseFloat(document.getElementById('camp-delay').value || '0') || 0.0,
-    raw_text: document.getElementById('camp-raw-text').value,
-    tag_all: document.getElementById('camp-tag-all').checked,
-    is_heading: document.getElementById('camp-heading').checked,
-    antiband: true
-  };
-  const r = await fetch('/task/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-  const d = await r.json();
-  if(d.ok){
-    showToast('🚀 Đã khởi chạy chiến dịch thành công (' + accIds.length + ' Acc × ' + targets.length + ' Box)!');
-    refreshStatus();
-  }else{
-    showToast('❌ ' + (d.error || 'Lỗi khởi chạy'), true);
-  }
-}
-
-async function quickAddFacebookCookie(){
-  const ck = (document.getElementById('fast-fb-cookie').value || '').trim();
-  const nm = (document.getElementById('fast-fb-name').value || '').trim();
-  if(!ck){
-    showToast('⚠️ Hãy dán Cookie Facebook (có c_user và xs) vào ô!', true);
-    return;
-  }
-  showToast('💻 Đang khóa Thiết Bị Máy Tính, gửi thông báo xác nhận vào Facebook & bật lệnh .menu...');
-  try{
-    const r = await fetch('/api/messenger/verify_cookie', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({cookies: ck, name: nm, auto_save: true})
-    });
-    const d = await r.json();
-    if(d.ok){
-      showToast('✅ ' + (d.message || 'Đã nạp Cookie Facebook & báo Máy Tính thành công!'));
-      setTimeout(() => location.reload(), 1000);
-    }else{
-      showToast('❌ ' + (d.error || 'Lỗi nạp Cookie Facebook'), true);
-    }
-  }catch(e){
-    showToast('❌ Lỗi kết nối: ' + e, true);
-  }
-}
-
-async function quickAddDiscordToken(){
-  const tk = (document.getElementById('fast-dc-token').value || '').trim();
-  const nm = (document.getElementById('fast-dc-name').value || '').trim();
-  if(!tk){
-    showToast('⚠️ Hãy dán Token Discord (hoặc Email|Pass) vào ô!', true);
-    return;
-  }
-  showToast('🛡️ Đang khóa vân tay Máy Tính Chrome 131 (Anti-Reg & Anti-Hack) cho Discord...');
-  try{
-    let url = '/api/discord/immortalize';
-    let bodyObj = {raw_input: tk, name: nm, auto_save: true};
-    if(tk.includes('|') && !tk.includes('.')){
-      const parts = tk.split('|');
-      url = '/api/discord/reg_login';
-      bodyObj = {email: parts[0].trim(), password: (parts[1]||'').trim(), two_fa: (parts[2]||'').trim(), auto_save: true};
-    }
-    const r = await fetch(url, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(bodyObj)
-    });
-    const d = await r.json();
-    if(d.ok){
-      showToast('✅ ' + (d.message || 'Đã đúc Token Discord chống quét & bật lệnh thành công!'));
-      setTimeout(() => location.reload(), 1000);
-    }else{
-      showToast('❌ ' + (d.error || 'Không thể nạp Token Discord'), true);
-    }
-  }catch(e){
-    showToast('❌ Lỗi kết nối: ' + e, true);
-  }
-}
-
-async function quickAddZaloCookie(){
-  const ck = (document.getElementById('fast-zalo-cookie').value || '').trim();
-  const im = (document.getElementById('fast-zalo-imei').value || '').trim();
-  const nm = (document.getElementById('fast-zalo-name').value || '').trim();
-  if(!ck){
-    showToast('⚠️ Hãy dán Cookie Zalo (zpw_sek hoặc zpsid) vào ô Cookie!', true);
-    return;
-  }
-  showToast('⏳ Đang xác thực Cookie Zalo, đồng bộ zpw_enk & kích hoạt bộ lắng nghe lệnh độc lập...');
-  try{
-    const r = await fetch('/api/zalo/verify_cookie_imei', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({cookies: ck, imei: im, name: nm, auto_save: true})
-    });
-    const d = await r.json();
-    if(d.ok){
-      showToast('✅ ' + (d.message || 'Đã nạp Cookie Zalo & bật lệnh thành công!'));
-      setTimeout(() => location.reload(), 900);
-    }else{
-      showToast('❌ ' + (d.error || 'Không thể nạp Cookie Zalo'), true);
-    }
-  }catch(e){
-    showToast('❌ Lỗi kết nối khi nạp Cookie: ' + e, true);
-  }
-}
-
-async function searchZaloStickersUI(){
-  const q = (document.getElementById('sticker-input').value || '').trim();
-  const box = document.getElementById('sticker-search-results');
-  box.style.display = 'block';
-  box.innerHTML = '<span style="color:#2563eb;font-size:13px">⏳ Đang tìm kiếm trên API Sticker Zalo...</span>';
-  try{
-    const r = await fetch('/api/zalo/search_stickers?q=' + encodeURIComponent(q));
-    const d = await r.json();
-    const list = d.stickers || [];
-    if(!list.length){
-      box.innerHTML = '<span style="color:var(--muted);font-size:13px">Không tìm thấy mẫu có sẵn — Bấm [🎨 Bắn Nhãn Dán] để cắt khung tạo Sticker mới từ chữ/ảnh này!</span>';
-      return;
-    }
-    box.innerHTML = '<div style="font-size:12.5px;color:#1d4ed8;margin-bottom:6px;font-weight:700">Chạm vào mẫu bên dưới để bắn thẳng Nhãn Dán vào Box đang chọn:</div><div class="btn-row">' +
-      list.map(s => `<button class="btn btn-outline btn-sm" onclick="fireNativeSticker('${s.id}')">🎯 ${s.name} (#${s.id})</button>`).join('') +
-      '</div>';
-  }catch(e){
-    box.innerHTML = '<span style="color:#f87171;font-size:13px">Lỗi tra cứu Sticker: ' + e + '</span>';
-  }
-}
-
-async function fireNativeSticker(tag){
-  document.getElementById('sticker-input').value = tag;
-  await createAndSendCustomSticker();
-}
-
-async function createAndSendCustomSticker(){
-  const targets = getSelectedTargets();
-  if(!targets.length){
-    showToast('⚠️ Hãy chọn ít nhất 1 Nhóm/Box ở mục 2 để bắn Nhãn Dán Sticker!', true);
-    return;
-  }
-  const inputVal = (document.getElementById('sticker-input').value || '').trim();
-  const accIds = getSelectedAccountIds();
-  const r = await fetch('/api/zalo/create_sticker', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({targets: targets, account_ids: accIds, query: inputVal})
-  });
-  const d = await r.json();
-  if(d.ok){
-    showToast('🎨 ' + (d.message || 'Đã bắn Nhãn Dán Sticker [Sticker] chuẩn Zalo thành công!'));
-  }else{
-    showToast('❌ ' + (d.error || 'Không thể tạo Sticker'), true);
-  }
-}
-
-async function quickRunWebCmd(c){
-  const inp = document.getElementById('web-cmd-inp');
-  if(inp){ inp.value = c; }
-  await dispatchWebCommand();
-}
-
-async function dispatchWebCommand(){
-  const cmd = (document.getElementById('web-cmd-inp').value || '').trim();
-  if(!cmd) return;
-  const targets = getSelectedTargets();
-  const tid = targets.length ? targets[0].id : '';
-  const r = await fetch('/api/command/dispatch_web', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({cmd: cmd, thread_id: tid})
-  });
-  const d = await r.json();
-  showToast(d.message || 'Đã thực thi lệnh!', !d.ok);
-  refreshStatus();
-}
-
-async function startZaloQR(){
-  const box = document.getElementById('qr-modal');
-  const txt = document.getElementById('qr-status-txt');
-  const img = document.getElementById('qr-img');
-  box.style.display = 'block';
-  img.style.display = 'none';
-  txt.textContent = '⏳ Đang cấp phát Máy Tính Singapore & tạo mã QR Zalo...';
-  if(QR_POLL_TIMER) clearInterval(QR_POLL_TIMER);
-  const r = await fetch('/api/zalo/qr_start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({region:'SG', auto_save:true})});
-  const d = await r.json();
-  if(!d.ok){
-    txt.textContent = '❌ Lỗi tạo QR: ' + (d.error || '');
-    return;
-  }
-  const sid = d.session_id;
-  QR_POLL_TIMER = setInterval(async () => {
-    try{
-      const sr = await fetch('/api/zalo/qr_status/' + sid);
-      const sd = await sr.json();
-      if(sd.has_qr){
-        img.src = '/api/zalo/qr_image/' + sid + '.png?t=' + Date.now();
-        img.style.display = 'block';
-        txt.textContent = '📲 Hãy mở Zalo quét mã QR bên dưới (' + (sd.pc_name || 'Singapore PC') + '):';
-      }
-      if(sd.status === 'scanned'){
-        txt.textContent = '📱 Đã quét mã QR! Hãy bấm [Đăng nhập] trên điện thoại của bạn...';
-      }
-      if(sd.status === 'success'){
-        clearInterval(QR_POLL_TIMER);
-        txt.textContent = '✅ Đăng nhập thành công tài khoản: ' + (sd.display_name || sd.uid || 'Zalo VIP') + '! Đang tải lại...';
-        setTimeout(() => location.reload(), 1200);
-      }
-      if(sd.status === 'expired' || sd.status === 'error'){
-        clearInterval(QR_POLL_TIMER);
-        txt.textContent = '⌛ ' + (sd.message || 'Mã QR đã hết hạn. Hãy bấm Quét QR Zalo PC lại.');
-      }
-    }catch(e){}
-  }, 1500);
-}
-
-async function checkAllLive(){
-  showToast('🔍 Đang kiểm tra trạng thái Sống/Die của toàn bộ tài khoản...');
-  const r = await fetch('/api/account/check_all_live', {method:'POST'});
-  const d = await r.json();
-  showToast(d.message || 'Đã kiểm tra xong!', !d.ok);
-}
-
-async function testSingleAcc(id){
-  const r = await fetch('/api/account/test_session', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({acc_id:id})});
-  const d = await r.json();
-  showToast(d.message || d.error || 'Đã kiểm tra', !d.ok);
-}
-
-async function toggleSingleCmd(id, en){
-  await fetch('/api/account/chat_cmd', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({acc_id:id, enabled:en})});
-  location.reload();
-}
-
-async function bulkToggleCmd(en){
-  await fetch('/api/account/cmd_permissions_bulk', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode: en ? 'enable_all' : 'disable_all'})});
-  location.reload();
-}
-
-async function reconnectAll(){
-  const r = await fetch('/api/account/reconnect_all', {method:'POST'});
-  const d = await r.json();
-  showToast(d.message || 'Đã kết nối lại!');
-}
-
-async function stopSingleTask(tid){
-  await fetch('/task/stop/' + tid, {method:'POST'});
-  refreshStatus();
-}
-
-asyncindex_ready = false;
-async function stopAllTasks(){
-  const r = await fetch('/task/stop_all', {method:'POST'});
-  const d = await r.json();
-  showToast('🛑 Đã dừng toàn bộ (' + (d.stopped || 0) + ' chiến dịch)!');
-  refreshStatus();
-}
-
-async function refreshStatus(){
-  try{
-    const r = await fetch('/api/status');
-    const d = await r.json();
-    const running = (d.tasks || []).filter(t => t.status === 'Đang chạy');
-    document.getElementById('stat-tasks').textContent = running.length;
-    if(d.ping_telemetry) document.getElementById('stat-rpm').textContent = d.ping_telemetry.total_rpm || 0;
-    const tb = document.getElementById('tasks-tbody');
-    if(!d.tasks || !d.tasks.length){
-      tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">Chưa có chiến dịch nào.</td></tr>';
-      return;
-    }
-    tb.innerHTML = d.tasks.slice(0, 18).map(t => `
-      <tr>
-        <td><code>#${t.id}</code></td>
-        <td><b>${t.mode}</b></td>
-        <td>${t.acc_count} Acc</td>
-        <td>${t.targets_count} Box</td>
-        <td><b style="color:#059669">${t.sent}</b></td>
-        <td>${t.delay}s</td>
-        <td><span style="color:${t.status==='Đang chạy'?'#34d399':'#94a3b8'};font-weight:700">${t.status}</span></td>
-        <td>${t.status==='Đang chạy' ? `<button class="btn btn-danger btn-sm" onclick="stopSingleTask('${t.id}')">🛑 Dừng</button>` : '-'}</td>
-      </tr>
-    `).join('');
-  }catch(e){}
-}
-
-window.addEventListener('DOMContentLoaded', () => {
-  updateSelectedCounts();
-  scanBoxes('zalo', false);
-  refreshStatus();
-  setInterval(refreshStatus, 2500);
-});
-</script>
-</body>
-</html>"""
-
-KEEPALIVE_HTML = DASHBOARD_HTML
+DASHBOARD_HTML = GLAZE_MINIAPP_HTML
+KEEPALIVE_HTML = GLAZE_MINIAPP_HTML
 
 
 @app.route("/api/ui/physics")
@@ -22008,23 +21041,66 @@ def healthz():
     return jsonify({"ok": True, "service": "GLAZE ENGINE VN", "admin_id": TELEGRAM_ADMIN_ID, "mode": "telegram_bot"}), 200
 
 @app.route("/")
-def index():
-    try:
-        accounts = get_all_accounts_from_ram()
-        files = get_ordered_files_with_display_num()
-        has_logo = bool(get_setting("brand_logo_b64", "") or get_setting("brand_logo_url", ""))
-        logo_ts = get_setting("brand_logo_ts", "1")
-        custom_title = get_setting("custom_web_title", "")
-        return render_template_string(
-            DASHBOARD_HTML,
-            accounts=accounts,
-            files=files,
-            has_logo=has_logo,
-            logo_ts=logo_ts,
-            custom_title=custom_title,
-        ), 200
-    except Exception:
-        return Response(KEEPALIVE_HTML, mimetype="text/html"), 200
+@app.route("/miniapp")
+@app.route("/glaze")
+@app.route("/admin")
+@app.route("/zenvyre")
+def route_glaze_miniapp():
+    live_accs = len(get_all_accounts_from_ram(enabled_only=True))
+    running_tasks = sum(1 for v in ACTIVE_TASKS.values() if not v["stop"].is_set())
+    watched_boxes = len(CanhTreoWatchdogEngine.get_watched_boxes())
+    ram_mb = round(RenderRAMAutoCleaner.get_current_rss_mb(), 1)
+    ctx = {
+        "author": APP_AUTHOR,
+        "version": APP_VERSION,
+        "admin_id": TELEGRAM_ADMIN_ID,
+        "live_accs": live_accs,
+        "running_tasks": running_tasks,
+        "watched_boxes": watched_boxes,
+        "ram_mb": ram_mb,
+    }
+    rendered = GLAZE_MINIAPP_HTML
+    for k, v in ctx.items():
+        rendered = rendered.replace("{{ " + k + " }}", str(v)).replace("{{" + k + "}}", str(v))
+    return Response(rendered, mimetype="text/html; charset=utf-8")
+
+
+@app.route("/api/miniapp/lagbox", methods=["POST"])
+def api_miniapp_lagbox():
+    data = request.json or {}
+    target = str(data.get("target") or "").strip()
+    action = str(data.get("action") or "all").strip().lower()
+    if not target or target == "ALL":
+        boxes = get_all_known_zalo_group_ids()
+        target = str(next(iter(boxes))) if boxes else ""
+    if not target:
+        return jsonify({"ok": False, "error": "Vui lòng chọn hoặc nhập Box ID mục tiêu"}), 400
+    
+    disp = get_glaze_lag_dispatcher(target)
+    if not disp.zc_pool:
+        return jsonify({"ok": False, "error": "Chưa có tài khoản Zalo nào đang hoạt động"}), 400
+    
+    ok = disp.dispatch(target, action)
+    if ok:
+        msg = f"Đã dừng engine trên box {target}" if action == "stop" else f"Đã kích hoạt engine [{action.upper()}] vào box {target}"
+        return jsonify({"ok": True, "message": msg, "action": action, "target": target})
+    return jsonify({"ok": False, "error": f"Lệnh {action} không hợp lệ"}), 400
+
+
+@app.route("/api/miniapp/quick_action", methods=["POST"])
+def api_miniapp_quick_action():
+    data = request.get_json(silent=True) or {}
+    act = str(data.get("action") or "").lower()
+    if act == "clean_ram":
+        res = RenderRAMAutoCleaner.clean_now(reason="miniapp")
+        return jsonify({"ok": True, "message": f"Đã dọn RAM! Hiện tại: {res.get('after_mb', 0)}MB"})
+    if act == "stop_all":
+        stop_tasks_for_thread(None)
+        return jsonify({"ok": True, "message": "Đã dừng toàn bộ các chiến dịch đang chạy!"})
+    if act == "heal_antiban":
+        HEALTH_MGR.auto_heal_all()
+        return jsonify({"ok": True, "message": "Đã làm mới toàn bộ Tường Lửa Anti-Ban về 0% rủi ro!"})
+    return jsonify({"ok": False, "error": "Thao tác không hợp lệ"})
 
 
 @app.route("/api/zalo/search_stickers", methods=["POST", "GET"])
