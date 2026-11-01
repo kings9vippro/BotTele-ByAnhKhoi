@@ -1349,7 +1349,7 @@ class DirectTelegramBotRunner:
         notice_block = f"\n<blockquote>{extra_notice}</blockquote>" if extra_notice else ""
 
         return (
-            f"⚡ <b>GLAZE CORE ({APP_VERSION})</b>\n"
+            f"⚡ <b>GLAZE ({APP_VERSION})</b>\n"
             f"<blockquote>"
             f"👑 <b>{APP_AUTHOR}</b> • 🟢 <b>{acc_cnt} Acc</b> • 🚀 <b>{running_cnt} Task</b> • 🧹 <b>{ram_mb:.0f}MB</b>\n"
             f"📂 <b>Nhây:</b> <code>{nhay_f}</code> • <b>Ngôn:</b> <code>{ngon_f}</code>\n"
@@ -2022,7 +2022,7 @@ class DirectTelegramBotRunner:
             else:
                 blocks = self._read_txt_file_blocks(file_name, mode=mode)
                 if not blocks:
-                    blocks = ["GLAZE CORE", "Tốc độ phản hồi 0s"]
+                    blocks = ["GLAZE", "Tốc độ phản hồi 0s"]
 
             # Chỉ dừng tiến trình cũ trên đúng các Box mục tiêu đang chọn để các Box/Acc khác vẫn chạy bình thường!
             if box_id == "ALL":
@@ -2444,6 +2444,8 @@ class DirectTelegramBotRunner:
 
         if not chat_id or not data:
             return
+
+        self.answer_callback(cb_id)
 
         # 1. KIỂM TRA QUYỀN SỬ DỤNG BOT (CHẶN 100% NGƯỜI LẠ HOẶC ID ĐÃ BỊ ADMIN XOÁ)
         if not is_telegram_user_authorized(user_id, first_name):
