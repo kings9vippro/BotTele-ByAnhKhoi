@@ -1,11 +1,11 @@
 # ==============================================================================
-# ZENVYRE — BỘ ĐIỀU KHIỂN TRUNG TÂM BOT TELEGRAM & MINI APP SIÊU TỐC 🇻🇳
+# GLAZE — BỘ ĐIỀU KHIỂN TRUNG TÂM BOT TELEGRAM & MINI APP 🇻🇳
 # Author : Dev Anh Khôi
-# Version: v2026.21.0 ZENVYRE ULTRA
+# Version: v2.5
 # ==============================================================================
-APP_TITLE = "ZENVYRE"
+APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "v2026.21.0 ZENVYRE ULTRA"
+APP_VERSION = "v2.5"
 
 import os
 import re
@@ -160,7 +160,7 @@ def strip_button_custom_emojis(reply_markup):
     except Exception:
         return reply_markup
 
-# DANH SÁCH 10 CHỨC NĂNG CỐT LÕI CHÍNH CỦA HỆ THỐNG ZENVYRE (ĐÃ XOÁ SẠCH TREO NGÔN ĐỎ, TREO NGÔN GIF & CÁC LỆNH RƯỜM RÀ)
+# DANH SÁCH CHỨC NĂNG CỐT LÕI HỆ THỐNG GLAZE (ĐÃ XOÁ SẠCH TREO NGÔN ĐỎ, TREO NGÔN GIF & CÁC LỆNH RƯỜM RÀ)
 FUNCTION_ITEMS_32 = [
     {"id": "fn_treo_damau",    "label": "🌈 Treo Ngôn (.g)",       "mode": "treo_ngon",      "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "ngon.txt",        "desc": "Treo ngôn nguyên dãy (giữ cách dòng) + lặp x2 (.g)", "emoji_id": "5359785904535774578"},
     {"id": "fn_treo_nhay",     "label": "🔥 Treo Nhây (.n)",       "mode": "treo_nhay",      "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "nhay.txt",        "desc": "Treo nhây từng dòng rời + lặp x2 (.n)", "emoji_id": "5424972470023104089"},
@@ -179,7 +179,7 @@ FUNCTION_ITEMS_32 = [
     {"id": "fn_fontstyle",     "label": "🔤 Cỡ & Kiểu Chữ",        "mode": "special_font",   "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",                "desc": "Chọn cỡ chữ To Đậm (f_18), Vừa Đậm (f_15) (.font)", "emoji_id": "5368324170671202286"},
 ]
 
-# BẢNG CHỨC NĂNG CHÍNH ZENVYRE (GỌN GÀNG, ĐẦY ĐỦ 14 NÚT CHỨC NĂNG CHÍNH)
+# BẢNG CHỨC NĂNG CHÍNH GLAZE (GỌN GÀNG, ĐẦY ĐỦ 14 NÚT CHỨC NĂNG CHÍNH)
 COMPACT_TELE_FUNCTIONS_16 = FUNCTION_ITEMS_32[:14]
 
 FUNCTION_MAP_BY_ID = {item["id"]: item for item in FUNCTION_ITEMS_32}
@@ -1328,7 +1328,7 @@ class DirectTelegramBotRunner:
         elif active_tab == "mgmt":
             sec_title = "QUẢN LÝ ACC, COOKIE & KHO FILE (.TXT)"
         else:
-            sec_title = "MINI APP ZENVYRE & TIỆN ÍCH NHANH"
+            sec_title = "MINI APP GLAZE & TIỆN ÍCH"
 
         acc_cnt, running_cnt, color_label, delay_val = cls._get_live_runtime_summary(user_id=user_id)
         ram_mb = 64.0
@@ -1349,7 +1349,7 @@ class DirectTelegramBotRunner:
         notice_block = f"\n<blockquote>{extra_notice}</blockquote>" if extra_notice else ""
 
         return (
-            f"🌌 <b>ZENVYRE ULTRA ({APP_VERSION})</b>\n"
+            f"⚡ <b>GLAZE CORE ({APP_VERSION})</b>\n"
             f"<blockquote>"
             f"👑 <b>{APP_AUTHOR}</b> • 🟢 <b>{acc_cnt} Acc</b> • 🚀 <b>{running_cnt} Task</b> • 🧹 <b>{ram_mb:.0f}MB</b>\n"
             f"📂 <b>Nhây:</b> <code>{nhay_f}</code> • <b>Ngôn:</b> <code>{ngon_f}</code>\n"
@@ -1360,11 +1360,11 @@ class DirectTelegramBotRunner:
         )
 
     @classmethod
-    def _get_miniapp_button(cls, label="🌌 Mini App Giới Thiệu Admin (ZENVYRE)"):
+    def _get_miniapp_button(cls, label="⚡ Mở Mini App GLAZE"):
         ext_url = (os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("PUBLIC_WEB_URL") or "").strip().rstrip("/")
         if ext_url.startswith("https://"):
             return {"text": label, "web_app": {"url": f"{ext_url}/miniapp"}}
-        return tg_btn(label, "open_zenvyre_miniapp", emoji_key="crown")
+        return tg_btn(label, "open_glaze_miniapp", emoji_key="crown")
 
     @classmethod
     def build_tabbed_keyboard(cls, active_tab="func", page=1, user_id=ROOT_ADMIN_ID):
@@ -1418,7 +1418,7 @@ class DirectTelegramBotRunner:
 
         else:  # util
             rows.extend([
-                [cls._get_miniapp_button("🌌 Mở Mini App Giới Thiệu Admin (ZENVYRE)")],
+                [cls._get_miniapp_button("⚡ Mở Mini App GLAZE")],
                 [
                     tg_btn("⏱️ Canh Treo 1p30s", "pickfn:fn_canh_treo", emoji_key="radar"),
                     tg_btn("🔗 Tạo Link Box Zalo", "pickfn:fn_link_box", emoji_key="bolt"),
@@ -1710,7 +1710,7 @@ class DirectTelegramBotRunner:
                 )
             w_summary = "\n".join(w_lines) if w_lines else "• <i>Chưa bật canh treo ở Box nào. Hãy bấm chọn 1 Box bên dưới để bắt đầu canh 1p30s!</i>"
             cap = (
-                f"⏱️ <b>HỆ THỐNG CANH TREO 1 PHÚT 30 GIÂY (ZENVYRE WATCHDOG)</b>\n\n"
+                f"⏱️ <b>HỆ THỐNG CANH TREO 1 PHÚT 30 GIÂY (GLAZE WATCHDOG)</b>\n\n"
                 f"<blockquote>"
                 f"• Chọn Box cần canh bên dưới: Hệ thống sẽ giám sát 24/7 theo thời gian thực.\n"
                 f"• Ngay khi phát hiện trong vòng <b>1 phút 30 giây (90s)</b> không có ai nhắn tin tiếp theo, Bot sẽ lập tức tìm <b>tin nhắn cuối cùng</b> và báo cáo về đây!"
@@ -1736,7 +1736,7 @@ class DirectTelegramBotRunner:
                 tg_btn("Quay lại Chức Năng", "tab_func_1", emoji_key="back"),
             ])
             cap = (
-                f"🔗 <b>API TẠO &amp; LẤY LINK BOX ZALO SIÊU TỐC (ZENVYRE)</b>\n\n"
+                f"🔗 <b>API TẠO &amp; LẤY LINK BOX ZALO (GLAZE)</b>\n\n"
                 f"<blockquote>"
                 f"• Bấm vào bất kỳ Box Zalo nào bên dưới để lấy ngay đường dẫn mời tham gia nhóm (<code>https://zalo.me/g/...</code>) hoặc tạo link mới qua API Zalo!"
                 f"</blockquote>"
@@ -1773,7 +1773,7 @@ class DirectTelegramBotRunner:
                 ]
             }
             cap = (
-                f"{tg_anim('magic', '🌈')} <b>CHẾ ĐỘ ĐI MÀU CÙNG CHỌN (.MAU — ZENVYRE)</b>\n\n"
+                f"{tg_anim('magic', '🌈')} <b>CHẾ ĐỘ ĐI MÀU CÙNG CHỌN (.MAU — GLAZE)</b>\n\n"
                 "<blockquote>"
                 "• <b>Đi Màu Cùng Chọn</b>: Kết hợp nhiều màu tự chọn trên cùng câu chữ (hoặc gõ trực tiếp trên Zalo: <code>.mau do cam</code>, <code>.mau do vang xanh</code>).\n"
                 "• <b>Đổi Màu Từng Từ / Từng Ký Tự</b>: Tự động xoay vòng màu rực rỡ, 0% chữ trắng!"
@@ -2022,7 +2022,7 @@ class DirectTelegramBotRunner:
             else:
                 blocks = self._read_txt_file_blocks(file_name, mode=mode)
                 if not blocks:
-                    blocks = ["ZENVYRE ULTRA VIP 2026", "Tốc độ ánh sáng cân mọi chiến trường"]
+                    blocks = ["GLAZE CORE", "Tốc độ phản hồi 0s"]
 
             # Chỉ dừng tiến trình cũ trên đúng các Box mục tiêu đang chọn để các Box/Acc khác vẫn chạy bình thường!
             if box_id == "ALL":
@@ -2692,9 +2692,9 @@ class DirectTelegramBotRunner:
             self.edit_menu_message(chat_id, msg_id, cap, reply_markup=self.build_tabbed_keyboard("func", 1, user_id=user_id))
             return
 
-        if data == "open_zenvyre_miniapp":
-            self.answer_callback(cb_id, "🌌 Đang mở Mini App Giới Thiệu Admin ZENVYRE...")
-            self.send_zenvyre_miniapp_intro(chat_id, reply_to=msg_id)
+        if data == "open_glaze_miniapp":
+            self.answer_callback(cb_id, "⚡ Đang mở Mini App GLAZE...")
+            self.send_glaze_miniapp_intro(chat_id, reply_to=msg_id)
             return
 
         if data == "canhtreo_refresh":
@@ -2987,7 +2987,7 @@ class DirectTelegramBotRunner:
                 chat_id,
                 f"{tg_anim('magic', '🎨')} <b>TẠO STICKER ẢNH SẮC NÉT (512×512) &amp; NHÃN DÁN VIDEO NGẮN (≤ 3.0 GIÂY)</b>\n\n"
                 "<blockquote>"
-                "1️⃣ <b>Tạo Sticker Bằng Ảnh:</b> Gửi bất kỳ bức ảnh nào vào đây ➡️ Bot tự động nâng cấp độ nét Ultra-HD 512×512 và xuất Sticker!\n"
+                "1️⃣ <b>Tạo Sticker Bằng Ảnh:</b> Gửi bất kỳ bức ảnh nào vào đây ➡️ Bot tự động nâng cấp độ nét 512×512 512×512 và xuất Sticker!\n"
                 "2️⃣ <b>Tạo Nhãn Dán Bằng Video Ngắn:</b> Gửi video ngắn <b>dưới 3 giây (≤ 3.0s)</b> vào đây ➡️ Bot tự động chuyển thành nhãn dán động sắc nét!\n"
                 "⚠️ <b>Lưu ý:</b> Video dài <b>trên 3 giây (&gt; 3.0s)</b> sẽ bị hệ thống <b>TỪ CHỐI NGAY LẬP TỨC</b>!"
                 "</blockquote>",
@@ -3339,11 +3339,11 @@ class DirectTelegramBotRunner:
         )
         self.edit_menu_message(chat_id, msg_id, cap, reply_markup={"inline_keyboard": rows})
 
-    def send_zenvyre_miniapp_intro(self, chat_id, reply_to=None):
+    def send_glaze_miniapp_intro(self, chat_id, reply_to=None):
         """Hiển thị Thẻ Giới Thiệu Admin ZENVYRE (kèm Logo ZENVYRE chính chủ & nút mở Mini App Giới Thiệu Admin)."""
         ext_url = (os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("PUBLIC_WEB_URL") or "").strip().rstrip("/")
         caption_html = (
-            f"🌌 <b>ZENVYRE — MINI APP GIỚI THIỆU ADMIN</b> 🌌\n\n"
+            f"⚡ <b>GLAZE — MINI APP & ĐIỀU KHIỂN HỆ THỐNG</b> ⚡\n\n"
             f"<blockquote>"
             f"👑 <b>Founder &amp; Lead Developer:</b> <b>{APP_AUTHOR}</b>\n"
             f"🆔 <b>Telegram Admin ID:</b> <code>{ROOT_ADMIN_ID}</code>\n"
@@ -3358,13 +3358,13 @@ class DirectTelegramBotRunner:
         )
         kb_rows = []
         if ext_url.startswith("https://"):
-            kb_rows.append([{"text": "🌌 Mở Giao Diện Mini App ZENVYRE (Full HD)", "web_app": {"url": f"{ext_url}/miniapp"}}])
+            kb_rows.append([{"text": "⚡ Mở Giao Diện Mini App GLAZE", "web_app": {"url": f"{ext_url}/miniapp"}}])
         kb_rows.append([
             tg_btn("💬 Liên Hệ Admin Dev Anh Khôi", url=f"tg://user?id={ROOT_ADMIN_ID}", emoji_key="crown"),
             tg_btn("📋 Mở Bảng Điều Khiển", "tab_func_1", emoji_key="fire"),
         ])
         rm = {"inline_keyboard": kb_rows}
-        logo_p = os.path.join(BASE_DIR, "zenvyre_logo.png")
+        logo_p = os.path.join(BASE_DIR, "glaze_logo.png")
         if os.path.isfile(logo_p):
             try:
                 with open(logo_p, "rb") as rf:
@@ -3758,8 +3758,8 @@ class DirectTelegramBotRunner:
             self.send_welcome_video_menu(chat_id, cap, reply_to=msg_id, reply_markup=kb)
             return
 
-        if cmd_raw in ("/miniapp", "/zenvyre", "/admin", "/info"):
-            self.send_zenvyre_miniapp_intro(chat_id, reply_to=msg_id)
+        if cmd_raw in ("/miniapp", "/glaze", "/zenvyre", "/admin", "/info"):
+            self.send_glaze_miniapp_intro(chat_id, reply_to=msg_id)
             return
 
         if cmd_raw in ("/canhtreo",):
@@ -4025,3 +4025,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+TelegramSuperBotRunner.send_zenvyre_miniapp_intro = TelegramSuperBotRunner.send_glaze_miniapp_intro
