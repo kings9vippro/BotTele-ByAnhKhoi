@@ -377,15 +377,28 @@ def can_user_access_account(user_id, owner_tg_id) -> bool:
     return bool(u_s and o_s and u_s == o_s)
 
 
+_ACCOUNT_OWNER_SCHEMA_READY = False
+_ACCOUNT_OWNER_SCHEMA_LOCK = threading.Lock()
+
+def _ensure_account_owner_schema(conn):
+    global _ACCOUNT_OWNER_SCHEMA_READY
+    with _ACCOUNT_OWNER_SCHEMA_LOCK:
+        if _ACCOUNT_OWNER_SCHEMA_READY:
+            return
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
+        if not columns:
+            return
+        if "owner_tg_id" not in columns:
+            conn.execute("ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''")
+            conn.commit()
+        _ACCOUNT_OWNER_SCHEMA_READY = True
+
 def get_user_visible_accounts(user_id, enabled_only=False, platform=None):
     """Trả về danh sách tài khoản mà user_id được phép nhìn thấy và sử dụng."""
     out = []
     try:
         conn = _open_db()
-        try:
-            conn.execute("ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''")
-        except Exception:
-            pass
+        _ensure_account_owner_schema(conn)
         rows = conn.execute(
             "SELECT id, name, platform, uid, imei, cookies, user_agent, zpw_enk, chat_cmd_enabled, enabled, token, is_bot, owner_tg_id FROM accounts ORDER BY id DESC"
         ).fetchall()
