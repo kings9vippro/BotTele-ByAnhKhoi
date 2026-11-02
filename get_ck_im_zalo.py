@@ -47,8 +47,8 @@ from zalo_login import (
 )
 
 # CẤU HÌNH BOT TELEGRAM TRUNG TÂM (GLAZE)
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8917587021:AAGnf2uUmNLI1r747luw8BVGi_hr3jBzWpw")
-ROOT_ADMIN_ID = str(os.environ.get("TELEGRAM_ADMIN_ID", "8827605973")).strip()
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+ROOT_ADMIN_ID = str(os.environ.get("TELEGRAM_ADMIN_ID", "")).strip()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "database.db")
@@ -1031,7 +1031,9 @@ class DirectTelegramBotRunner:
         return s
 
     def __init__(self, token=TELEGRAM_BOT_TOKEN):
-        self.token = (token or TELEGRAM_BOT_TOKEN).strip()
+        self.token = (token or "").strip()
+        if not self.token:
+            raise ValueError("TELEGRAM_BOT_TOKEN is required to start the Telegram bot")
         self.api_base = f"https://api.telegram.org/bot{self.token}"
         self.running = False
         self.offset = 0
@@ -1172,7 +1174,47 @@ class DirectTelegramBotRunner:
         return self.api_call("sendMessage", payload, timeout=12)
 
     def send_welcome_video_menu(self, chat_id, caption_html, reply_to=None, reply_markup=None):
-        """Gửi bảng điều khiển kèm Logo GLAZE chính thức, tự động cache file_id để phản hồi 0.01s."""
+        """Send the welcome MP4 once, then reuse Telegram's cached video file_id."""
+        cached_video_fid = getattr(self, "_cached_welcome_video_fid", None)
+        if cached_video_fid is None:
+            cached_video_fid = _get_db_setting("tg_welcome_video_fid_v1", "")
+            self._cached_welcome_video_fid = cached_video_fid
+        if cached_video_fid:
+            payload = {
+                "chat_id": chat_id,
+                "video": cached_video_fid,
+                "caption": caption_html,
+                "parse_mode": "HTML",
+                "supports_streaming": True,
+            }
+            if reply_to:
+                payload["reply_to_message_id"] = reply_to
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+            res = self.api_call("sendVideo", payload, timeout=12)
+            if res.get("ok"):
+                return res
+            self._cached_welcome_video_fid = ""
+
+        if os.path.isfile(WELCOME_VIDEO_PATH):
+            try:
+                data = {"chat_id": str(chat_id), "caption": caption_html, "parse_mode": "HTML", "supports_streaming": "true"}
+                if reply_to:
+                    data["reply_to_message_id"] = str(reply_to)
+                if reply_markup:
+                    data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+                with open(WELCOME_VIDEO_PATH, "rb") as vf:
+                    res = self.api_call("sendVideo", data=data, files={"video": ("welcome.mp4", vf, "video/mp4")}, timeout=30)
+                video = (res.get("result") or {}).get("video") or {}
+                file_id = video.get("file_id") or ""
+                if res.get("ok") and file_id:
+                    self._cached_welcome_video_fid = file_id
+                    _set_db_setting("tg_welcome_video_fid_v1", file_id)
+                    return res
+            except Exception:
+                pass
+
+        # A compact image fallback keeps /menu usable if Telegram rejects the MP4.
         cached_logo_fid = getattr(self, "_cached_glaze_logo_fid", None)
         if cached_logo_fid is None:
             cached_logo_fid = _get_db_setting("tg_glaze_logo_fid_v2", "")
@@ -4028,6 +4070,9 @@ def _ensure_internal_bot_watchdog():
 
 def start_background_telegram_bot(token=TELEGRAM_BOT_TOKEN, force_restart=False):
     global _BOT_INSTANCE
+    token = (token or "").strip()
+    if not token:
+        return None
     _ensure_internal_bot_watchdog()
     with _BOT_LOCK:
         if _BOT_INSTANCE is not None and _BOT_INSTANCE.running and not force_restart:
@@ -4041,7 +4086,7 @@ def start_background_telegram_bot(token=TELEGRAM_BOT_TOKEN, force_restart=False)
                 _BOT_INSTANCE.poll_session.close()
             except Exception:
                 pass
-        runner = DirectTelegramBotRunner(token=token or TELEGRAM_BOT_TOKEN)
+        runner = DirectTelegramBotRunner(token=token)
         t = threading.Thread(target=runner.run_forever, daemon=True, name="TelegramBot4AppRunner")
         runner.poll_thread = t
         t.start()
@@ -4062,6 +4107,8 @@ def get_telegram_bot_status():
 
 
 def main():
+    if not TELEGRAM_BOT_TOKEN:
+        raise SystemExit("TELEGRAM_BOT_TOKEN is required")
     print(f"Đang khởi chạy GLAZE (Admin ID: {ROOT_ADMIN_ID})...")
     runner = DirectTelegramBotRunner(TELEGRAM_BOT_TOKEN)
     runner.run_forever()

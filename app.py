@@ -150,12 +150,14 @@ except ImportError:
 # CẤU HÌNH HỆ THỐNG & BẢO MẬT WEB
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8917587021:AAGnf2uUmNLI1r747luw8BVGi_hr3jBzWpw")
-TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "8827605973")
-SECRET_KEY = os.environ.get("SECRET_KEY", "telegram-ultra-secure-session-key-2026-hmac-sha256")
-ACCESS_KEY = os.environ.get("WEB_KEY", "anhba")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "").strip()
+# An unset secret deliberately creates a fresh local-only key. Production must
+# configure SECRET_KEY so authenticated sessions survive a restart.
+SECRET_KEY = os.environ.get("SECRET_KEY") or secrets.token_urlsafe(32)
+ACCESS_KEY = os.environ.get("WEB_KEY", "").strip()
 DEFAULT_ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-DEFAULT_ADMIN_PASS = os.environ.get("ADMIN_PASS", "anhba")
+DEFAULT_ADMIN_PASS = os.environ.get("ADMIN_PASS", "")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "database.db")
@@ -226,10 +228,36 @@ def get_or_create_csrf_token():
         session["csrf_token"] = tok
     return tok
 
+def is_miniapp_request_authorized():
+    """Accept an authenticated dashboard session or a signed Telegram Web App request."""
+    if session.get("logged_in"):
+        return True
+    init_data = (request.headers.get("X-Telegram-Init-Data") or "").strip()
+    if not (TELEGRAM_BOT_TOKEN and init_data and TELEGRAM_ADMIN_ID):
+        return False
+    try:
+        from urllib.parse import parse_qsl
+        values = dict(parse_qsl(init_data, keep_blank_values=True))
+        received_hash = values.pop("hash", "")
+        auth_date = int(values.get("auth_date") or 0)
+        if not received_hash or abs(time.time() - auth_date) > 86400:
+            return False
+        data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+        secret = hmac.new(b"WebAppData", TELEGRAM_BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
+        expected_hash = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(received_hash, expected_hash):
+            return False
+        user = json.loads(values.get("user") or "{}")
+        return str(user.get("id") or "") == TELEGRAM_ADMIN_ID
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+
 @app.before_request
 def security_middleware():
     if not WebSecurityFortress.inspect_request():
         return jsonify({"ok": False, "error": "Forbidden Request Signature"}), 403
+    if request.path.startswith("/api/miniapp/") and not is_miniapp_request_authorized():
+        return jsonify({"ok": False, "error": "Phiên Mini App không hợp lệ hoặc đã hết hạn"}), 401
     if request.path.startswith("/api/") or request.path.startswith("/task/"):
         ip = get_client_ip()
         now = time.time()
@@ -19409,14 +19437,13 @@ ZENVYRE_LOGO_B64 = "/9j/4AAQSkZJRgABAQAASABIAAD/4QCMRXhpZgAATU0AKgAAAAgABQESAAMA
 GLAZE_LOGO_B64 = ZENVYRE_LOGO_B64
 
 def _ensure_zenvyre_banner_files():
-    try:
-        raw_logo = base64.b64decode(ZENVYRE_LOGO_B64)
-        for fn_l in ("zenvyre_logo.png", "menu_banner.png", "glaze_logo.png", "image.png"):
-            p_l = os.path.join(BASE_DIR, fn_l)
-            with open(p_l, "wb") as wf:
-                wf.write(raw_logo)
-    except Exception:
-        pass
+    """Compatibility hook kept intentionally side-effect free.
+
+    Startup used to recreate several duplicate logo files on every worker.
+    Routes now serve the maintained glaze_logo.png directly, so writing files
+    here only consumed Render's limited disk I/O and could overwrite branding.
+    """
+    return None
 
 _ensure_zenvyre_banner_files()
 
@@ -19427,6 +19454,9 @@ _ensure_zenvyre_banner_files()
 @app.route("/glaze_logo.png")
 def route_zenvyre_logo_png():
     try:
+        logo_path = os.path.join(BASE_DIR, "glaze_logo.png")
+        if os.path.isfile(logo_path):
+            return send_from_directory(BASE_DIR, "glaze_logo.png", mimetype="image/png", max_age=86400)
         raw_logo = base64.b64decode(ZENVYRE_LOGO_B64)
         return Response(raw_logo, mimetype="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
     except Exception:
@@ -19686,10 +19716,22 @@ textarea.inp {
   border: 1px solid var(--border-subtle);
   background: var(--bg-elevated);
   color: var(--text-primary);
-  transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease;
+  transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.fn-btn:hover, .tag-btn:hover, .cmd-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
 }
 .fn-btn:active {
   transform: scale(0.98);
+}
+.fn-btn:focus-visible, .tag-btn:focus-visible, .tab-btn:focus-visible, .cmd-card:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+.fn-btn:disabled, .tag-btn:disabled { opacity: 0.58; cursor: wait; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 .fn-btn.primary-fn {
   border-color: rgba(56, 189, 248, 0.28);
@@ -20112,12 +20154,27 @@ try {
   }
 } catch(e) {}
 
+const telegramInitData = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) || '';
+async function miniappFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (telegramInitData) headers.set('X-Telegram-Init-Data', telegramInitData);
+  const response = await fetch(url, {...options, headers});
+  if (response.status === 401) showToast('Phiên Mini App đã hết hạn. Hãy mở lại từ Telegram.');
+  return response;
+}
+
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.innerText = msg;
   t.classList.add('show');
   clearTimeout(window._toastT);
   window._toastT = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>\"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', "'": '&#39;'
+  })[char]);
 }
 
 function switchTab(tabKey, el) {
@@ -20141,7 +20198,7 @@ function copyCmd(cmd) {
 
 async function refreshTelemetry() {
   try {
-    const r = await fetch('/api/miniapp/telemetry');
+    const r = await miniappFetch('/api/miniapp/telemetry');
     const d = await r.json();
     if (!d.ok) return;
     document.getElementById('st-accs').innerText = d.live_accs || '0';
@@ -20172,7 +20229,7 @@ function renderRunningTasks(tasks) {
 
 async function stopSingleMiniTask(tid) {
   try {
-    const r = await fetch('/api/miniapp/stop_task', {
+    const r = await miniappFetch('/api/miniapp/stop_task', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({task_id: tid})
@@ -20185,7 +20242,7 @@ async function stopSingleMiniTask(tid) {
 
 async function loadMiniAppBoxes() {
   try {
-    const r = await fetch('/api/miniapp/boxes');
+    const r = await miniappFetch('/api/miniapp/boxes');
     const d = await r.json();
     if (d.ok && d.boxes) {
       const sel = document.getElementById('launch-box-sel');
@@ -20209,7 +20266,7 @@ async function launchMiniCampaign(mode) {
   const boxId = customBox || boxSel;
   showToast('Đang kích hoạt...');
   try {
-    const r = await fetch('/api/miniapp/launch', {
+    const r = await miniappFetch('/api/miniapp/launch', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -20234,7 +20291,7 @@ async function launchMiniCampaign(mode) {
 
 async function loadMiniAppAccounts() {
   try {
-    const r = await fetch('/api/miniapp/accounts');
+    const r = await miniappFetch('/api/miniapp/accounts');
     const d = await r.json();
     const wrap = document.getElementById('miniapp-acc-list');
     if (!d.ok || !d.accounts || !d.accounts.length) {
@@ -20244,8 +20301,8 @@ async function loadMiniAppAccounts() {
     wrap.innerHTML = d.accounts.map(a => `
       <div class="item-row">
         <div>
-          <div class="item-title">#${a.id} [${(a.platform || 'ZALO').toUpperCase()}] ${a.name}</div>
-          <div class="item-sub">UID: ${a.uid || '-'} • Lệnh .menu: ${a.chat_cmd_enabled ? 'BẬT' : 'TẮT'}</div>
+          <div class="item-title">#${a.id} [${escapeHtml((a.platform || 'ZALO').toUpperCase())}] ${escapeHtml(a.name)}</div>
+          <div class="item-sub">UID: ${escapeHtml(a.uid || '-')} • Lệnh .menu: ${a.chat_cmd_enabled ? 'BẬT' : 'TẮT'}</div>
         </div>
         <div style="display:flex; gap:5px;">
           <button class="tag-btn ${a.chat_cmd_enabled ? 'active-sel' : ''}" onclick="toggleMiniAccCmd(${a.id})">${a.chat_cmd_enabled ? 'Bật' : 'Tắt'}</button>
@@ -20264,7 +20321,7 @@ async function importCookieImeiNow() {
   }
   showToast('Đang xác thực & nạp tài khoản...');
   try {
-    const r = await fetch('/api/miniapp/add_cookie', {
+    const r = await miniappFetch('/api/miniapp/add_cookie', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({raw_input: raw})
@@ -20292,7 +20349,7 @@ async function startMiniAppQr() {
   box.style.display = 'block';
   st.innerText = 'Đang khởi tạo mã QR Zalo PC...';
   try {
-    const r = await fetch('/api/miniapp/start_qr', {method: 'POST'});
+    const r = await miniappFetch('/api/miniapp/start_qr', {method: 'POST'});
     const d = await r.json();
     if (!d.ok || !d.session_id) {
       st.innerText = d.error || 'Không thể tạo QR';
@@ -20327,7 +20384,7 @@ async function startMiniAppQr() {
 
 async function toggleMiniAccCmd(aid) {
   try {
-    const r = await fetch('/api/miniapp/toggle_acc_cmd', {
+    const r = await miniappFetch('/api/miniapp/toggle_acc_cmd', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({acc_id: aid})
@@ -20341,7 +20398,7 @@ async function toggleMiniAccCmd(aid) {
 async function deleteMiniAcc(aid) {
   if (!confirm('Xoá tài khoản #' + aid + '?')) return;
   try {
-    const r = await fetch('/api/miniapp/delete_acc', {
+    const r = await miniappFetch('/api/miniapp/delete_acc', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({acc_id: aid})
@@ -20355,7 +20412,7 @@ async function deleteMiniAcc(aid) {
 
 async function loadMiniAppFiles() {
   try {
-    const r = await fetch('/api/miniapp/files');
+    const r = await miniappFetch('/api/miniapp/files');
     const d = await r.json();
     if (!d.ok) return;
     document.getElementById('cur-nhay-file').innerText = d.selected_nhay || 'nhay.txt';
@@ -20372,7 +20429,7 @@ async function loadMiniAppFiles() {
       return `
         <div class="item-row">
           <div style="flex:1; min-width:0;">
-            <div class="item-title">${f.filename}</div>
+            <div class="item-title">${escapeHtml(f.filename)}</div>
             <div class="item-sub">${f.lines.toLocaleString()} dòng • ${f.size_kb} KB</div>
           </div>
           <div style="display:flex; gap:5px;">
@@ -20395,7 +20452,7 @@ async function handleFileUpload(event) {
   formData.append('file', file);
   formData.append('target', targetType);
   try {
-    const r = await fetch('/api/miniapp/upload_file', {method: 'POST', body: formData});
+    const r = await miniappFetch('/api/miniapp/upload_file', {method: 'POST', body: formData});
     const d = await r.json();
     showToast(d.message || 'Đã tải file lên');
     loadMiniAppFiles();
@@ -20407,7 +20464,7 @@ async function handleFileUpload(event) {
 
 async function selectFile(filename, target) {
   try {
-    const r = await fetch('/api/miniapp/select_file', {
+    const r = await miniappFetch('/api/miniapp/select_file', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({filename, target})
@@ -20423,7 +20480,7 @@ async function selectFile(filename, target) {
 async function deleteFile(filename) {
   if (!confirm('Xoá file ' + filename + '?')) return;
   try {
-    const r = await fetch('/api/miniapp/delete_file', {
+    const r = await miniappFetch('/api/miniapp/delete_file', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({filename})
@@ -20442,7 +20499,7 @@ async function saveNewTxtFile() {
     return;
   }
   try {
-    const r = await fetch('/api/miniapp/add_file', {
+    const r = await miniappFetch('/api/miniapp/add_file', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({filename, content})
@@ -20459,7 +20516,7 @@ async function saveNewTxtFile() {
 
 async function triggerQuick(action) {
   try {
-    const r = await fetch('/api/miniapp/quick_action', {
+    const r = await miniappFetch('/api/miniapp/quick_action', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({action})
@@ -20840,13 +20897,20 @@ def api_miniapp_files():
         "selected_ngon": sel_ngon,
     })
 
+MAX_MINIAPP_TEXT_BYTES = 1024 * 1024
+_SAFE_MINIAPP_TEXT_FILENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,80}\.txt\Z", re.IGNORECASE)
+
+def _safe_miniapp_text_filename(value):
+    filename = secure_filename(os.path.basename(str(value or "").strip()))
+    return filename if _SAFE_MINIAPP_TEXT_FILENAME.fullmatch(filename) else ""
+
 
 @app.route("/api/miniapp/select_file", methods=["POST"])
 def api_miniapp_select_file():
     data = request.get_json(silent=True) or {}
-    fn = os.path.basename(str(data.get("filename") or "").strip())
+    fn = _safe_miniapp_text_filename(data.get("filename"))
     target = str(data.get("target") or "nhay").lower()
-    if not fn or not fn.endswith(".txt"):
+    if not fn:
         return jsonify({"ok": False, "error": "Tên file không hợp lệ"})
     with SYSTEM_CFG_LOCK:
         if target == "ngon":
@@ -20864,12 +20928,17 @@ def api_miniapp_select_file():
 @app.route("/api/miniapp/add_file", methods=["POST"])
 def api_miniapp_add_file():
     data = request.get_json(silent=True) or {}
-    raw_name = os.path.basename(str(data.get("filename") or "").strip())
+    raw_name = str(data.get("filename") or "").strip()
     content = str(data.get("content") or "")
     if not raw_name:
         return jsonify({"ok": False, "error": "Chưa nhập tên file"})
     if not raw_name.lower().endswith(".txt"):
         raw_name += ".txt"
+    raw_name = _safe_miniapp_text_filename(raw_name)
+    if not raw_name:
+        return jsonify({"ok": False, "error": "Tên file chỉ được dùng chữ, số, dấu chấm, gạch nối và gạch dưới"})
+    if len(content.encode("utf-8")) > MAX_MINIAPP_TEXT_BYTES:
+        return jsonify({"ok": False, "error": "File vượt giới hạn 1 MB của Render Free"}), 413
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     fp = os.path.join(UPLOAD_DIR, raw_name)
     with open(fp, "w", encoding="utf-8") as f:
@@ -20909,9 +20978,12 @@ def api_miniapp_upload_file():
     if not file_obj or not file_obj.filename:
         return jsonify({"ok": False, "error": "Tên file không hợp lệ"}), 400
 
-    filename = os.path.basename(file_obj.filename)
+    filename = str(file_obj.filename or "").strip()
     if not filename.lower().endswith(".txt"):
         filename += ".txt"
+    filename = _safe_miniapp_text_filename(filename)
+    if not filename:
+        return jsonify({"ok": False, "error": "Tên file chỉ được dùng chữ, số, dấu chấm, gạch nối và gạch dưới"}), 400
 
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     dest_path = os.path.join(UPLOAD_DIR, filename)
@@ -20924,6 +20996,10 @@ def api_miniapp_upload_file():
                 break
             f_out.write(chunk)
             total_bytes += len(chunk)
+            if total_bytes > MAX_MINIAPP_TEXT_BYTES:
+                f_out.close()
+                os.remove(dest_path)
+                return jsonify({"ok": False, "error": "File vượt giới hạn 1 MB của Render Free"}), 413
 
     line_count = 0
     try:
@@ -20974,8 +21050,8 @@ def api_miniapp_upload_file():
 @app.route("/api/miniapp/delete_file", methods=["POST"])
 def api_miniapp_delete_file():
     data = request.get_json(silent=True) or {}
-    filename = os.path.basename(str(data.get("filename") or "").strip())
-    if not filename or not filename.endswith(".txt"):
+    filename = _safe_miniapp_text_filename(data.get("filename"))
+    if not filename:
         return jsonify({"ok": False, "error": "Tên file không hợp lệ"})
     filepath = os.path.join(UPLOAD_DIR, filename)
     if os.path.exists(filepath):
@@ -21032,7 +21108,7 @@ def _listener_watchdog_loop():
             if step_c % 2 == 0:
                 sync_all_zalo_listeners()
             # Giám sát & tự động hồi sinh Bot Telegram nếu mạng đứt hoặc socket getUpdates bị treo > 45s
-            if step_c % 3 == 0 and os.environ.get("DISABLE_TELEGRAM_BOT", "0") != "1":
+            if step_c % 3 == 0 and TELEGRAM_BOT_TOKEN and os.environ.get("DISABLE_TELEGRAM_BOT", "0") != "1":
                 try:
                     import get_ck_im_zalo as _tg_mod
                     bot_inst = getattr(_tg_mod, "_BOT_INSTANCE", None) or _TELEGRAM_BOT_RUNNER
@@ -24010,6 +24086,8 @@ _TELEGRAM_BOT_RUNNER = None
 
 def ensure_telegram_bot_started():
     global _TELEGRAM_BOT_RUNNER
+    if not TELEGRAM_BOT_TOKEN:
+        return
     if _TELEGRAM_BOT_RUNNER is not None:
         return
     try:
@@ -24018,7 +24096,7 @@ def ensure_telegram_bot_started():
     except Exception:
         pass
 
-if os.environ.get("DISABLE_TELEGRAM_BOT", "0") != "1":
+if TELEGRAM_BOT_TOKEN and os.environ.get("DISABLE_TELEGRAM_BOT", "0") != "1":
     threading.Thread(target=ensure_telegram_bot_started, daemon=True).start()
 
 if __name__ == "__main__":
