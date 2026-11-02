@@ -4652,6 +4652,22 @@ class ZaloStickerMakerEngine:
     - Xuất đồng thời Animated GIF 2-Frame trong suốt, WebP lossless và PNG 512×512 để gửi ra đúng định dạng Nhãn Dán trên Zalo & Telegram."""
 
     MAX_VIDEO_STICKER_DURATION_SEC = 3.99
+    _PENDING_LOCK = threading.RLock()
+    _PENDING_IMAGES = {}
+
+    @classmethod
+    def wait_for_image(cls, acc_id, thread_id, sender_id):
+        now = time.monotonic()
+        with cls._PENDING_LOCK:
+            cls._PENDING_IMAGES = {k: expiry for k, expiry in cls._PENDING_IMAGES.items() if expiry > now}
+            cls._PENDING_IMAGES[(str(acc_id), str(thread_id), str(sender_id))] = now + 120
+
+    @classmethod
+    def consume_image_wait(cls, acc_id, thread_id, sender_id):
+        key = (str(acc_id), str(thread_id), str(sender_id))
+        with cls._PENDING_LOCK:
+            expiry = cls._PENDING_IMAGES.pop(key, 0)
+        return expiry > time.monotonic()
     _MEDIA_CACHE_LOCK = threading.RLock()
     _MEDIA_BY_MSG_ID = {}
     _MEDIA_BY_CLI_ID = {}
@@ -16544,6 +16560,14 @@ def parse_and_execute_inchat_command(
     if cmd_token in ("sticker",):
         arg_st = arg_body.strip()
         has_quote_obj = bool(isinstance(raw_msg_obj, dict) and raw_msg_obj.get("quote"))
+        if platform == "zalo" and not arg_st and not has_quote_obj:
+            owner = my_uid if s_uid in ("0", "") else s_uid
+            if not owner:
+                _send_reply("Không xác định được người gửi. Hãy thử lại khi tài khoản đã kết nối.", broadcast_all_accs=False)
+            else:
+                ZaloStickerMakerEngine.wait_for_image(acc_id, thread_id, owner)
+                _send_reply("Hãy gửi một ảnh trong cuộc trò chuyện này trong 2 phút. Chỉ ảnh từ người vừa yêu cầu mới được nhận.", broadcast_all_accs=False)
+            return True
         quote_media = ZaloStickerMakerEngine.extract_quote_sticker_or_media(
             raw_msg_obj, zalo_client=zalo_client if platform == "zalo" else None, thread_id=thread_id
         )
@@ -18038,8 +18062,6 @@ class ZaloRealtimeListener:
             return
 
         content = strip_invisible_chars(raw_content)
-        if not content:
-            return
 
         # Không đánh rớt tin nhắn mới chưa từng thấy (unseen) vì lệch đồng hồ server/client;
         # chỉ lọc bằng bộ nhớ nguyên tử seen_msg_ids của riêng từng Cookie!
@@ -18131,6 +18153,26 @@ class ZaloRealtimeListener:
         except Exception:
             pass
         sender_for_auth = "0" if raw_uid_from in ("0", "") else (uid_from or my_uid)
+        media = ZaloStickerMakerEngine._parse_single_dict_for_media(msg_obj) or ZaloStickerMakerEngine._parse_single_dict_for_media(msg_obj.get("content"))
+        # A missing sender is not proof that the account owner sent the image.
+        media_sender = (my_uid if raw_uid_from == "0" else uid_from) if raw_uid_from else ""
+        media_type = str(msg_obj.get("msgType") or msg_obj.get("cliMsgType") or "").lower()
+        is_photo = bool(media and media.get("kind") == "media_url" and not media.get("is_video") and ("photo" in media_type or "image" in media_type or "[hình ảnh]" in content.lower() or any(key in msg_obj for key in ("photoUrl", "imageUrl", "imgUrl")) or isinstance(msg_obj.get("content"), dict)))
+        if is_photo and media_sender and ZaloStickerMakerEngine.consume_image_wait(self.acc_id, thread_id, media_sender):
+            def _create_waiting_sticker():
+                try:
+                    result = ZaloStickerMakerEngine.create_sharp_image_sticker(media["url"], session=client.s, thumb_fallback_url=media.get("thumb_url"))
+                    if not result.get("ok") or not client.send_custom_sticker_media(thread_id, result.get("gif_bytes") or result.get("png_bytes") or b"", filename="sticker.gif", is_group=is_group, webp_bytes=result.get("webp_bytes"), gif_bytes=result.get("gif_bytes"), png_bytes=result.get("png_bytes")):
+                        client.send_adv("Không tạo được nhãn dán. Hãy thử lại bằng .sticker.", thread_id, is_group=is_group, color_mode="none")
+                except Exception:
+                    try:
+                        client.send_adv("Không tạo được nhãn dán. Hãy thử lại bằng .sticker.", thread_id, is_group=is_group, color_mode="none")
+                    except Exception:
+                        pass
+            _PRIORITY_CMD_EXECUTOR.submit(_create_waiting_sticker)
+            return
+        if not content:
+            return
         try:
             CanhTreoWatchdogEngine.record_incoming_message(
                 box_id=thread_id,
@@ -18362,7 +18404,7 @@ class ZaloRealtimeListener:
                         if isinstance(rc_u, dict):
                             rc_u = rc_u.get("title") or rc_u.get("text") or rc_u.get("msg") or ""
                         ct_u = strip_invisible_chars(str(rc_u))
-                        if not ct_u or self._check_and_mark_seen(m, ct_u, mark=False):
+                        if self._check_and_mark_seen(m, ct_u, mark=False):
                             continue
                         m_u_copy = dict(m)
                         def _fast_dm_dispatch(msg_item=m_u_copy, raw_c=ct_u):
@@ -18398,7 +18440,7 @@ class ZaloRealtimeListener:
                         if isinstance(rc_g, dict):
                             rc_g = rc_g.get("title") or rc_g.get("text") or rc_g.get("msg") or ""
                         ct_g = strip_invisible_chars(str(rc_g))
-                        if not ct_g or self._check_and_mark_seen(m, ct_g, mark=False):
+                        if self._check_and_mark_seen(m, ct_g, mark=False):
                             continue
                         m_copy = dict(m)
                         m_copy["grid"] = gid_m

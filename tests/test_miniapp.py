@@ -39,6 +39,21 @@ class MiniAppTests(unittest.TestCase):
         client = app.app.test_client()
         self.assertEqual(client.get("/api/miniapp/qr_status/abc").status_code, 401)
 
+    def test_sticker_wait_is_scoped_and_expires(self):
+        engine = app.ZaloStickerMakerEngine
+        with engine._PENDING_LOCK:
+            engine._PENDING_IMAGES.clear()
+        with patch.object(app.time, "monotonic", return_value=100):
+            engine.wait_for_image(1, "group", "owner")
+            self.assertFalse(engine.consume_image_wait(1, "group", "other"))
+            self.assertFalse(engine.consume_image_wait(2, "group", "owner"))
+            self.assertFalse(engine.consume_image_wait(1, "other", "owner"))
+            self.assertTrue(engine.consume_image_wait(1, "group", "owner"))
+            self.assertFalse(engine.consume_image_wait(1, "group", "owner"))
+            engine.wait_for_image(1, "group", "owner")
+        with patch.object(app.time, "monotonic", return_value=221):
+            self.assertFalse(engine.consume_image_wait(1, "group", "owner"))
+
 
 if __name__ == "__main__":
     unittest.main()
