@@ -20592,11 +20592,15 @@ def route_zenvyre_miniapp():
         "watched_boxes": watched_boxes,
         "ram_mb": ram_mb,
     }
-    rendered = ZENVYRE_MINIAPP_HTML
-    for k, v in ctx.items():
-        rendered = rendered.replace("{{ " + k + " }}", str(v)).replace("{{" + k + "}}", str(v)).replace("{ " + k + " }", str(v))
-    rendered_body = render_template_string(rendered, **ctx)
+    with open(os.path.join(BASE_DIR, "templates", "miniapp.html"), encoding="utf-8") as template:
+        rendered_body = render_template_string(template.read(), **ctx)
     return Response(rendered_body, mimetype="text/html; charset=utf-8")
+
+
+@app.route("/api/miniapp/qr_status/<session_id>")
+def api_miniapp_qr_status(session_id):
+    status = ZaloQRLoginManager.get_session_status(session_id)
+    return jsonify({key: status.get(key) for key in ("ok", "status", "message", "qr_base64", "remaining_sec")})
 
 
 @app.route("/api/miniapp/telemetry")
@@ -20690,8 +20694,8 @@ def api_miniapp_add_cookie():
 @app.route("/api/miniapp/start_qr", methods=["POST"])
 def api_miniapp_start_qr():
     try:
-        sid = ZaloQRLoginManager.start_new_qr_session()
-        return jsonify({"ok": True, "session_id": sid})
+        status = ZaloQRLoginManager.start_qr_session()
+        return jsonify({key: status.get(key) for key in ("ok", "session_id", "status", "message")})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
@@ -21017,18 +21021,12 @@ def api_miniapp_upload_file():
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     dest_path = os.path.join(UPLOAD_DIR, filename)
 
-    total_bytes = 0
+    file_bytes = file_obj.read(MAX_MINIAPP_TEXT_BYTES + 1)
+    total_bytes = len(file_bytes)
+    if total_bytes > MAX_MINIAPP_TEXT_BYTES:
+        return jsonify({"ok": False, "error": "File vượt giới hạn 1 MB của Render Free"}), 413
     with open(dest_path, "wb") as f_out:
-        while True:
-            chunk = file_obj.read(65536)
-            if not chunk:
-                break
-            f_out.write(chunk)
-            total_bytes += len(chunk)
-            if total_bytes > MAX_MINIAPP_TEXT_BYTES:
-                f_out.close()
-                os.remove(dest_path)
-                return jsonify({"ok": False, "error": "File vượt giới hạn 1 MB của Render Free"}), 413
+        f_out.write(file_bytes)
 
     line_count = 0
     try:
