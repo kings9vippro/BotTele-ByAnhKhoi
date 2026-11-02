@@ -150,8 +150,8 @@ except ImportError:
 # CẤU HÌNH HỆ THỐNG & BẢO MẬT WEB
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "").strip()
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8917587021:AAGnf2uUmNLI1r747luw8BVGi_hr3jBzWpw").strip()
+TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "8827605973").strip()
 # An unset secret deliberately creates a fresh local-only key. Production must
 # configure SECRET_KEY so authenticated sessions survive a restart.
 SECRET_KEY = os.environ.get("SECRET_KEY") or secrets.token_urlsafe(32)
