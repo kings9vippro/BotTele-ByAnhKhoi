@@ -10,8 +10,14 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: TELEGRAM_BOT_TOKEN
-        value: 8917587021:AAGnf2uUmNLI1r747luw8BVGi_hr3jBzWpw
+        sync: false
       - key: TELEGRAM_ADMIN_ID
-        value: "8827605973"
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: WEB_KEY
+        sync: false
+      - key: ADMIN_PASS
+        sync: false
       - key: ZALO_PREFER_COUNTRY
         value: SG
