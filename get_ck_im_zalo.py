@@ -1051,6 +1051,8 @@ class DirectTelegramBotRunner:
         self.last_poll_ok_ts = time.time()
         self.poll_thread = None
         self.executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="TgFastWorker")
+        # Reserve a few workers for navigation when long-running jobs are busy.
+        self.interactive_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="TgInteractive")
         self._cached_welcome_file_id = _get_db_setting("tg_welcome_file_id", "")
         self._cached_welcome_kind = _get_db_setting("tg_welcome_kind", "animation")
         self._cached_boxes_by_user = {}
@@ -1101,6 +1103,11 @@ class DirectTelegramBotRunner:
                             changed = True
                     if changed:
                         if files:
+                            for part in files.values():
+                                stream = part[1] if isinstance(part, tuple) and len(part) > 1 else part
+                                if hasattr(stream, "seek"):
+                                    stream.seek(0)
+                        if files:
                             r2 = sess.post(url, data=fallback_data, files=files, timeout=eff_timeout)
                         else:
                             r2 = sess.post(url, json=fallback_data, timeout=eff_timeout)
@@ -1114,6 +1121,10 @@ class DirectTelegramBotRunner:
                             if "caption" in fallback_data and isinstance(fallback_data["caption"], str):
                                 fallback_data["caption"] = strip_tg_anim_tags(fallback_data["caption"])
                             if files:
+                                for part in files.values():
+                                    stream = part[1] if isinstance(part, tuple) and len(part) > 1 else part
+                                    if hasattr(stream, "seek"):
+                                        stream.seek(0)
                                 r3 = sess.post(url, data=fallback_data, files=files, timeout=eff_timeout)
                             else:
                                 r3 = sess.post(url, json=fallback_data, timeout=eff_timeout)
@@ -1207,9 +1218,10 @@ class DirectTelegramBotRunner:
                     res = self.api_call("sendVideo", data=data, files={"video": ("welcome.mp4", vf, "video/mp4")}, timeout=30)
                 video = (res.get("result") or {}).get("video") or {}
                 file_id = video.get("file_id") or ""
-                if res.get("ok") and file_id:
-                    self._cached_welcome_video_fid = file_id
-                    _set_db_setting("tg_welcome_video_fid_v1", file_id)
+                if res.get("ok"):
+                    if file_id:
+                        self._cached_welcome_video_fid = file_id
+                        _set_db_setting("tg_welcome_video_fid_v1", file_id)
                     return res
             except Exception:
                 pass
@@ -1291,7 +1303,7 @@ class DirectTelegramBotRunner:
         if text:
             payload["text"] = text[:190]
         if async_mode and not show_alert:
-            self.executor.submit(self.api_call, "answerCallbackQuery", payload, None, 6, False)
+            self.interactive_executor.submit(self.api_call, "answerCallbackQuery", payload, None, 6, False)
             return {"ok": True}
         return self.api_call("answerCallbackQuery", payload, timeout=6)
 
@@ -4012,7 +4024,11 @@ class DirectTelegramBotRunner:
                         uid_upd = upd.get("update_id", 0)
                         if uid_upd >= self.offset:
                             self.offset = uid_upd + 1
-                        self.executor.submit(self._safe_process_update, upd)
+                        msg = upd.get("message") or upd.get("edited_message") or {}
+                        command = str(msg.get("text") or "").split(None, 1)
+                        command = command[0].lower().split("@")[0] if command else ""
+                        executor = self.interactive_executor if "callback_query" in upd or command in ("/start", "/menu", "/help", "/bot", "/ping") else self.executor
+                        executor.submit(self._safe_process_update, upd)
                 else:
                     fail_streak += 1
                     desc_err = str(res.get("description") or "").lower()

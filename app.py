@@ -1575,6 +1575,18 @@ AUTHORIZED_USERS_RAM_CACHE = {}
 AUTHORIZED_USERS_LOCK = threading.RLock()
 _AUTHORIZED_USERS_LOADED = False
 _PRIORITY_CMD_EXECUTOR = ThreadPoolExecutor(max_workers=32)
+# Menu replies should not wait behind slow media or other network requests.
+_INTERACTIVE_REPLY_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="InteractiveReply")
+_INTERACTIVE_INPUT_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="InteractiveInput")
+
+def _zalo_input_executor(text):
+    if isinstance(text, dict):
+        text = text.get("title") or text.get("text") or text.get("msg") or ""
+    parts = str(text or "").strip().lower().split(None, 1)
+    command = parts[0] if parts else ""
+    if command in (".menu", "/menu", "!menu", ".help", "/help", "!help", ".m", ".h", ".lenh", ".hdsd"):
+        return _INTERACTIVE_INPUT_EXECUTOR
+    return _PRIORITY_CMD_EXECUTOR
 _TYPING_BG_POOL = ThreadPoolExecutor(max_workers=8)
 
 def _ensure_authorized_users_loaded():
@@ -15545,7 +15557,8 @@ def parse_and_execute_inchat_command(
                     pass
 
         for idx_a, a_item in enumerate(target_accs[:12]):
-            _PRIORITY_CMD_EXECUTOR.submit(_reply_for_acc, idx_a, a_item)
+            executor = _INTERACTIVE_REPLY_EXECUTOR if cmd_token in ("menu", "help", "lenh", "bot", "hdsd") else _PRIORITY_CMD_EXECUTOR
+            executor.submit(_reply_for_acc, idx_a, a_item)
 
     if cmd_token in ("menu", "help", "lenh", "bot", "hdsd"):
         with SYSTEM_CFG_LOCK:
@@ -16684,8 +16697,6 @@ def parse_and_execute_inchat_command(
             g_bytes = res_st.get("gif_bytes") or res_st.get("anim_bytes")
             p_bytes = res_st.get("png_bytes")
             f_name = "sticker.gif" if g_bytes else "sticker.png"
-            with SYSTEM_CFG_LOCK:
-                rep_st_cnt = int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)
             def _send_zsticker_worker(a_it):
                 try:
                     zc_s = zalo_client if a_it["id"] == acc_id else Zalo.get_pooled_client(
@@ -16694,17 +16705,17 @@ def parse_and_execute_inchat_command(
                         zpw_enk_hint=a_it.get("zpw_enk") or "",
                         uid_hint=a_it.get("uid") or ""
                     )
-                    for _ in range(max(1, rep_st_cnt)):
-                        zc_s.send_custom_sticker_media(
-                            thread_id, m_bytes, filename=f_name, is_group=is_group,
-                            caption="", webp_bytes=w_bytes, gif_bytes=g_bytes, png_bytes=p_bytes
-                        )
-                        time.sleep(0.12)
+                    sent = zc_s.send_custom_sticker_media(
+                        thread_id, m_bytes, filename=f_name, is_group=is_group,
+                        caption="", webp_bytes=w_bytes, gif_bytes=g_bytes, png_bytes=p_bytes
+                    )
+                    if not sent:
+                        _send_reply("Không gửi được nhãn dán. Hãy thử lại với ảnh khác.", broadcast_all_accs=False)
                 except Exception:
-                    pass
+                    _send_reply("Không gửi được nhãn dán. Hãy thử lại sau.", broadcast_all_accs=False)
             for a_it in present_accs[:4]:
                 _PRIORITY_CMD_EXECUTOR.submit(_send_zsticker_worker, a_it)
-        log_system_command(acc_id, thread_id, sender_id, text, "Cắt khung & bắn ZSticker AI 512x512 (x2) trực tiếp từ ảnh/video Reply trên Zalo")
+        log_system_command(acc_id, thread_id, sender_id, text, "Tạo nhãn dán 512x512 từ ảnh/video được trả lời")
         return True
 
     if cmd_token in ("qr",):
@@ -18314,7 +18325,7 @@ class ZaloRealtimeListener:
                         if 0 < msg_ts < 10000000000:
                             msg_ts *= 1000
                         if is_direct_user_command_text(ct) and (msg_ts == 0 or abs(now_ms - msg_ts) <= 900000):
-                            _PRIORITY_CMD_EXECUTOR.submit(self._process_msg_item, client, acc_now, dict(m), False, None)
+                            _zalo_input_executor(ct).submit(self._process_msg_item, client, acc_now, dict(m), False, None)
                         else:
                             self._check_and_mark_seen(m, ct, mark=True)
                 for m in g_msgs:
@@ -18340,7 +18351,7 @@ class ZaloRealtimeListener:
                         if gid_m and gid_m != my_uid and is_direct_user_command_text(ct) and (msg_ts == 0 or abs(now_ms - msg_ts) <= 900000):
                             m_copy = dict(m)
                             m_copy["grid"] = gid_m
-                            _PRIORITY_CMD_EXECUTOR.submit(self._process_msg_item, client, acc_now, m_copy, True, gid_m)
+                            _zalo_input_executor(ct).submit(self._process_msg_item, client, acc_now, m_copy, True, gid_m)
                         else:
                             self._check_and_mark_seen(m, ct, mark=True)
             else:
@@ -18367,7 +18378,7 @@ class ZaloRealtimeListener:
                                     except Exception:
                                         pass
                             self._process_msg_item(client, acc_now, msg_item, default_is_group=False, fallback_thread_id=None)
-                        _PRIORITY_CMD_EXECUTOR.submit(_fast_dm_dispatch)
+                        _zalo_input_executor(ct_u).submit(_fast_dm_dispatch)
                 for m in g_msgs:
                     if isinstance(m, dict):
                         ZaloStickerMakerEngine.cache_incoming_media_message(m, my_uid=my_uid)
@@ -18408,7 +18419,7 @@ class ZaloRealtimeListener:
                                 except Exception:
                                     pass
                             self._process_msg_item(client, acc_now, msg_item, default_is_group=True, fallback_thread_id=grp_id)
-                        _PRIORITY_CMD_EXECUTOR.submit(_fast_group_dispatch)
+                        _zalo_input_executor(ct_g).submit(_fast_group_dispatch)
         except Exception:
             pass
 
@@ -18632,7 +18643,7 @@ class ZaloRealtimeListener:
                             msg_items = self._extract_msg_dicts(inner, parent_is_group=is_grp_cmd)
                             for m in msg_items:
                                 m["cmd"] = cmd_id
-                                _PRIORITY_CMD_EXECUTOR.submit(self._process_msg_item, client, acc_now, m, is_grp_cmd, None)
+                                _zalo_input_executor(m.get("content") or m.get("message") or m.get("msg")).submit(self._process_msg_item, client, acc_now, m, is_grp_cmd, None)
                 except socket.timeout:
                     continue
                 except Exception:
@@ -18677,7 +18688,7 @@ class ZaloRealtimeListener:
                     msg_items = self._extract_msg_dicts(inner, parent_is_group=is_grp_cmd)
                     for m in msg_items:
                         m["cmd"] = cmd_id
-                        _PRIORITY_CMD_EXECUTOR.submit(self._process_msg_item, client, acc_now, m, is_grp_cmd, None)
+                        _zalo_input_executor(m.get("content") or m.get("message") or m.get("msg")).submit(self._process_msg_item, client, acc_now, m, is_grp_cmd, None)
         except Exception:
             pass
 
@@ -19848,6 +19859,23 @@ textarea.inp {
 #toast.show {
   transform: translateX(-50%) translateY(0);
 }
+/* A lighter, touch-friendly control surface for Telegram and small screens. */
+.shell { max-width: 620px; padding: 18px 16px 48px; }
+.topbar { padding: 18px; border-radius: 20px; background: #151b26; }
+.brand-avatar { width: 48px; height: 48px; border-radius: 15px; }
+.brand-name { font-size: 19px; letter-spacing: .08em; }
+.metrics-bar { gap: 8px; margin: 14px 0; }
+.m-tile { padding: 14px 4px; border-radius: 14px; }
+.tabs-nav { display: flex; overflow-x: auto; gap: 6px; padding: 5px; background: #111722; border-radius: 16px; scrollbar-width: none; }
+.tabs-nav::-webkit-scrollbar { display: none; }
+.tab-btn { flex: 1 0 auto; min-height: 42px; padding: 10px 12px; border: 0; border-radius: 12px; }
+.tab-btn.active { box-shadow: none; }
+.panel { border-radius: 20px; padding: 18px; }
+.panel-title { font-size: 13px; letter-spacing: .04em; }
+.fn-btn, .tag-btn, .inp { min-height: 42px; border-radius: 12px; }
+.item-row { padding: 12px; border-radius: 14px; }
+.fn-btn:active, .tag-btn:active, .tab-btn:active { transform: scale(.97); }
+@media (max-width: 380px) { .shell { padding: 12px 10px 36px; } .panel { padding: 14px; } }
 </style>
 </head>
 <body>
@@ -19861,7 +19889,7 @@ textarea.inp {
       </div>
     </div>
     <div class="live-badge">
-      <span class="live-dot"></span> 0.0S LIVE
+      <span class="live-dot"></span> ĐANG KẾT NỐI
     </div>
   </div>
 
@@ -20540,7 +20568,8 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshTelemetry();
   loadMiniAppBoxes();
   loadMiniAppFiles();
-  setInterval(refreshTelemetry, 3000);
+    setInterval(() => { if (!document.hidden) refreshTelemetry(); }, 10000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshTelemetry(); });
 });
 </script>
 </body>
