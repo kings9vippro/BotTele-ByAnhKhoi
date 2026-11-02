@@ -99,6 +99,53 @@ class MiniAppTests(unittest.TestCase):
             self.assertEqual(len(queries), first_count)
         self.assertIn("owner_tg_id", {row[1] for row in conn.execute("PRAGMA table_info(accounts)")})
 
+    def test_legacy_account_remains_visible_in_telegram(self):
+        import sqlite3
+        import get_ck_im_zalo as telegram
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE accounts(id INTEGER, name TEXT, platform TEXT)")
+        conn.execute("INSERT INTO accounts VALUES(1, 'Existing', 'zalo')")
+        with patch.object(telegram, "_open_db", return_value=conn), patch.object(telegram, "_ACCOUNT_OWNER_SCHEMA_READY", False):
+            accounts = telegram.get_user_visible_accounts(telegram.ROOT_ADMIN_ID)
+        self.assertEqual([account["name"] for account in accounts], ["Existing"])
+
+    def test_import_cannot_report_success_when_save_fails(self):
+        import get_ck_im_zalo as telegram
+        with patch.object(telegram, "parse_imei_and_cookie_from_text", return_value=("imei", {"zpsid": "cookie"}, {})), patch.object(telegram, "check_zalo_cookie_imei_live", return_value={}), patch.object(telegram, "sync_zalo_account_to_web_db", return_value=None):
+            response = self.client.post("/api/miniapp/add_cookie", json={"raw_input": "example"})
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(response.json["ok"])
+
+    def test_sticker_upload_decodes_json_and_encrypted_envelopes(self):
+        client = app.Zalo.__new__(app.Zalo)
+        media = {"normalUrl": "https://example/sticker.gif", "photoId": "123"}
+        self.assertEqual(client._decode_sticker_upload({"error_code": 0, "data": media}), media)
+        with patch.object(client, "_dec", return_value=app.json.dumps({"data": media})):
+            self.assertEqual(client._decode_sticker_upload({"error_code": 0, "data": "encrypted"}), media)
+        self.assertEqual(client._decode_sticker_upload({"error_code": 5, "data": media}), {})
+
+    def test_miniapp_has_fresh_build_header(self):
+        response = self.client.get("/miniapp")
+        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-2026-11-03")
+        self.assertIn("no-store", response.headers["Cache-Control"])
+
+    def test_custom_sticker_upload_plain_response_reaches_send(self):
+        client = app.Zalo.__new__(app.Zalo)
+        client.secret_key = "test"
+        client.imei = "test-device"
+        client.prio_s = Mock()
+        client._sync_cookie_headers = Mock()
+        client._enc = Mock(return_value="encrypted")
+        upload = Mock(status_code=200, content=b"json")
+        upload.json.return_value = {"error_code": 0, "data": {"normalUrl": "https://example/sticker.gif", "photoId": "123"}}
+        delivered = Mock(status_code=200, content=b"json")
+        delivered.json.return_value = {"error_code": 0, "data": {"msgId": "456"}}
+        client.prio_s.post.side_effect = [upload, delivered]
+        self.assertTrue(client.send_custom_sticker_media("123", b"GIF89a", is_group=False, gif_bytes=b"GIF89a"))
+        self.assertEqual(client.prio_s.post.call_count, 2)
+        for call in client.prio_s.post.call_args_list:
+            self.assertIn("/message/", call.args[0])
+
 
 if __name__ == "__main__":
     unittest.main()

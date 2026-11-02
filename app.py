@@ -8,6 +8,9 @@ APP_AUTHOR = "Dev Anh Khôi"
 APP_VERSION = "GLAZE"
 
 import sys, types
+if __name__ == "__main__":
+    # Telegram imports `app`; running `python app.py` must reuse this instance.
+    sys.modules.setdefault("app", sys.modules[__name__])
 try:
     import zalo_lag_engine
 except ImportError:
@@ -293,6 +296,9 @@ def add_security_headers(resp):
     resp.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     if request.path.startswith("/api/"):
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    if request.path in ("/", "/miniapp", "/admin", "/zenvyre"):
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp.headers["X-Glaze-UI-Version"] = "miniapp-2026-11-03"
     return resp
 
 # BỘ LỌC ẨN LOG TÀI KHOẢN NHẠY CẢM (STEALTH ACCOUNT LOG MASKING)
@@ -886,8 +892,7 @@ def get_all_accounts_from_ram(platform=None, enabled_only=False):
     if platform:
         items = [a for a in items if (a.get("platform") or "zalo").lower() == platform.lower()]
     if enabled_only:
-        en = [a for a in items if a.get("enabled", 1)]
-        items = en if en else items
+        items = [a for a in items if a.get("enabled", 1)]
     return [dict(a) for a in items]
 
 GLOBAL_STOP_EPOCH = 0
@@ -7264,6 +7269,24 @@ class Zalo:
                 continue
         return False
 
+    def _decode_sticker_upload(self, payload):
+        """Uploads may return plain JSON or an encrypted JSON envelope."""
+        if not isinstance(payload, dict) or payload.get("error_code", 0) not in (0, "0", None):
+            return {}
+        data = payload.get("data")
+        if isinstance(data, str):
+            try:
+                data = json.loads(self._dec(data))
+            except (ValueError, TypeError):
+                return {}
+        if isinstance(data, dict) and data.get("error_code", 0) not in (0, "0", None):
+            return {}
+        if isinstance(data, dict) and isinstance(data.get("data"), (dict, list)):
+            data = data["data"]
+        if isinstance(data, list):
+            data = next((item for item in data if isinstance(item, dict)), {})
+        return data if isinstance(data, dict) else {}
+
     def send_custom_sticker_media(self, thread_id, media_bytes, filename="sticker.gif", is_group=True, caption="", webp_bytes=None, gif_bytes=None, png_bytes=None, sticker_hint=None):
         """Tải lên & gửi Nhãn Dán Sticker 512×512 chuẩn chế độ Nhãn Dán Zalo (True Native Sticker Mode):
         - Ưu tiên 1: Upload file GIF động 2-frame trong suốt (sticker.gif) qua `/api/group/gif/upload` / `/api/message/gif/upload`
@@ -7308,7 +7331,7 @@ class Zalo:
 
         self._sync_cookie_headers()
         sent_ok = False
-        for grp_mode in (bool(is_group), not bool(is_group)):
+        for grp_mode in (bool(is_group),):
             for up_fname, payload_b, mime_t in upload_candidates:
                 try:
                     base_up_pl = {
@@ -7351,9 +7374,7 @@ class Zalo:
                             if r_u.status_code == 200 and r_u.content:
                                 rj_u = r_u.json()
                                 if rj_u.get("data"):
-                                    dec_str = self._dec(rj_u["data"])
-                                    dec_u = json.loads(dec_str) if dec_str else {}
-                                    d_u = (dec_u.get("data") if isinstance(dec_u.get("data"), dict) else dec_u) if isinstance(dec_u, dict) else {}
+                                    d_u = self._decode_sticker_upload(rj_u)
                                     if isinstance(d_u, dict):
                                         normal_url = (
                                             d_u.get("hdUrl")
@@ -19611,6 +19632,8 @@ def api_miniapp_add_cookie():
             zpw_enk=enk, user_agent=(meta or {}).get("user_agent", ""),
             owner_tg_id=str(TELEGRAM_ADMIN_ID)
         )
+        if not acc_id:
+            return jsonify({"ok": False, "error": "Không lưu được tài khoản vào cơ sở dữ liệu. Vui lòng kiểm tra nhật ký máy chủ."}), 500
         sync_all_zalo_listeners()
         return jsonify({"ok": True, "acc_id": acc_id, "message": f"Đã nạp {name} (#{acc_id}) thành công"})
     except Exception as e:

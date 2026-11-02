@@ -399,12 +399,12 @@ def get_user_visible_accounts(user_id, enabled_only=False, platform=None):
     try:
         conn = _open_db()
         _ensure_account_owner_schema(conn)
-        rows = conn.execute(
-            "SELECT id, name, platform, uid, imei, cookies, user_agent, zpw_enk, chat_cmd_enabled, enabled, token, is_bot, owner_tg_id FROM accounts ORDER BY id DESC"
-        ).fetchall()
+        cursor = conn.execute("SELECT * FROM accounts ORDER BY id DESC")
+        columns = [column[0] for column in cursor.description]
+        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
         conn.close()
         for r in rows:
-            aid, aname, aplat, auid, aimei, ack, aua, aenk, cmd_on, en_on, atok, is_b, owner_id = r
+            aid, aname, aplat, auid, aimei, ack, aua, aenk, cmd_on, en_on, atok, is_b, owner_id = (r.get(key) for key in ("id", "name", "platform", "uid", "imei", "cookies", "user_agent", "zpw_enk", "chat_cmd_enabled", "enabled", "token", "is_bot", "owner_tg_id"))
             if enabled_only and not (en_on is None or int(en_on)):
                 continue
             if platform and str(aplat or "zalo").lower() != str(platform).lower():
