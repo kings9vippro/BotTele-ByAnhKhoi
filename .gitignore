@@ -1,7 +1,10 @@
 __pycache__/
 *.py[cod]
 database.db
+database.db-*
 *.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 .env
 .env.*
 uploads/*.txt

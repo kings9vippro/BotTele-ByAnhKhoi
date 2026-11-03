@@ -1,0 +1,48 @@
+// Author: Dev Anh Khôi · Version: 1.2.0. Use ONLY with the isolated local test server.
+const { chromium } = require('playwright');
+const crypto = require('node:crypto');
+const assert = require('node:assert/strict');
+let browser;
+
+(async () => {
+  const values = {auth_date: String(Math.floor(Date.now() / 1000)), user: JSON.stringify({id: 123, first_name: 'Local Test'})};
+  const check = Object.keys(values).sort().map(key => `${key}=${values[key]}`).join('\n');
+  const secret = crypto.createHmac('sha256', 'WebAppData').update('test-token').digest();
+  values.hash = crypto.createHmac('sha256', secret).update(check).digest('hex');
+  const initData = new URLSearchParams(values).toString();
+  browser = await chromium.launch({executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox']});
+  const page = await browser.newPage({viewport: {width: 390, height: 844}});
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.route('https://telegram.org/**', route => route.abort());
+  const telemetryResponse = page.waitForResponse(response => response.url().includes('/api/miniapp/telemetry'));
+  const response = await page.goto('http://127.0.0.1:5873/miniapp#tgWebAppData=' + encodeURIComponent(initData));
+  assert.equal(response.headers()['x-glaze-ui-version'], 'miniapp-1.2.0');
+  assert.equal((await telemetryResponse).status(), 200, 'signed launch data works even when the Telegram SDK is unavailable');
+  await page.getByText('Đã đồng bộ', {exact: true}).waitFor();
+  const unauthorized = await page.request.get('http://127.0.0.1:5873/api/miniapp/accounts');
+  assert.equal(unauthorized.status(), 401);
+  await page.getByRole('tab', {name: 'Tài khoản'}).click();
+  await page.waitForFunction(() => document.querySelectorAll('#oauth-providers .provider').length === 2);
+  assert.equal(await page.getByRole('button', {name: 'Chưa cấu hình', exact: true}).count(), 2);
+  await page.getByRole('tab', {name: 'Tệp'}).click();
+  await page.getByLabel('Tên tệp', {exact: true}).fill('browser-verified.txt');
+  await page.getByLabel('Nội dung', {exact: true}).fill('Content from the real browser API flow.');
+  await page.getByLabel('Loại tệp', {exact: true}).selectOption('ngon');
+  await page.getByRole('button', {name: 'Lưu và chọn tệp', exact: true}).click();
+  await page.waitForFunction(() => document.getElementById('selected-ngon').textContent === 'browser-verified.txt');
+  await page.reload();
+  await page.getByRole('tab', {name: 'Tệp'}).click();
+  await page.waitForFunction(() => document.getElementById('selected-ngon').textContent === 'browser-verified.txt');
+  const item = page.locator('#file-list .row').filter({hasText: 'browser-verified.txt'});
+  await item.getByRole('button', {name: 'Nhây', exact: true}).click();
+  await page.waitForFunction(() => document.getElementById('selected-nhay').textContent === 'browser-verified.txt');
+  assert.equal(await item.getByRole('button', {name: 'Nhây', exact: true}).getAttribute('aria-pressed'), 'true');
+  await page.getByRole('tab', {name: 'Lệnh'}).click();
+  await page.getByText('.sticker', {exact: true}).waitFor();
+  assert.equal(await page.locator('#command-list .command').count(), 14);
+  assert.equal(await page.getByText('.lagbox', {exact: true}).count(), 0);
+  assert.deepEqual(errors, []);
+  await browser.close();
+  console.log('Real browser → authenticated API → SQLite → reload persistence passed');
+})().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => { if (browser) await browser.close(); });

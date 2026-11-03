@@ -1,11 +1,11 @@
 # ==============================================================================
 # ZENVYRE — SIÊU HỆ THỐNG ĐIỀU PHỐI ĐA TÀI KHOẢN ZALO • DISCORD • MESSENGER • TELE
 # Author : Dev Anh Khôi
-# Version: GLAZE
+# Version: 1.2.0
 # ==============================================================================
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 import sys, types
 if __name__ == "__main__":
@@ -56,6 +56,9 @@ from functools import wraps
 from urllib.parse import urlparse, unquote
 
 import requests
+from app_storage import DATABASE_PATH, UPLOAD_PATH, FILE_WRITE_LOCK, connect_database, normalize_file_index, save_text_file
+from miniapp_oauth import init_oauth_tables, register_oauth_routes
+from command_catalog import supported_commands
 from requests.adapters import HTTPAdapter
 try:
     from Crypto.Cipher import AES
@@ -153,7 +156,7 @@ except ImportError:
 # CẤU HÌNH HỆ THỐNG & BẢO MẬT WEB
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8917587021:AAGnf2uUmNLI1r747luw8BVGi_hr3jBzWpw").strip()
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "8827605973").strip()
 # An unset secret deliberately creates a fresh local-only key. Production must
 # configure SECRET_KEY so authenticated sessions survive a restart.
@@ -163,8 +166,8 @@ DEFAULT_ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 DEFAULT_ADMIN_PASS = os.environ.get("ADMIN_PASS", "")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "database.db")
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+DB_PATH = DATABASE_PATH
+UPLOAD_DIR = UPLOAD_PATH
 LOGO_DIR = os.path.join(UPLOAD_DIR, "brand")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(LOGO_DIR, exist_ok=True)
@@ -176,6 +179,7 @@ app.config["JSON_AS_ASCII"] = False
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 3600
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = bool(os.environ.get("OAUTH_PUBLIC_BASE_URL", "").startswith("https://") or os.environ.get("RENDER_EXTERNAL_URL", "").startswith("https://"))
 
 # LÁ CHẮN BẢO MẬT WEB (CHỐNG BRUTE-FORCE, RATE-LIMIT API, HEADERS)
 LOGIN_ATTEMPTS = defaultdict(lambda: {"fails": 0, "lock_until": 0.0})
@@ -296,9 +300,12 @@ def add_security_headers(resp):
     resp.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     if request.path.startswith("/api/"):
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    if request.path.startswith("/oauth/"):
+        resp.headers["Cache-Control"] = "no-store"
+        resp.headers["Referrer-Policy"] = "no-referrer"
     if request.path in ("/", "/miniapp", "/admin", "/zenvyre"):
         resp.headers["Cache-Control"] = "no-store, max-age=0"
-        resp.headers["X-Glaze-UI-Version"] = "miniapp-1.1.0"
+        resp.headers["X-Glaze-UI-Version"] = "miniapp-" + APP_VERSION
     return resp
 
 # BỘ LỌC ẨN LOG TÀI KHOẢN NHẠY CẢM (STEALTH ACCOUNT LOG MASKING)
@@ -366,24 +373,13 @@ class _PooledSQLiteConnection:
         return getattr(self._conn, name)
 
 def _create_raw_sqlite_conn():
-    global _ACTIVE_DB_PATH
-    try:
-        raw = sqlite3.connect(_ACTIVE_DB_PATH, timeout=30, check_same_thread=False)
-        raw.row_factory = sqlite3.Row
-        raw.execute("PRAGMA journal_mode=MEMORY;")
-        raw.execute("PRAGMA synchronous=OFF;")
-        raw.execute("PRAGMA temp_store=MEMORY;")
-        raw.execute("PRAGMA busy_timeout=15000;")
-        raw.execute("PRAGMA cache_size=-8000;")
-        return raw
-    except sqlite3.OperationalError:
-        import tempfile
-        _ACTIVE_DB_PATH = os.path.join(tempfile.gettempdir(), "noel_database.db")
-        raw = sqlite3.connect(_ACTIVE_DB_PATH, timeout=30, check_same_thread=False)
-        raw.row_factory = sqlite3.Row
-        raw.execute("PRAGMA temp_store=MEMORY;")
-        raw.execute("PRAGMA busy_timeout=15000;")
-        return raw
+    return connect_database(_ACTIVE_DB_PATH, rows=True)
+
+
+@app.errorhandler(sqlite3.Error)
+def storage_unavailable(error):
+    app.logger.error("Storage request failed: %s", type(error).__name__)
+    return jsonify({"ok": False, "error": "Không đọc/ghi được dữ liệu. Hãy thử đồng bộ lại; dữ liệu cũ không bị thay bằng số 0."}), 503
 
 def db():
     pooled = getattr(_DB_TLS, "conn", None)
@@ -527,20 +523,9 @@ def extract_messenger_uid(raw_cookies, fallback_uid=""):
     return str(uid or "").strip()
 
 def init_db():
-    global _ACTIVE_DB_PATH
-    try:
-        conn = db()
-        try:
-            conn.execute("PRAGMA journal_mode=MEMORY;")
-        except Exception:
-            pass
-        conn.execute("CREATE TABLE IF NOT EXISTS _lock_test (id INT)")
-    except sqlite3.OperationalError:
-        import tempfile
-        _ACTIVE_DB_PATH = os.path.join(tempfile.gettempdir(), "noel_database.db")
-        _DB_TLS.conn = None
-        conn = db()
+    conn = db()
     cur = conn.cursor()
+    init_oauth_tables(conn)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
@@ -791,6 +776,7 @@ def init_db():
     except Exception:
         pass
 
+    normalize_file_index(conn, UPLOAD_DIR)
     existing_admin = cur.execute("SELECT id FROM users WHERE username = ?", (DEFAULT_ADMIN_USER,)).fetchone()
     if not existing_admin:
         cur.execute(
@@ -802,6 +788,7 @@ def init_db():
     conn.close()
 
 init_db()
+register_oauth_routes(app, lambda: db(), lambda: TELEGRAM_ADMIN_ID)
 
 def get_setting(key, default_val=""):
     try:
@@ -834,30 +821,28 @@ BOT_LOGS_RAM_DEQUE = deque(maxlen=40)
 
 _LAST_ACCOUNTS_SYNC_TS = 0.0
 
-def refresh_accounts_ram_cache():
+def refresh_accounts_ram_cache(strict=False):
+    """Refresh the snapshot without modifying account data on a read.
+
+    Management APIs use strict mode: an unreadable database is not an empty list.
+    Existing message listeners can retain their last successful snapshot.
+    """
     global _LAST_ACCOUNTS_SYNC_TS
     try:
         conn = db()
         rows = conn.execute("SELECT * FROM accounts ORDER BY id DESC").fetchall()
         new_map = {}
-        bad_uid_ids = []
         for r in rows:
             d = dict(r)
             d["chat_cmd_enabled"] = int(d.get("chat_cmd_enabled", 1) if d.get("chat_cmd_enabled") is not None else 1)
+            d["enabled"] = int(d.get("enabled") if d.get("enabled") is not None else 1)
             d["allow_all_cmd"] = 0
             if (d.get("platform") or "zalo").lower() == "zalo":
                 u_val = str(d.get("uid") or "").strip()
                 is_fake_ts_uid = (u_val.isdigit() and len(u_val) == 10 and u_val.startswith("17"))
                 if u_val and (not u_val.isdigit() or u_val == str(d.get("imei") or "").strip() or is_fake_ts_uid):
                     d["uid"] = ""
-                    bad_uid_ids.append((d["id"],))
             new_map[d["id"]] = d
-        if bad_uid_ids:
-            try:
-                conn.executemany("UPDATE accounts SET uid='' WHERE id=?", bad_uid_ids)
-                conn.commit()
-            except Exception:
-                pass
         conn.close()
         with ACCOUNTS_RAM_LOCK:
             ACCOUNTS_RAM_CACHE.clear()
@@ -865,6 +850,8 @@ def refresh_accounts_ram_cache():
             _LAST_ACCOUNTS_SYNC_TS = time.time()
         return list(new_map.values())
     except Exception:
+        if strict:
+            raise
         with ACCOUNTS_RAM_LOCK:
             return list(ACCOUNTS_RAM_CACHE.values())
 
@@ -2660,13 +2647,11 @@ def resolve_file_record(query_val):
         return None
 
     files = get_ordered_files_with_display_num()
-    if not files:
-        return None
 
     num_match = re.match(r"^#?(\d+)$", q)
     if num_match:
         num = int(num_match.group(1))
-        by_disp = next((f for f in files if f["display_num"] == num), None)
+        by_disp = next((f for f in files if f.get("display_num") == num), None)
         if by_disp:
             return by_disp
         by_id = next((f for f in files if f["id"] == num), None)
@@ -2674,24 +2659,94 @@ def resolve_file_record(query_val):
             return by_id
 
     if q.lower() in ("auto", "default", "moinhat", "latest"):
-        return files[-1]
+        return files[-1] if files else None
 
     q_low = q.lower()
-    for f in files:
-        if f["filename"].lower() == q_low or q_low in f["filename"].lower():
-            return f
+    # An exact name must win over preset_foo.txt or other substring matches.
+    exact = [f for f in files if f["filename"].lower() == q_low]
+    if exact:
+        record = dict(exact[-1])
+        recorded_path = record.get("filepath") or ""
+        if os.path.isfile(recorded_path):
+            return record
+        relocated_path = os.path.join(UPLOAD_DIR, os.path.basename(recorded_path.replace("\\", "/")))
+        current_path = os.path.join(UPLOAD_DIR, os.path.basename(record["filename"]))
+        if os.path.isfile(relocated_path):
+            record["filepath"] = relocated_path
+        elif os.path.isfile(current_path):
+            record["filepath"] = current_path
+        return record
     # Dự phòng trực tiếp từ thư mục UPLOAD_DIR nếu file vừa tải lên chưa kịp vào bảng SQLite
     direct_fp = os.path.join(UPLOAD_DIR, os.path.basename(q))
-    if os.path.exists(direct_fp) and os.path.isfile(direct_fp):
+    if q == os.path.basename(q) and os.path.isfile(direct_fp):
         return {
-            "id": 999,
+            "id": None,
             "display_num": len(files) + 1,
             "filename": os.path.basename(q),
             "filepath": direct_fp,
             "lines_count": 1,
             "file_type": "ngon" if "ngon" in q_low else "nhay",
         }
-    return None
+    partial = [f for f in files if q_low in f["filename"].lower()]
+    return partial[0] if len(partial) == 1 else None
+
+
+def refresh_script_selections():
+    """Read persisted selections so Telegram and the web share one source."""
+    with FILE_WRITE_LOCK:
+        conn = db()
+        rows = conn.execute(
+            "SELECT key, value FROM app_settings WHERE key IN ('selected_nhay_file', 'selected_ngon_file')"
+        ).fetchall()
+        conn.close()
+        with SYSTEM_CFG_LOCK:
+            for setting in rows:
+                key, filename = setting["key"], setting["value"]
+                if SYSTEM_RUNTIME_CONFIG.get(key) != filename:
+                    SYSTEM_RUNTIME_CONFIG[key] = filename
+                    target = "ngon" if key == "selected_ngon_file" else "nhay"
+                    SYSTEM_RUNTIME_CONFIG.setdefault(f"selected_{target}_by_acc", {}).clear()
+                    SYSTEM_RUNTIME_CONFIG.setdefault("selected_file_by_acc", {}).clear()
+                    if target == "nhay":
+                        SYSTEM_RUNTIME_CONFIG["selected_file"] = filename
+
+
+def select_script_file(filename, target, prefer_disk_name=False):
+    """Validate and persist first; never acknowledge a RAM-only selection."""
+    with FILE_WRITE_LOCK:
+        if target not in ("nhay", "ngon"):
+            raise ValueError("Loại tệp phải là nhay hoặc ngon")
+        record = resolve_file_record(filename)
+        disk_name = os.path.basename(str(filename))
+        disk_path = os.path.join(UPLOAD_DIR, disk_name)
+        if prefer_disk_name and str(filename) == disk_name and os.path.isfile(disk_path):
+            # Mini App lists real disk names, not historical database aliases.
+            record = {**(record or {}), "filename": disk_name, "filepath": disk_path}
+        if not record or not os.path.isfile(record.get("filepath") or ""):
+            raise ValueError("Tệp không tồn tại. Hãy tải lại kho tệp.")
+        selected = os.path.basename(record["filepath"])
+        record = {**record, "filename": selected}
+        conn = db()
+        try:
+            conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                         (f"selected_{target}_file", selected))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        with SYSTEM_CFG_LOCK:
+            SYSTEM_RUNTIME_CONFIG[f"selected_{target}_file"] = selected
+            SYSTEM_RUNTIME_CONFIG.setdefault(f"selected_{target}_by_acc", {}).clear()
+            # The legacy generic override used to mask either newly selected file.
+            SYSTEM_RUNTIME_CONFIG.setdefault("selected_file_by_acc", {}).clear()
+            if target == "nhay":
+                SYSTEM_RUNTIME_CONFIG["selected_file"] = selected
+        return record
+
+
+refresh_script_selections()
 
 def get_blocks_from_file_query(query_val, mode="fast"):
     rec = resolve_file_record(query_val)
@@ -15279,18 +15334,10 @@ def extract_multigroup_spec_and_clean_body(raw_body_str, cmd_token=""):
     return "\n".join(kept_lines).strip("\r\n"), spec_mode, spec_val, inline_tag_all
 
 def build_compact_inchat_menu(platform, active_count):
-    platform_tools = ".sticker — Tạo nhãn dán\n.qr — Kết nối Zalo\n" if platform == "zalo" else ""
     return (
         f"GLAZE • {APP_AUTHOR}\n"
         f"Tài khoản đang bật: {active_count}\n\n"
-        "QUẢN LÝ\n"
-        ".running — Xem tác vụ đang chạy\n"
-        ".t — Dừng tác vụ trong cuộc trò chuyện\n"
-        ".ta — Dừng tất cả tác vụ\n"
-        ".cp / .xq — Quản lý quyền\n\n"
-        f"{platform_tools}"
-        ".ds — Xem kho tệp\n"
-        ".menu — Mở lại bảng lệnh"
+        + "\n".join(f"{item['usage']} — {item['title']}" for item in supported_commands(platform))
     )
 
 def parse_and_execute_inchat_command(
@@ -16852,30 +16899,16 @@ def parse_and_execute_inchat_command(
             return True
         if not fname.lower().endswith(".txt"):
             fname += ".txt"
-        save_p = os.path.join(UPLOAD_DIR, f"{int(time.time())}_{os.path.basename(fname)}")
-        cleaned_c = clean_corrupted_shortcuts(raw_c)
-        with open(save_p, "w", encoding="utf-8") as wf:
-            wf.write(cleaned_c)
-        parsed_f = parse_file_stream_fast(save_p, strip_numbers=True)
-        l_cnt = parsed_f.get("line_count", len(parsed_f.get("lines", [])))
-        conn = db()
-        conn.execute(
-            "INSERT INTO files (filename, filepath, lines_count, created_at, file_type) VALUES (?, ?, ?, ?, ?)",
-            (fname, save_p, l_cnt, time.time(), f_type),
-        )
-        conn.commit()
-        conn.close()
-        all_f = get_ordered_files_with_display_num()
-        new_num = all_f[-1]["display_num"] if all_f else 1
-        with SYSTEM_CFG_LOCK:
-            SYSTEM_RUNTIME_CONFIG["selected_file"] = fname
-            SYSTEM_RUNTIME_CONFIG.setdefault("selected_file_by_acc", {})[str(acc_id)] = fname
-            if f_type == "nhay":
-                SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = fname
-                SYSTEM_RUNTIME_CONFIG.setdefault("selected_nhay_by_acc", {})[str(acc_id)] = fname
-            else:
-                SYSTEM_RUNTIME_CONFIG["selected_ngon_file"] = fname
-                SYSTEM_RUNTIME_CONFIG.setdefault("selected_ngon_by_acc", {})[str(acc_id)] = fname
+        fname = _safe_miniapp_text_filename(fname)
+        payload = clean_corrupted_shortcuts(raw_c).encode("utf-8")
+        if not fname or len(payload) > MAX_MINIAPP_TEXT_BYTES:
+            _send_reply("Tên tệp không hợp lệ hoặc nội dung vượt giới hạn 1 MB.", broadcast_all_accs=False)
+            return True
+        result = save_text_file(db, UPLOAD_DIR, fname, payload, f_type)
+        UltraFileLoader.invalidate(os.path.join(UPLOAD_DIR, fname))
+        record = select_script_file(fname, f_type)
+        l_cnt = result["lines"]
+        new_num = record["display_num"]
         _send_reply(
             f"✅ ĐÃ THÊM THẲNG TRÊN ZALO & KÍCH HOẠT {type_lbl} SỐ #{new_num}: {fname} ({l_cnt} dòng)!\n"
             f"👉 Đã tự động chọn làm file mặc định — Gõ .{ 'n' if f_type == 'nhay' else 'g' } để chạy ngay!",
@@ -17176,21 +17209,16 @@ def parse_and_execute_inchat_command(
         return True
 
     if cmd_token in ("files", "dsfile", "listfile", "chonfile", "cf", "pickfile", "setfile", "chonnhay", "chonngon") or (cmd_token == "file" and (not arg_body.strip() or len(arg_body.strip().split()) == 1)):
+        refresh_script_selections()
         f_list = get_ordered_files_with_display_num()
         q_sel = arg_body.strip()
         if q_sel:
             rec_sel = resolve_file_record(q_sel)
             if rec_sel:
                 f_cat = "nhay" if cmd_token == "chonnhay" else ("ngon" if cmd_token == "chonngon" else rec_sel.get("file_type", "nhay"))
-                with SYSTEM_CFG_LOCK:
-                    SYSTEM_RUNTIME_CONFIG["selected_file"] = rec_sel["filename"]
-                    SYSTEM_RUNTIME_CONFIG.setdefault("selected_file_by_acc", {})[str(acc_id)] = rec_sel["filename"]
-                    if f_cat == "nhay" or cmd_token in ("chonnhay", "chonfile", "file", "cf"):
-                        SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = rec_sel["filename"]
-                        SYSTEM_RUNTIME_CONFIG.setdefault("selected_nhay_by_acc", {})[str(acc_id)] = rec_sel["filename"]
-                    if f_cat == "ngon" or cmd_token in ("chonngon", "chonfile", "file", "cf"):
-                        SYSTEM_RUNTIME_CONFIG["selected_ngon_file"] = rec_sel["filename"]
-                        SYSTEM_RUNTIME_CONFIG.setdefault("selected_ngon_by_acc", {})[str(acc_id)] = rec_sel["filename"]
+                targets = ("nhay", "ngon") if cmd_token in ("chonfile", "file", "cf") else (f_cat,)
+                for target in targets:
+                    select_script_file(rec_sel["filename"], target)
                 msg_out = (
                     f"✅ CHẾ ĐỘ CHỌN FILE: Đã chọn File #{rec_sel['display_num']} — {rec_sel['filename']} ({rec_sel['lines_count']} dòng | Loại: {f_cat.upper()})!\n"
                     f"👉 Gõ ngay .n, .g, .gif, .treodo, .damau, .word, .nhaypoll, .tenbox, .xa, .combo để chạy file vừa chọn!"
@@ -19525,10 +19553,19 @@ def api_miniapp_qr_status(session_id):
     return jsonify({key: status.get(key) for key in ("ok", "status", "message", "qr_base64", "remaining_sec")})
 
 
+@app.get("/api/miniapp/commands")
+def api_miniapp_commands():
+    return jsonify({"ok": True, "commands": supported_commands(), "supported_only": True})
+
+
 @app.route("/api/miniapp/telemetry")
+@app.route("/api/miniapp/sync", methods=["POST"])
 def api_miniapp_telemetry():
     now_ts = time.time()
-    accounts = get_all_accounts_from_ram()
+    accounts = refresh_accounts_ram_cache(strict=True)
+    connection = db()
+    oauth_count = connection.execute("SELECT COUNT(*) FROM oauth_connections WHERE owner_id=?", (str(TELEGRAM_ADMIN_ID),)).fetchone()[0]
+    connection.close()
     platform_counts = {"zalo": 0, "discord": 0, "messenger": 0, "other": 0}
     for account in accounts:
         platform = str(account.get("platform") or "zalo").lower()
@@ -19552,7 +19589,11 @@ def api_miniapp_telemetry():
         "admin_id": TELEGRAM_ADMIN_ID,
         "live_accs": sum(1 for account in accounts if account.get("enabled", 1)),
         "total_accs": len(accounts),
+        "oauth_count": oauth_count,
         "account_platforms": platform_counts,
+        "snapshot_at": now_ts,
+        "listener_count": sum(1 for a in accounts if _miniapp_listener_running(a["id"])),
+        "storage": "sqlite",
         "running_tasks": len(tasks_list),
         "tasks": tasks_list,
         "watched_boxes": len(CanhTreoWatchdogEngine.get_watched_boxes()),
@@ -19578,9 +19619,16 @@ def api_miniapp_stop_task():
     return jsonify({"ok": True, "message": f"Đã dừng tiến trình #{tid[-6:]}"})
 
 
+def _miniapp_listener_running(account_id):
+    listener = ACTIVE_LISTENERS.get(account_id)
+    thread = getattr(listener, "thread", None)
+    stop = getattr(listener, "stop_ev", None)
+    return bool(thread and thread.is_alive() and (stop is None or not stop.is_set()))
+
+
 @app.route("/api/miniapp/accounts")
 def api_miniapp_accounts():
-    accs = get_all_accounts_from_ram(enabled_only=False)
+    accs = refresh_accounts_ram_cache(strict=True)
     out = []
     for a in accs:
         out.append({
@@ -19590,8 +19638,10 @@ def api_miniapp_accounts():
             "platform": a.get("platform") or "zalo",
             "enabled": bool(a.get("enabled", 1)),
             "chat_cmd_enabled": bool(a.get("chat_cmd_enabled", 1)),
+            "saved": True,
+            "listener_started": _miniapp_listener_running(a["id"]),
         })
-    return jsonify({"ok": True, "accounts": out})
+    return jsonify({"ok": True, "accounts": out, "snapshot_at": time.time()})
 
 
 @app.route("/api/miniapp/add_cookie", methods=["POST"])
@@ -19634,12 +19684,17 @@ def api_miniapp_start_qr():
 @app.route("/api/miniapp/toggle_acc_cmd", methods=["POST"])
 def api_miniapp_toggle_acc_cmd():
     data = request.get_json(silent=True) or {}
-    aid = int(data.get("acc_id") or 0)
+    try:
+        aid = int(data.get("acc_id") or 0)
+        if aid <= 0:
+            raise ValueError()
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "ID tài khoản không hợp lệ"}), 400
     conn = db()
     row = conn.execute("SELECT chat_cmd_enabled FROM accounts WHERE id=?", (aid,)).fetchone()
     if not row:
         conn.close()
-        return jsonify({"ok": False, "error": "Không tìm thấy tài khoản"})
+        return jsonify({"ok": False, "error": "Không tìm thấy tài khoản"}), 404
     new_v = 0 if int(row["chat_cmd_enabled"] or 0) else 1
     conn.execute("UPDATE accounts SET chat_cmd_enabled=? WHERE id=?", (new_v, aid))
     conn.commit()
@@ -19652,11 +19707,18 @@ def api_miniapp_toggle_acc_cmd():
 @app.route("/api/miniapp/delete_acc", methods=["POST"])
 def api_miniapp_delete_acc():
     data = request.get_json(silent=True) or {}
-    aid = int(data.get("acc_id") or 0)
+    try:
+        aid = int(data.get("acc_id") or 0)
+        if aid <= 0:
+            raise ValueError()
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "ID tài khoản không hợp lệ"}), 400
     conn = db()
-    conn.execute("DELETE FROM accounts WHERE id=?", (aid,))
+    deleted = conn.execute("DELETE FROM accounts WHERE id=?", (aid,)).rowcount
     conn.commit()
     conn.close()
+    if not deleted:
+        return jsonify({"ok": False, "error": "Tài khoản không tồn tại hoặc đã bị xóa"}), 404
     refresh_accounts_ram_cache()
     sync_all_zalo_listeners()
     return jsonify({"ok": True, "message": f"Đã xoá tài khoản #{aid}"})
@@ -19826,6 +19888,7 @@ def api_miniapp_launch():
 
 @app.route("/api/miniapp/files")
 def api_miniapp_files():
+    refresh_script_selections()
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     files_out = []
     for fn in sorted(os.listdir(UPLOAD_DIR)):
@@ -19876,17 +19939,12 @@ def api_miniapp_select_file():
     target = str(data.get("target") or "nhay").lower()
     if not fn:
         return jsonify({"ok": False, "error": "Tên file không hợp lệ"})
-    with SYSTEM_CFG_LOCK:
-        if target == "ngon":
-            SYSTEM_RUNTIME_CONFIG["selected_ngon_file"] = fn
-            SYSTEM_RUNTIME_CONFIG["selected_ngon_by_acc"].clear()
-            msg = f"🌈 Đã chọn File Ngôn (.g): {fn}"
-        else:
-            SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = fn
-            SYSTEM_RUNTIME_CONFIG["selected_file"] = fn
-            SYSTEM_RUNTIME_CONFIG["selected_nhay_by_acc"].clear()
-            msg = f"🔥 Đã chọn File Nhây (.n): {fn}"
-    return jsonify({"ok": True, "message": msg, "filename": fn, "target": target})
+    try:
+        record = select_script_file(fn, target, prefer_disk_name=True)
+    except ValueError as error:
+        return jsonify({"ok": False, "error": str(error)}), 400
+    fn = record["filename"]
+    return jsonify({"ok": True, "message": f"Đã lưu lựa chọn {target}: {fn}", "filename": fn, "target": target})
 
 
 @app.route("/api/miniapp/add_file", methods=["POST"])
@@ -19901,37 +19959,16 @@ def api_miniapp_add_file():
     raw_name = _safe_miniapp_text_filename(raw_name)
     if not raw_name:
         return jsonify({"ok": False, "error": "Tên file chỉ được dùng chữ, số, dấu chấm, gạch nối và gạch dưới"})
-    if len(content.encode("utf-8")) > MAX_MINIAPP_TEXT_BYTES:
+    payload = (content.strip() + "\n").encode("utf-8")
+    if len(payload) > MAX_MINIAPP_TEXT_BYTES:
         return jsonify({"ok": False, "error": "File vượt giới hạn 1 MB của Render Free"}), 413
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    fp = os.path.join(UPLOAD_DIR, raw_name)
-    with open(fp, "w", encoding="utf-8") as f:
-        f.write(content.strip() + "\n")
-    UltraFileLoader.invalidate(fp)
-    info = UltraFileLoader.load(fp)
-    f_type_add = "ngon" if "ngon" in raw_name.lower() else "nhay"
-    try:
-        conn_a = db()
-        ex_a = conn_a.execute("SELECT id FROM files WHERE lower(filename)=?", (raw_name.lower(),)).fetchone()
-        if ex_a:
-            conn_a.execute(
-                "UPDATE files SET filepath=?, lines_count=?, created_at=?, file_type=? WHERE id=?",
-                (fp, info.get("line_count", 0), time.time(), f_type_add, ex_a["id"])
-            )
-        else:
-            conn_a.execute(
-                "INSERT INTO files (filename, filepath, lines_count, created_at, file_type) VALUES (?, ?, ?, ?, ?)",
-                (raw_name, fp, info.get("line_count", 0), time.time(), f_type_add)
-            )
-        conn_a.commit()
-    except Exception:
-        pass
-    return jsonify({
-        "ok": True,
-        "filename": raw_name,
-        "lines": info.get("line_count", 0),
-        "message": f"✅ Đã lưu {raw_name} ({info.get('line_count', 0)} dòng) vào kho file!",
-    })
+    target = str(data.get("target") or ("ngon" if "ngon" in raw_name.lower() else "nhay")).lower()
+    if target not in ("nhay", "ngon"):
+        return jsonify({"ok": False, "error": "Loại tệp không hợp lệ"}), 400
+    result = save_text_file(db, UPLOAD_DIR, raw_name, payload, target)
+    UltraFileLoader.invalidate(os.path.join(UPLOAD_DIR, raw_name))
+    select_script_file(raw_name, target)
+    return jsonify({"ok": True, **result, "target": target, "message": f"Đã lưu và chọn {raw_name}"})
 
 
 @app.route("/api/miniapp/upload_file", methods=["POST"])
@@ -19949,60 +19986,16 @@ def api_miniapp_upload_file():
     if not filename:
         return jsonify({"ok": False, "error": "Tên file chỉ được dùng chữ, số, dấu chấm, gạch nối và gạch dưới"}), 400
 
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    dest_path = os.path.join(UPLOAD_DIR, filename)
-
+    target = str(request.form.get("target", "nhay")).lower()
+    if target not in ("nhay", "ngon"):
+        return jsonify({"ok": False, "error": "Loại tệp không hợp lệ"}), 400
     file_bytes = file_obj.read(MAX_MINIAPP_TEXT_BYTES + 1)
-    total_bytes = len(file_bytes)
-    if total_bytes > MAX_MINIAPP_TEXT_BYTES:
-        return jsonify({"ok": False, "error": "File vượt giới hạn 1 MB của Render Free"}), 413
-    with open(dest_path, "wb") as f_out:
-        f_out.write(file_bytes)
-
-    line_count = 0
-    try:
-        with open(dest_path, "rb") as f_in:
-            for _ in f_in:
-                line_count += 1
-    except Exception:
-        line_count = 1
-
-    target_type = request.form.get("target", "nhay").lower()
-    with SYSTEM_CFG_LOCK:
-        if target_type == "ngon":
-            SYSTEM_RUNTIME_CONFIG["selected_ngon_file"] = filename
-            SYSTEM_RUNTIME_CONFIG["selected_ngon_by_acc"].clear()
-        elif target_type == "nhay":
-            SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = filename
-            SYSTEM_RUNTIME_CONFIG["selected_file"] = filename
-            SYSTEM_RUNTIME_CONFIG["selected_nhay_by_acc"].clear()
-
-    try:
-        conn_f = db()
-        existing_f = conn_f.execute("SELECT id FROM files WHERE lower(filename)=?", (filename.lower(),)).fetchone()
-        if existing_f:
-            conn_f.execute(
-                "UPDATE files SET filepath=?, lines_count=?, created_at=?, file_type=? WHERE id=?",
-                (dest_path, line_count, time.time(), target_type, existing_f["id"])
-            )
-        else:
-            conn_f.execute(
-                "INSERT INTO files (filename, filepath, lines_count, created_at, file_type) VALUES (?, ?, ?, ?, ?)",
-                (filename, dest_path, line_count, time.time(), target_type)
-            )
-        conn_f.commit()
-    except Exception:
-        pass
-
-    UltraFileLoader.invalidate(dest_path)
-    return jsonify({
-        "ok": True,
-        "filename": filename,
-        "size_kb": round(total_bytes / 1024.0, 1),
-        "lines": line_count,
-        "target": target_type,
-        "message": f"✅ Đã tải lên {filename} ({line_count:,} dòng, {round(total_bytes/1024.0, 1)} KB)!"
-    })
+    if len(file_bytes) > MAX_MINIAPP_TEXT_BYTES:
+        return jsonify({"ok": False, "error": "File vượt giới hạn 1 MB"}), 413
+    result = save_text_file(db, UPLOAD_DIR, filename, file_bytes, target)
+    UltraFileLoader.invalidate(os.path.join(UPLOAD_DIR, filename))
+    select_script_file(filename, target)
+    return jsonify({"ok": True, **result, "target": target, "message": f"Đã tải lên và chọn {filename}"})
 
 
 @app.route("/api/miniapp/delete_file", methods=["POST"])
@@ -20012,14 +20005,28 @@ def api_miniapp_delete_file():
     if not filename:
         return jsonify({"ok": False, "error": "Tên file không hợp lệ"})
     filepath = os.path.join(UPLOAD_DIR, filename)
-    if os.path.exists(filepath):
+    with FILE_WRITE_LOCK:
+        refresh_script_selections()
+        with SYSTEM_CFG_LOCK:
+            if filename in (SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file"), SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file")):
+                return jsonify({"ok": False, "error": "Tệp đang được chọn. Hãy chọn tệp khác trước khi xóa."}), 409
+        if not os.path.isfile(filepath) or os.path.islink(filepath):
+            return jsonify({"ok": False, "error": "Tệp không tồn tại"}), 404
+        conn = db()
+        staged = filepath + ".delete-" + secrets.token_hex(6)
+        os.replace(filepath, staged)
         try:
-            os.remove(filepath)
-            UltraFileLoader.invalidate(filepath)
-            return jsonify({"ok": True, "message": f"🗑️ Đã xóa {filename} khỏi kho file!"})
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)})
-    return jsonify({"ok": False, "error": "File không tồn tại"})
+            conn.execute("DELETE FROM files WHERE lower(filename)=? OR filepath=?", (filename.lower(), filepath))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            os.replace(staged, filepath)
+            raise
+        finally:
+            conn.close()
+        os.unlink(staged)
+        UltraFileLoader.invalidate(filepath)
+    return jsonify({"ok": True, "message": f"Đã xóa {filename} khỏi kho tệp và chỉ mục"})
 
 
 
@@ -20107,7 +20114,8 @@ def _listener_watchdog_loop():
             pass
         time.sleep(3.0)
 
-threading.Thread(target=_listener_watchdog_loop, daemon=True).start()
+if os.environ.get("DISABLE_BACKGROUND_WORKERS", "0") != "1":
+    threading.Thread(target=_listener_watchdog_loop, daemon=True).start()
 
 # -*- coding: utf-8 -*-
 import math
@@ -20130,7 +20138,7 @@ class TelegramPetAnimationEngine:
 class TelegramUIPhysicsEngine:
     @classmethod
     def get_ui_bundle(cls):
-        return {"version": "telegram-only-v1.1.0"}
+        return {"version": "telegram-only-v1.2.0"}
 
 
 class MessagingGatewayDirectory:
@@ -20165,7 +20173,7 @@ input[type="password"]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgb
 </head>
 <body>
 <div class="login-card">
-  <div class="badge">● AUTHOR: DEV ANH KHÔI • v1.1.0</div>
+  <div class="badge">● AUTHOR: DEV ANH KHÔI • v1.2.0</div>
   <h1>BOT TREO 4APP 🇻🇳 — DEV ANH KHÔI</h1>
   <p class="sub">Hệ thống điều phối Đa Tài Khoản Zalo • Discord • Messenger & Tạo Nhãn Dán Sticker Chuẩn Zalo.</p>
   {% if error %}
@@ -20386,9 +20394,9 @@ th{color:var(--primary);font-weight:800;background:var(--panel-alt)}
 <body>
 <div class="topbar">
   <div class="brand">
-    <div class="brand-badge">DEV ANH KHÔI • v1.1.0</div>
+    <div class="brand-badge">DEV ANH KHÔI • v1.2.0</div>
     <div class="brand-title">
-      <h1>HỆ THỐNG ĐA NỀN TẢNG ZALO • MESSENGER • DISCORD (v1.1.0)</h1>
+      <h1>HỆ THỐNG ĐA NỀN TẢNG ZALO • MESSENGER • DISCORD (v1.2.0)</h1>
       <p>👨‍💻 Author: <b>Dev Anh Khôi</b> • 12 Nguồn Fake Soạn Tin Messenger • Khiên Anti-Ban Chống Die Cookie 9 Lớp • Lệnh .menu Nhạy 100% Cả 3 App</p>
     </div>
   </div>

@@ -1,11 +1,11 @@
 # ==============================================================================
 # GLAZE — BỘ ĐIỀU KHIỂN TRUNG TÂM BOT TELEGRAM & MINI APP SIÊU TỐC 🇻🇳
 # Author : Dev Anh Khôi
-# Version: GLAZE
+# Version: 1.2.0
 # ==============================================================================
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 import os
 import re
@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from urllib.parse import urlencode
 import requests
+from app_storage import DATABASE_PATH, UPLOAD_PATH, connect_database
 from requests.adapters import HTTPAdapter
 
 try:
@@ -51,7 +52,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 ROOT_ADMIN_ID = str(os.environ.get("TELEGRAM_ADMIN_ID", "")).strip()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "database.db")
+DB_PATH = DATABASE_PATH
 WELCOME_VIDEO_PATH = os.path.join(BASE_DIR, "welcome.mp4")
 MENU_BANNER_PATH = os.path.join(BASE_DIR, "menu_banner.png")
 
@@ -260,7 +261,7 @@ def generate_totp_local(secret_key, time_step=30, digits=6):
 
 # HỆ THỐNG PHÂN QUYỀN CHẶT CHẼ (ROOT ADMIN 8827605973 + THÊM / XOÁ ID NGƯỜI DÙNG ĐẦY ĐỦ)
 _TG_AUTH_LOCK = threading.RLock()
-_TG_AUTH_JSON_PATH = os.path.join(BASE_DIR, "uploads", "tg_authorized_users.json")
+_TG_AUTH_JSON_PATH = os.path.join(UPLOAD_PATH, "tg_authorized_users.json")
 _TG_AUTH_RAM_CACHE = {
     ROOT_ADMIN_ID: {"uid": ROOT_ADMIN_ID, "name": "Admin Chính", "role": "Admin", "added_at": int(time.time())}
 }
@@ -274,13 +275,7 @@ def _open_db():
             eff_path = sys.modules["app"]._ACTIVE_DB_PATH
     except Exception:
         pass
-    conn = sqlite3.connect(eff_path, timeout=15)
-    try:
-        conn.execute("PRAGMA journal_mode=MEMORY")
-        conn.execute("PRAGMA synchronous=OFF")
-    except Exception:
-        pass
-    return conn
+    return connect_database(eff_path)
 
 
 def _load_auth_ram_cache():
@@ -396,16 +391,16 @@ def _ensure_account_owner_schema(conn):
             conn.commit()
         _ACCOUNT_OWNER_SCHEMA_READY = True
 
-def get_user_visible_accounts(user_id, enabled_only=False, platform=None):
+def get_user_visible_accounts(user_id, enabled_only=False, platform=None, strict=False):
     """Trả về danh sách tài khoản mà user_id được phép nhìn thấy và sử dụng."""
     out = []
+    conn = None
     try:
         conn = _open_db()
         _ensure_account_owner_schema(conn)
         cursor = conn.execute("SELECT * FROM accounts ORDER BY id DESC")
         columns = [column[0] for column in cursor.description]
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-        conn.close()
         for r in rows:
             aid, aname, aplat, auid, aimei, ack, aua, aenk, cmd_on, en_on, atok, is_b, owner_id = (r.get(key) for key in ("id", "name", "platform", "uid", "imei", "cookies", "user_agent", "zpw_enk", "chat_cmd_enabled", "enabled", "token", "is_bot", "owner_tg_id"))
             if enabled_only and not (en_on is None or int(en_on)):
@@ -430,7 +425,11 @@ def get_user_visible_accounts(user_id, enabled_only=False, platform=None):
                 "owner_tg_id": str(owner_id or ""),
             })
     except Exception:
-        pass
+        if strict:
+            raise
+    finally:
+        if conn is not None:
+            conn.close()
     return out
 
 
@@ -616,6 +615,25 @@ def _set_db_setting(key, value):
         conn.close()
     except Exception:
         pass
+
+
+def save_telegram_text_file(filename, content, target):
+    """Use the same validation, index, persistence and cache as the Mini App."""
+    import app as main
+    filename = str(filename or "").strip()
+    if not filename.lower().endswith(".txt"):
+        filename += ".txt"
+    filename = main._safe_miniapp_text_filename(filename)
+    if not filename:
+        raise ValueError("Tên tệp không hợp lệ")
+    if len(content) > main.MAX_MINIAPP_TEXT_BYTES:
+        raise ValueError("Tệp vượt giới hạn 1 MB")
+    if target not in ("nhay", "ngon"):
+        raise ValueError("Loại tệp không hợp lệ")
+    result = main.save_text_file(main.db, main.UPLOAD_DIR, filename, content, target)
+    main.UltraFileLoader.invalidate(os.path.join(main.UPLOAD_DIR, filename))
+    main.select_script_file(filename, target)
+    return result
 
 
 def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="", user_agent="", pc_name="", owner_tg_id=""):
@@ -1363,16 +1381,15 @@ class DirectTelegramBotRunner:
     # XÂY DỰNG GIAO DIỆN BLOCKQUOTE CARD + ICON ĐỘNG GIỐNG HỆT TPHAT STORE BOT (83b86043.jpeg)
     @staticmethod
     def _get_live_runtime_summary(user_id=ROOT_ADMIN_ID):
-        acc_cnt = 0
+        acc_cnt = None
         running_cnt = 0
         color_label = "Đổi Từng Màu"
         delay_val = 0.0
         try:
-            vis_accs = get_user_visible_accounts(user_id, enabled_only=True)
+            vis_accs = get_user_visible_accounts(user_id, enabled_only=True, strict=True)
             acc_cnt = len(vis_accs)
             import app as _main_app
-            with _main_app.TASKS_LOCK:
-                running_cnt = sum(1 for t in _main_app.TASKS.values() if t.get("status") == "running" or t.get("running"))
+            running_cnt = sum(1 for task in list(_main_app.ACTIVE_TASKS.values()) if task.get("stop") and not task["stop"].is_set())
             with _main_app.SYSTEM_CFG_LOCK:
                 cm = _main_app.SYSTEM_RUNTIME_CONFIG.get("color_mode", "word_rainbow")
                 delay_val = _main_app.SYSTEM_RUNTIME_CONFIG.get("delay", 0.0)
@@ -1385,14 +1402,14 @@ class DirectTelegramBotRunner:
     def build_tabbed_caption(cls, user_first_name="Anh", user_id=ROOT_ADMIN_ID, active_tab="func", page=1, extra_notice=""):
         name_clean = str(user_first_name or "Anh").replace("<", "").replace(">", "").strip() or "Anh"
         if active_tab == "func":
-            sec_title = "BẢNG ĐIỀU KHIỂN CHÍNH (0.0S)"
+            sec_title = "BẢNG ĐIỀU KHIỂN CHÍNH"
         elif active_tab == "mgmt":
             sec_title = "QUẢN LÝ ACC, COOKIE & KHO FILE (.TXT)"
         else:
             sec_title = "MINI APP GLAZE & TIỆN ÍCH HỆ THỐNG"
 
         acc_cnt, running_cnt, color_label, delay_val = cls._get_live_runtime_summary(user_id=user_id)
-        ram_mb = 64.0
+        ram_mb = None
         canh_cnt = 0
         nhay_f = "nhay.txt"
         ngon_f = "ngon.txt"
@@ -1402,17 +1419,23 @@ class DirectTelegramBotRunner:
                 ram_mb = _main_app.RenderRAMAutoCleaner.get_current_rss_mb()
             if hasattr(_main_app, "CanhTreoWatchdogEngine"):
                 canh_cnt = len(_main_app.CanhTreoWatchdogEngine.get_watched_boxes())
+            if acc_cnt is not None:
+                _main_app.refresh_script_selections()
             with _main_app.SYSTEM_CFG_LOCK:
                 nhay_f = _main_app.SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file", "nhay.txt")
                 ngon_f = _main_app.SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file", "ngon.txt")
         except Exception:
             pass
+        if acc_cnt is None:
+            acc_cnt = "Chưa đồng bộ"
+            extra_notice = "Không đọc được dữ liệu tài khoản. Hãy thử lại; đây không phải là 0 tài khoản. " + extra_notice
+        ram_label = f"{ram_mb:.0f}" if ram_mb is not None else "—"
         notice_block = f"\n<blockquote>{extra_notice}</blockquote>" if extra_notice else ""
 
         return (
             f"<b>GLAZE</b>\n"
             f"<blockquote>"
-            f"<b>{APP_AUTHOR}</b> • <b>{acc_cnt} Acc</b> • <b>{running_cnt} Task</b> • <b>{ram_mb:.0f}MB RAM</b>\n"
+            f"<b>{APP_AUTHOR}</b> • <b>{acc_cnt} Acc bật</b> • <b>{running_cnt} Task</b> • <b>{ram_label}MB RAM</b>\n"
             f"<b>Nhây:</b> <code>{nhay_f}</code> • <b>Ngôn:</b> <code>{ngon_f}</code>\n"
             f"<b>Canh Treo:</b> <code>{canh_cnt} Box</code> • <b>Màu:</b> <code>{color_label}</code> • <b>Delay:</b> <code>{delay_val}s</code>"
             f"</blockquote>"
@@ -1640,7 +1663,7 @@ class DirectTelegramBotRunner:
             pass
         out = []
         seen = set()
-        for folder in (os.path.join(BASE_DIR, "presets"), os.path.join(BASE_DIR, "uploads")):
+        for folder in (os.path.join(BASE_DIR, "presets"), UPLOAD_PATH):
             if os.path.isdir(folder):
                 for fn in sorted(os.listdir(folder)):
                     if fn.endswith(".txt"):
@@ -3080,14 +3103,11 @@ class DirectTelegramBotRunner:
             fn_chosen = data.split(":", 1)[1].strip()
             try:
                 import app as _main_app
-                with _main_app.SYSTEM_CFG_LOCK:
-                    _main_app.SYSTEM_RUNTIME_CONFIG["selected_file"] = fn_chosen
-                    if is_nhay:
-                        _main_app.SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = fn_chosen
-                    else:
-                        _main_app.SYSTEM_RUNTIME_CONFIG["selected_ngon_file"] = fn_chosen
+                selected_record = _main_app.select_script_file(fn_chosen, "nhay" if is_nhay else "ngon")
+                fn_chosen = selected_record["filename"]
             except Exception:
-                pass
+                self.answer_callback(cb_id, "Không lưu được lựa chọn. Hãy tải lại kho tệp.", show_alert=True)
+                return
             wiz = self.wizard_selections.setdefault(user_id, {})
             wiz["file_name"] = fn_chosen
             wiz["file_selected"] = True
@@ -3414,7 +3434,11 @@ class DirectTelegramBotRunner:
 
     def _render_accounts_and_files_menu(self, chat_id, msg_id, user_id=ROOT_ADMIN_ID, notice=""):
         is_admin = is_root_admin(user_id)
-        vis_accs = get_user_visible_accounts(user_id, enabled_only=False)
+        try:
+            vis_accs = get_user_visible_accounts(user_id, enabled_only=False, strict=True)
+        except Exception:
+            self.edit_menu_message(chat_id, msg_id, "Không đọc được dữ liệu tài khoản. Hãy mở lại mục Quản lý sau; không có tài khoản nào bị xóa.", reply_markup=self.build_tabbed_keyboard("mgmt", user_id=user_id))
+            return
         files = self._get_available_txt_files()
         rows = [
             [
@@ -3538,29 +3562,12 @@ class DirectTelegramBotRunner:
                 raw_c = text.strip().replace(";", "\n") if f_type == "nhay" else text.strip()
             if not fname.lower().endswith(".txt"):
                 fname += ".txt"
-            up_dir = os.path.join(BASE_DIR, "uploads")
-            os.makedirs(up_dir, exist_ok=True)
-            dest = os.path.join(up_dir, f"{int(time.time())}_{os.path.basename(fname)}")
-            with open(dest, "w", encoding="utf-8") as wf:
-                wf.write(raw_c)
-            lines_cnt = max(1, sum(1 for ln in raw_c.splitlines() if ln.strip()))
             try:
-                conn = _open_db()
-                conn.execute(
-                    "INSERT INTO files (filename, filepath, lines_count, created_at, file_type) VALUES (?, ?, ?, ?, ?)",
-                    (fname, dest, lines_cnt, time.time(), f_type)
-                )
-                conn.commit()
-                conn.close()
-                import app as _main_app
-                with _main_app.SYSTEM_CFG_LOCK:
-                    _main_app.SYSTEM_RUNTIME_CONFIG["selected_file"] = fname
-                    if f_type == "nhay":
-                        _main_app.SYSTEM_RUNTIME_CONFIG["selected_nhay_file"] = fname
-                    else:
-                        _main_app.SYSTEM_RUNTIME_CONFIG["selected_ngon_file"] = fname
+                saved = save_telegram_text_file(fname, raw_c.encode("utf-8"), f_type)
+                fname, lines_cnt = saved["filename"], saved["lines"]
             except Exception:
-                pass
+                self.send_text(chat_id, "Không lưu được tệp hoặc lựa chọn. Dữ liệu cũ được giữ nguyên; hãy thử lại.", reply_to=msg_id)
+                return True
             self.send_text(
                 chat_id,
                 f"<b>ĐÃ THÊM &amp; CHỌN {t_lbl}:</b> <code>{fname}</code> ({lines_cnt} dòng)!\n"
@@ -3750,50 +3757,38 @@ class DirectTelegramBotRunner:
         if not fid:
             return
         try:
+            if int(doc_obj.get("file_size") or 0) > 1024 * 1024:
+                self.send_text(chat_id, "Tệp vượt giới hạn 1 MB.", reply_to=msg_id)
+                return
             f_info = self.api_call("getFile", {"file_id": fid}, timeout=10)
             fpath = (f_info.get("result") or {}).get("file_path")
             if not fpath:
                 return
             dl_url = f"https://api.telegram.org/file/bot{self.token}/{fpath}"
-            raw_bytes = self.session.get(dl_url, timeout=20).content
-            up_dir = os.path.join(BASE_DIR, "uploads")
-            os.makedirs(up_dir, exist_ok=True)
-            safe_fn = re.sub(r"[^a-zA-Z0-9_.\-]", "_", fname)
-            if not safe_fn.endswith(".txt"):
-                safe_fn += ".txt"
-            dest = os.path.join(up_dir, safe_fn)
-            with open(dest, "wb") as f:
-                f.write(raw_bytes)
-            lines_cnt = max(1, sum(1 for ln in raw_bytes.decode("utf-8", errors="ignore").splitlines() if ln.strip()))
-            try:
-                conn = _open_db()
-                existing_f = conn.execute("SELECT id FROM files WHERE filename=?", (safe_fn,)).fetchone()
-                if existing_f:
-                    conn.execute("UPDATE files SET filepath=?, lines_count=?, created_at=? WHERE id=?", (dest, lines_cnt, time.time(), existing_f[0]))
-                else:
-                    conn.execute("INSERT INTO files (filename, filepath, lines_count, created_at) VALUES (?, ?, ?, ?)", (safe_fn, dest, lines_cnt, time.time()))
-                conn.commit()
-                conn.close()
-            except Exception:
-                pass
+            chunks = bytearray()
+            with self.session.get(dl_url, timeout=(5, 15), stream=True) as download:
+                download.raise_for_status()
+                for chunk in download.iter_content(65536):
+                    chunks.extend(chunk)
+                    if len(chunks) > 1024 * 1024:
+                        raise ValueError("Tệp vượt giới hạn 1 MB")
+            raw_bytes = bytes(chunks)
+            state = self.user_states.get(user_id, {})
+            target = "ngon" if state.get("mode") == "add_file_ngon" else "nhay"
+            saved = save_telegram_text_file(fname, raw_bytes, target)
+            safe_fn, lines_cnt = saved["filename"], saved["lines"]
             wiz = self.wizard_selections.setdefault(user_id, {})
             wiz["file_name"] = safe_fn
             wiz["file_selected"] = True
             wiz["custom_text"] = ""
-            try:
-                import app as _main_app
-                with _main_app.SYSTEM_CFG_LOCK:
-                    _main_app.SYSTEM_RUNTIME_CONFIG["selected_file"] = safe_fn
-            except Exception:
-                pass
             self.send_text(
                 chat_id,
                 f"<b>Đã nạp & tự động chọn trước file kịch bản <code>{safe_fn}</code> ({lines_cnt} dòng)!</b>\n"
                 f"Mở <code>/menu</code> để bấm chạy ngay.",
                 reply_to=msg_id,
             )
-        except Exception as e:
-            self.send_text(chat_id, f"Lỗi tải file: <code>{e}</code>", reply_to=msg_id)
+        except Exception:
+            self.send_text(chat_id, "Không tải/lưu được tệp. Kiểm tra tệp .txt dưới 1 MB và thử lại.", reply_to=msg_id)
 
     def process_update(self, upd):
         if "callback_query" in upd:

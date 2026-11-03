@@ -1,11 +1,11 @@
 # ==============================================================================
 # HỆ THỐNG ĐĂNG NHẬP QR ZALO PC & GIỮ SỐNG PHIÊN 24/7 (ZALO LOGIN ENGINE)
 # Author : Dev Anh Khôi
-# Version: v2026.21.0 ZENVYRE ULTRA
+# Version: 1.2.0
 # ==============================================================================
 APP_AUTHOR = "Dev Anh Khôi"
 APP_TITLE = "ZENVYRE"
-APP_VERSION = "v2026.21.0 ZENVYRE ULTRA"
+APP_VERSION = "1.2.0"
 
 import os
 import re
@@ -27,6 +27,7 @@ import threading
 from urllib.parse import urlparse, unquote
 import requests
 from requests.adapters import HTTPAdapter
+from app_storage import DATABASE_PATH
 
 try:
     from Crypto.Cipher import AES
@@ -60,7 +61,7 @@ except ImportError:
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB_PATH = os.path.join(BASE_DIR, "database.db")
+DEFAULT_DB_PATH = DATABASE_PATH
 
 
 class LoginQRCallbackEventType:

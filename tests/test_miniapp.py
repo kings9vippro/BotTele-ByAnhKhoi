@@ -1,3 +1,4 @@
+"""Mini App regressions. Author: Dev Anh Khôi. Version: 1.2.0."""
 import io
 import os
 import tempfile
@@ -9,6 +10,7 @@ from unittest.mock import patch
 from unittest.mock import Mock
 
 os.environ.setdefault("DISABLE_TELEGRAM_BOT", "1")
+os.environ.setdefault("DISABLE_BACKGROUND_WORKERS", "1")
 os.environ.setdefault("SECRET_KEY", "test-only")
 import app
 
@@ -121,13 +123,13 @@ class MiniAppTests(unittest.TestCase):
         self.assertNotIn("device-id", text)
 
     def test_telemetry_distinguishes_total_and_enabled_accounts(self):
-        with patch.object(app, "get_all_accounts_from_ram", return_value=[{"enabled": 1}, {"enabled": 0}]):
+        with patch.object(app, "refresh_accounts_ram_cache", return_value=[{"id": 1, "enabled": 1}, {"id": 2, "enabled": 0}]):
             response = self.client.get("/api/miniapp/telemetry")
         self.assertEqual((response.json["total_accs"], response.json["live_accs"]), (2, 1))
 
     def test_telemetry_counts_platforms_without_exposing_credentials(self):
-        accounts = [{"platform": "zalo", "enabled": 1, "token": "private"}, {"platform": "discord", "enabled": 0}, {"platform": "custom"}, {"platform": None}]
-        with patch.object(app, "get_all_accounts_from_ram", return_value=accounts):
+        accounts = [{"id": 1, "platform": "zalo", "enabled": 1, "token": "private"}, {"id": 2, "platform": "discord", "enabled": 0}, {"id": 3, "platform": "custom"}, {"id": 4, "platform": None}]
+        with patch.object(app, "refresh_accounts_ram_cache", return_value=accounts):
             response = self.client.get("/api/miniapp/telemetry")
         self.assertEqual(response.json["account_platforms"], {"zalo": 2, "discord": 1, "messenger": 0, "other": 1})
         self.assertNotIn("private", response.get_data(as_text=True))
@@ -218,7 +220,7 @@ class MiniAppTests(unittest.TestCase):
 
     def test_miniapp_has_fresh_build_header(self):
         response = self.client.get("/miniapp")
-        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-1.1.0")
+        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-1.2.0")
         self.assertIn("no-store", response.headers["Cache-Control"])
 
     def test_custom_sticker_upload_plain_response_reaches_send(self):
