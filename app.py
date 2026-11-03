@@ -156,7 +156,7 @@ except ImportError:
 # CẤU HÌNH HỆ THỐNG & BẢO MẬT WEB
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8917587021:AAGnf2uUmNLI1r747luw8BVGi_hr3jBzWpw").strip()
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "8827605973").strip()
 # An unset secret deliberately creates a fresh local-only key. Production must
 # configure SECRET_KEY so authenticated sessions survive a restart.
@@ -20120,4 +20120,2951 @@ if os.environ.get("DISABLE_BACKGROUND_WORKERS", "0") != "1":
 # -*- coding: utf-8 -*-
 import math
 
-class TelegramPetAnimati
+class TelegramPetAnimationEngine:
+    @classmethod
+    def get_corgi_svg(cls):
+        return ""
+    @classmethod
+    def get_cat_svg(cls):
+        return ""
+    @classmethod
+    def get_nhk_3d_emblem_svg(cls):
+        return ""
+    @classmethod
+    def get_pet_bundle(cls):
+        return {"ok": True}
+
+
+class TelegramUIPhysicsEngine:
+    @classmethod
+    def get_ui_bundle(cls):
+        return {"version": "telegram-only-v1.2.0"}
+
+
+class MessagingGatewayDirectory:
+    @classmethod
+    def get_directory_payload(cls):
+        return {"ok": True, "mode": "telegram_bot_controller"}
+
+
+LOGIN_HTML = r"""<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{ custom_title or 'Đăng Nhập Hệ Thống Điều Phối Đa Tài Khoản 4APP VIP' }}</title>
+<style>
+:root{--bg:#f8fafc;--card:#ffffff;--border:#e2e8f0;--text:#0f172a;--muted:#475569;--accent:#2563eb;--success:#059669;--danger:#e11d48}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.login-card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:34px 30px;width:100%;max-width:440px;box-shadow:0 10px 30px rgba(15,23,42,0.07)}
+.badge{display:inline-flex;align-items:center;gap:6px;background:#ecfdf5;color:var(--success);border:1px solid #a7f3d0;padding:6px 14px;border-radius:999px;font-size:12.5px;font-weight:700;margin-bottom:16px}
+h1{font-size:22px;font-weight:800;margin:0 0 8px;color:var(--accent);letter-spacing:-0.3px}
+p.sub{font-size:14px;color:var(--muted);line-height:1.55;margin:0 0 22px}
+.form-group{margin-bottom:18px;text-align:left}
+label{display:block;font-size:13.5px;font-weight:700;margin-bottom:8px;color:var(--text)}
+input[type="password"]{width:100%;padding:12px 15px;font-size:14.5px;border-radius:10px;border:1px solid #cbd5e1;background:#ffffff;color:var(--text);outline:none;transition:border-color 0.2s}
+input[type="password"]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,0.12)}
+.btn{width:100%;padding:12px 18px;font-size:14.5px;font-weight:700;border:none;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer;transition:background 0.15s}
+.btn:hover{background:#1d4ed8}
+.err{background:#fff1f2;border:1px solid #fecdd3;color:var(--danger);padding:12px 14px;border-radius:10px;font-size:13.5px;margin-bottom:16px;font-weight:600}
+.quick-link{display:inline-block;margin-top:16px;font-size:13.5px;color:var(--accent);font-weight:600;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="badge">● AUTHOR: DEV ANH KHÔI • v1.2.0</div>
+  <h1>BOT TREO 4APP 🇻🇳 — DEV ANH KHÔI</h1>
+  <p class="sub">Hệ thống điều phối Đa Tài Khoản Zalo • Discord • Messenger & Tạo Nhãn Dán Sticker Chuẩn Zalo.</p>
+  {% if error %}
+  <div class="err">⚠️ {{ error }}</div>
+  {% endif %}
+  <form method="POST" action="/login">
+    <div class="form-group">
+      <label>🔑 Mật khẩu Quản Trị Viên:</label>
+      <input type="password" name="password" placeholder="Nhập khóa truy cập (mặc định: anhba)..." required autofocus>
+    </div>
+    <button type="submit" class="btn">🚀 Đăng Nhập Bảng Điều Khiển</button>
+  </form>
+  <a class="quick-link" href="/">👉 Vào thẳng Bảng Điều Khiển Nhanh</a>
+</div>
+</body>
+</html>"""
+
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{ custom_title or 'BẢNG ĐIỀU KHIỂN ĐA TÀI KHOẢN 4APP VIP 🇻🇳' }}</title>
+<style>
+:root{
+  --bg:#f8fafc;
+  --panel:#ffffff;
+  --panel-alt:#f1f5f9;
+  --border:#e2e8f0;
+  --text:#0f172a;
+  --text-soft:#334155;
+  --muted:#64748b;
+  --primary:#2563eb;
+  --primary-hover:#1d4ed8;
+  --success:#059669;
+  --warning:#d97706;
+  --danger:#e11d48;
+  --purple:#7c3aed;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  font-size:14.5px;
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+.topbar{
+  background:rgba(255,255,255,0.96);
+  border-bottom:1px solid var(--border);
+  padding:12px 22px;
+  position:sticky;
+  top:0;
+  z-index:100;
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  box-shadow:0 1px 3px rgba(15,23,42,0.04);
+}
+.brand{display:flex;align-items:center;gap:12px}
+.brand-badge{
+  background:var(--primary);
+  color:#ffffff;
+  font-weight:800;
+  font-size:14.5px;
+  padding:7px 13px;
+  border-radius:10px;
+  letter-spacing:0.3px;
+}
+.brand-title h1{font-size:17px;font-weight:800;margin:0;color:var(--text)}
+.brand-title p{font-size:12.5px;color:var(--muted);margin:2px 0 0}
+.stats-pills{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.pill{
+  background:var(--panel-alt);
+  border:1px solid var(--border);
+  padding:6px 13px;
+  border-radius:999px;
+  font-size:13px;
+  font-weight:600;
+  color:var(--text-soft);
+}
+.pill b{color:var(--primary)}
+.pill.ok b{color:var(--success)}
+.container{max-width:1400px;margin:0 auto;padding:18px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+@media(max-width:1024px){.grid-2{grid-template-columns:1fr}}
+.card{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:18px 20px;
+  box-shadow:0 2px 8px rgba(15,23,42,0.04);
+}
+.card-header{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:14px;
+  padding-bottom:10px;
+  border-bottom:1px solid var(--border);
+}
+.card-header h2{
+  font-size:16px;
+  font-weight:800;
+  margin:0;
+  color:var(--primary);
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.btn-row{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+button,.btn{
+  font-family:inherit;
+  font-size:13.5px;
+  font-weight:700;
+  padding:8px 14px;
+  border-radius:9px;
+  border:1px solid transparent;
+  cursor:pointer;
+  transition:all 0.15s;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  text-decoration:none;
+}
+.btn-primary{background:var(--primary);color:#ffffff}
+.btn-primary:hover{background:var(--primary-hover)}
+.btn-success{background:var(--success);color:#ffffff}
+.btn-success:hover{filter:brightness(1.06)}
+.btn-danger{background:var(--danger);color:#ffffff}
+.btn-danger:hover{filter:brightness(1.06)}
+.btn-warning{background:var(--warning);color:#ffffff}
+.btn-outline{background:#ffffff;color:var(--text-soft);border-color:#cbd5e1}
+.btn-outline:hover{border-color:var(--primary);color:var(--primary);background:#eff6ff}
+.btn-sm{padding:6px 10px;font-size:12.5px;border-radius:8px}
+input[type="text"],input[type="number"],select,textarea{
+  width:100%;
+  padding:10px 13px;
+  font-size:14px;
+  font-family:inherit;
+  color:var(--text);
+  background:#ffffff;
+  border:1px solid #cbd5e1;
+  border-radius:9px;
+  outline:none;
+}
+input:focus,select:focus,textarea:focus{border-color:var(--primary);box-shadow:0 0 0 2px rgba(37,99,235,0.12)}
+label.field-lbl{display:block;font-size:13px;font-weight:700;color:var(--text-soft);margin:9px 0 5px}
+.scroll-list{
+  max-height:300px;
+  overflow-y:auto;
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:var(--panel-alt);
+  padding:6px;
+}
+.list-item{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:9px 11px;
+  background:#ffffff;
+  border:1px solid var(--border);
+  margin-bottom:5px;
+  border-radius:8px;
+  font-size:13.5px;
+}
+.list-item:last-child{margin-bottom:0}
+.list-item:hover{border-color:#1d4ed8;background:#eff6ff}
+.item-left{display:flex;align-items:center;gap:10px;min-width:0}
+.item-title{font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item-sub{font-size:12px;color:var(--muted)}
+.tag-plat{
+  font-size:11px;
+  font-weight:800;
+  padding:3px 7px;
+  border-radius:6px;
+  text-transform:uppercase;
+}
+.tag-zalo{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+.tag-discord{background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe}
+.tag-messenger{background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd}
+.toast-bar{
+  display:none;
+  margin-bottom:16px;
+  padding:12px 16px;
+  border-radius:10px;
+  background:#ecfdf5;
+  border:1px solid #a7f3d0;
+  color:#047857;
+  font-weight:700;
+  font-size:14px;
+}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--primary);font-weight:800;background:var(--panel-alt)}
+.qr-box{
+  display:none;
+  margin-top:12px;
+  padding:14px;
+  background:var(--panel-alt);
+  border:1px dashed var(--primary);
+  border-radius:12px;
+  text-align:center;
+}
+.qr-box img{max-width:220px;border-radius:10px;border:4px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin:8px auto;display:block}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-badge">DEV ANH KHÔI • v1.2.0</div>
+    <div class="brand-title">
+      <h1>HỆ THỐNG ĐA NỀN TẢNG ZALO • MESSENGER • DISCORD (v1.2.0)</h1>
+      <p>👨‍💻 Author: <b>Dev Anh Khôi</b> • 12 Nguồn Fake Soạn Tin Messenger • Khiên Anti-Ban Chống Die Cookie 9 Lớp • Lệnh .menu Nhạy 100% Cả 3 App</p>
+    </div>
+  </div>
+  <div class="stats-pills">
+    <div class="pill ok">🟢 Acc Kết Nối: <b id="stat-accs">{{ accounts|length }}</b></div>
+    <div class="pill">🚀 Chiến Dịch Đang Chạy: <b id="stat-tasks">0</b></div>
+    <div class="pill">⚡ Tốc Độ Gửi: <b id="stat-rpm">0</b> tin/phút</div>
+    <button class="btn btn-danger btn-sm" onclick="stopAllTasks()">🛑 DỪNG TẤT CẢ (.ta)</button>
+  </div>
+</div>
+
+<div class="container">
+  <div id="toast-box" class="toast-bar"></div>
+
+  <!-- HÀNG 1: QUẢN LÝ ĐA TÀI KHOẢN & QUÉT CHỌN NHÓM/BOX -->
+  <div class="grid-2">
+    <!-- CỘT 1: QUẢN LÝ ĐA TÀI KHOẢN -->
+    <div class="card">
+      <div class="card-header">
+        <h2>👥 1. Quản Lý & Chọn Đa Tài Khoản (<span id="sel-acc-count">Tất cả</span>)</h2>
+        <div class="btn-row">
+          <button class="btn btn-primary btn-sm" onclick="startZaloQR()">📲 Quét QR Zalo PC</button>
+          <button class="btn btn-success btn-sm" onclick="checkAllLive()">🔍 Check Sống/Die</button>
+          <button class="btn btn-outline btn-sm" onclick="reconnectAll()">🔄 Kết Nối Lại</button>
+        </div>
+      </div>
+
+      <!-- Chọn nhanh số lượng Acc -->
+      <div class="btn-row" style="margin-bottom:10px">
+        <span style="font-size:13px;color:var(--muted);font-weight:700">Chọn nhanh:</span>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(1)">1 Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(5)">5 Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(10)">10 Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(20)">20 Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(50)">50 Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(999)">✅ Tất Cả Acc</button>
+        <button class="btn btn-outline btn-sm" onclick="bulkToggleCmd(true)">💬 Bật Lệnh Tất Cả</button>
+      </div>
+
+      <!-- Khung hiển thị QR Zalo PC trực tiếp -->
+      <div id="qr-modal" class="qr-box">
+        <div style="font-weight:800;color:#2563eb" id="qr-status-txt">⏳ Đang khởi tạo mã QR Máy Tính Singapore...</div>
+        <img id="qr-img" src="" alt="Zalo QR" style="display:none">
+        <div style="font-size:13px;color:var(--muted)">Mở Zalo trên điện thoại ➔ Quét mã QR ➔ Tự động nạp vào danh sách Acc!</div>
+      </div>
+
+      <!-- Danh sách tài khoản -->
+      <div class="scroll-list" id="acc-list-container">
+        {% if accounts %}
+          {% for a in accounts %}
+          <div class="list-item">
+            <div class="item-left">
+              <input type="checkbox" class="acc-chk" value="{{ a.id }}" checked onchange="updateSelectedCounts()" style="width:18px;height:18px;cursor:pointer">
+              <span class="tag-plat tag-{{ a.platform or 'zalo' }}">{{ a.platform or 'zalo' }}</span>
+              <div>
+                <div class="item-title">#{{ a.id }} — {{ a.name }}</div>
+                <div class="item-sub">UID: <code>{{ a.uid or a.imei or '-' }}</code> • Lệnh chat: <b style="color:{{ '#34d399' if a.chat_cmd_enabled else '#f87171' }}">{{ 'BẬT' if a.chat_cmd_enabled else 'TẮT' }}</b></div>
+              </div>
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-outline btn-sm" onclick="testSingleAcc({{ a.id }})">Check</button>
+              <button class="btn btn-outline btn-sm" onclick="toggleSingleCmd({{ a.id }}, {{ 0 if a.chat_cmd_enabled else 1 }})">{{ 'Tắt Lệnh' if a.chat_cmd_enabled else 'Bật Lệnh' }}</button>
+              <a class="btn btn-danger btn-sm" href="/account/delete/{{ a.id }}" onclick="return confirm('Xoá tài khoản #{{ a.id }}?')">Xoá</a>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div style="padding:18px;text-align:center;color:var(--muted)">Chưa có tài khoản nào. Hãy bấm <b>📲 Quét QR Zalo PC</b> hoặc thêm Cookie + IMEI bên dưới!</div>
+        {% endif %}
+      </div>
+
+      <!-- Khung 1: Nạp Nhanh Cookie Zalo (Tự nhận IMEI + Khóa Phiên + Bật Lệnh Độc Lập Ngay) -->
+      <div style="margin-top:14px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(59,130,246,0.45)">
+        <div style="font-weight:800;color:#2563eb;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+          <span>🍪 1. Nạp Nhanh Cookie Zalo (Tự Nhận IMEI & Ăn Lệnh .menu Ngay)</span>
+          <span style="font-size:12px;color:#059669">Cô lập riêng từng Cookie</span>
+        </div>
+        <div class="grid-2" style="gap:8px;margin-bottom:8px">
+          <input type="text" id="fast-zalo-name" placeholder="Tên gợi nhớ (VD: Acc Zalo Chính)">
+          <input type="text" id="fast-zalo-imei" placeholder="IMEI (z_uuid) — Có thể để trống, tự nhận diện!">
+        </div>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="fast-zalo-cookie" placeholder="Dán Cookie Zalo (zpw_sek / zpsid / JSON / Cookie|IMEI) vào đây...">
+          <button type="button" class="btn btn-success" onclick="quickAddZaloCookie()" style="white-space:nowrap">⚡ Nạp Zalo</button>
+        </div>
+      </div>
+
+      <!-- Khung 2: Nạp Nhanh Cookie Facebook (Tự Lấy Máy Tính Thông Báo Vào Facebook Chống Quét Checkpoint) -->
+      <div style="margin-top:10px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(14,165,233,0.45)">
+        <div style="font-weight:800;color:#38bdf8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+          <span>💻 2. Nạp Cookie Facebook (Lấy Máy Tính Thông Báo Vào FB Chống Quét)</span>
+          <span style="font-size:12px;color:#059669">Anti-Reg & Anti-Hack Active</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="fast-fb-name" placeholder="Tên FB (Tùy chọn)" style="max-width:165px">
+          <input type="text" id="fast-fb-cookie" placeholder="Dán Cookie Facebook (c_user=...; xs=...) hoặc JSON vào đây...">
+          <button type="button" class="btn btn-primary" onclick="quickAddFacebookCookie()" style="white-space:nowrap">💻 Nạp FB & Báo Máy Tính</button>
+        </div>
+      </div>
+
+      <!-- Khung 3: Đúc Token & Anti-Reg Acc Discord (Chống Báo Tài Khoản Bị Hack / Đặt Lại Mật Khẩu) -->
+      <div style="margin-top:10px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(139,92,246,0.45)">
+        <div style="font-weight:800;color:#6d28d9;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+          <span>🛡️ 3. Đúc Token & Anti-Reg Acc Discord (Chống Báo Hack / Reset Key)</span>
+          <span style="font-size:12px;color:#059669">Chrome 131 PC Vault</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="fast-dc-name" placeholder="Tên Discord" style="max-width:150px">
+          <input type="text" id="fast-dc-token" placeholder="Dán 1 hoặc nhiều Token Discord (hoặc Email|Pass) vào đây...">
+          <button type="button" class="btn btn-warning" onclick="quickAddDiscordToken()" style="white-space:nowrap">🛡️ Đúc Token Discord</button>
+        </div>
+      </div>
+
+      <!-- Form mở rộng cho Discord / Messenger -->
+      <details style="margin-top:10px">
+        <summary style="cursor:pointer;font-weight:700;color:var(--muted);padding:4px 0;font-size:13.5px">➕ Thêm Tài Khoản Phụ (Discord Token / Messenger Cookie)</summary>
+        <form method="POST" action="/account/add" style="margin-top:8px;background:var(--panel-alt);padding:12px;border-radius:12px;border:1px solid var(--border)">
+          <div class="grid-2" style="margin-bottom:8px;gap:8px">
+            <select name="platform" id="add-plat-sel">
+              <option value="zalo">Zalo PC (Cookie + IMEI)</option>
+              <option value="discord">Discord (Token)</option>
+              <option value="messenger">Facebook Messenger (Cookie)</option>
+            </select>
+            <input type="text" name="name" placeholder="Tên gợi nhớ">
+          </div>
+          <input type="text" name="imei" placeholder="IMEI Zalo (nếu có)" style="margin-bottom:8px">
+          <input type="text" name="cookies" placeholder="Cookie Zalo / Messenger..." style="margin-bottom:8px">
+          <input type="text" name="token" placeholder="Token Discord...">
+          <input type="hidden" name="chat_cmd_enabled" value="1">
+          <button type="submit" class="btn btn-primary btn-sm" style="width:100%;margin-top:10px">➕ Lưu Tài Khoản</button>
+        </form>
+      </details>
+    </div>
+
+    <!-- CỘT 2: QUÉT & CHỌN NHÓM / BOX MỤC TIÊU -->
+    <div class="card">
+      <div class="card-header">
+        <h2>📦 2. Chọn Nhóm / Box Mục Tiêu (<span id="sel-box-count">0 Box</span>)</h2>
+        <div class="btn-row">
+          <button class="btn btn-primary btn-sm" onclick="scanBoxes('zalo', true)">🔄 Quét Nhóm Zalo</button>
+          <button class="btn btn-outline btn-sm" onclick="scanBoxes('discord', true)">Quét Kênh Discord</button>
+          <button class="btn btn-outline btn-sm" onclick="scanBoxes('messenger', true)">Quét Box Messenger</button>
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-bottom:10px">
+        <span style="font-size:13px;color:var(--muted);font-weight:700">Chọn nhanh:</span>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(1)">1 Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(5)">5 Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(10)">10 Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(20)">20 Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(50)">50 Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(999)">✅ Tất Cả Box</button>
+        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(0)">Bỏ Chọn</button>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <input type="text" id="box-search-inp" placeholder="🔍 Tìm kiếm tên nhóm hoặc nhập trực tiếp ID Box..." oninput="filterBoxList()">
+        <button class="btn btn-outline btn-sm" onclick="addManualBoxId()">+ Thêm ID</button>
+      </div>
+
+      <div class="scroll-list" id="box-list-container">
+        <div style="padding:18px;text-align:center;color:var(--muted)">Đang tự động tải danh sách Nhóm Zalo... Bấm <b>🔄 Quét Nhóm Zalo</b> để làm mới!</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HÀNG 2: KHỞI CHẠY CHIẾN DỊCH ĐA ACC & TẠO STICKER CHUẨN NHÃN DÁN ZALO -->
+  <div class="grid-2">
+    <!-- CỘT 1: BẢNG KHỞI CHẠY CHIẾN DỊCH 38+ CHẾ ĐỘ -->
+    <div class="card">
+      <div class="card-header">
+        <h2>🚀 3. Khởi Chạy Chiến Dịch Đa Tài Khoản</h2>
+        <span style="font-size:13px;color:#059669;font-weight:700">Chạy mượt nhiều Acc cùng lúc 0ms</span>
+      </div>
+
+      <div class="grid-2" style="gap:12px;margin-bottom:8px">
+        <div>
+          <label class="field-lbl">Chế độ chạy (38+ Chức năng VIP):</label>
+          <select id="camp-mode">
+            <option value="treo_nhay">🔥 Treo Nhây Từng Dòng (.n / .nhay)</option>
+            <option value="treo_ngon">🌈 Treo Ngôn Đa Màu (.g / .damau)</option>
+            <option value="zalo_gif">⚡ Treo GIF + 68 Nhãn Dán Động Zalo (.gif)</option>
+            <option value="treo_sticker">🎨 Treo Nhãn Dán Gốc Zalo Liên Hoàn (.treosticker)</option>
+            <option value="nhay_giaitan">📢 Phát Thông Báo Giải Tán Hệ Thống Zalo (.nhaygiaitan)</option>
+            <option value="nhay_poll">📊 Treo Bình Chọn Poll 0.0s Không Nghỉ (.nhaypoll)</option>
+            <option value="nhay_namebox">✏️ Đổi Tên Box Zalo Liên Hoàn (.nhaynamebox)</option>
+            <option value="nhay_theme">🎨 Đổi Nền Box Zalo Liên Hoàn (.nhaynen)</option>
+            <option value="nhay_typing">⌨️ Giả Lập Soạn Tin Typing (.nhaytyping)</option>
+            <option value="zalo_todo">📋 Giao Việc Zalo To-Do (.todo)</option>
+            <option value="zalo_cardbank">🏦 Gửi Thẻ Ngân Hàng VietQR (.bank)</option>
+            <option value="share_contact">🪪 Chia Sẻ Danh Thiếp (.card)</option>
+            <option value="sieu_xa_nhieu_nhom">🚀 Siêu Xả Đa Nhóm Tốc Độ Ánh Sáng (.xa)</option>
+            <option value="combo_lien_thanh">⚡ Combo Liên Thanh 3 Câu/Nhịp (.combo)</option>
+            <option value="nhay_2c">🔥 Nhây Gộp 2 Câu (2c.txt) (.2c)</option>
+            <option value="treo_so">🔢 Treo Đếm Số Liên Hoàn (so.txt) (.so)</option>
+            <option value="so_tag">🎯 Treo Số Kèm Tag Mục Tiêu (.sotag)</option>
+            <option value="idea_mess">💥 Nhây Sát Thương Cực Mạnh (chui.txt) (.chui)</option>
+            <option value="nhay_icon">🌪️ Bão Ký Hiệu & Icon VIP (.nhayicon)</option>
+            <option value="code_lag">⚡ Code Lag Zalgo Siêu Nặng (.codelag)</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-lbl">Chọn File kịch bản (.txt):</label>
+          <select id="camp-file">
+            {% for f in files %}
+            <option value="{{ f.filename }}">#{{ f.display_num }} — {{ f.filename }} ({{ f.lines_count }} dòng)</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="grid-2" style="gap:12px;margin-bottom:8px">
+        <div>
+          <label class="field-lbl">Chế độ màu chữ Zalo:</label>
+          <select id="camp-color">
+            <option value="word_rainbow">🌈 Đổi Màu Từng Từ (Word Rainbow VIP)</option>
+            <option value="char_rainbow">✨ Đổi Màu Từng Ký Tự (Char Rainbow)</option>
+            <option value="rainbow">🎨 Cầu Vồng Theo Dòng (Line Rainbow)</option>
+            <option value="fire_gradient">🔥 Lửa Hoàng Kim (Đỏ - Cam - Vàng)</option>
+            <option value="ocean_gradient">🌊 Đại Dương Băng Tuyết</option>
+            <option value="royal_gradient">👑 Hoàng Gia Tối Thượng</option>
+            <option value="fixed">❤️‍🔥 Đỏ Rực Cố Định (db342e)</option>
+            <option value="none">⚪ Chữ Mặc Định</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-lbl">Tốc độ Delay (giây — Hỗ trợ 0s):</label>
+          <input type="number" id="camp-delay" value="0.0" step="0.1" min="0">
+        </div>
+      </div>
+
+      <label class="field-lbl">Nội dung tùy chỉnh (Hoặc để trống để chạy theo File .txt đã chọn; kèm @All hoặc @Tên nếu muốn Tag):</label>
+      <textarea id="camp-raw-text" rows="3" placeholder="Nhập câu nhây (ngăn cách bằng dấu ;) hoặc đoạn văn ngôn, hoặc tên nhóm cho chế độ Giải Tán..."></textarea>
+
+      <div style="display:flex;flex-wrap:wrap;gap:16px;margin:12px 0">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
+          <input type="checkbox" id="camp-multi-acc" checked style="width:17px;height:17px"> Chạy Đa Tài Khoản Đồng Loạt
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
+          <input type="checkbox" id="camp-tag-all" style="width:17px;height:17px"> Báo Chuông @All Ẩn
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
+          <input type="checkbox" id="camp-heading" checked style="width:17px;height:17px"> Chữ To In Đậm (f_18)
+        </label>
+      </div>
+
+      <button class="btn btn-primary" style="width:100%;padding:13px;font-size:15.5px" onclick="startCampaignNow()">🚀 BẮT ĐẦU CHẠY CHIẾN DỊCH NGAY</button>
+    </div>
+
+    <!-- CỘT 2: TẠO & BẮN NHÃN DÁN STICKER ZALO CHUẨN [STICKER] + QUẢN LÝ FILE -->
+    <div class="card">
+      <div class="card-header">
+        <h2>🎨 4. Tạo Sticker Thẳng Trên Zalo (Chuẩn Nhãn Dán Thật 100%)</h2>
+        <span style="font-size:13px;color:#fbbf24;font-weight:700">Nhảy ra [Sticker] thật không viền</span>
+      </div>
+
+      <label class="field-lbl">Chọn nhanh Bộ Nhãn Dán Động Zalo Gốc (68+ Mẫu):</label>
+      <div class="btn-row" style="margin-bottom:10px">
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('rong')">🐉 Rồng Lửa VIP</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('meo')">🐱 Mèo Ami Bụng Bự</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('khia')">😏 Quỳnh Aka Khịa</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('corgi')">🐶 Corgi Lắc Mông</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('vit')">🦆 Vịt Vàng Ducky</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('gau')">🐻 Gấu Brown</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('meme')">🐯 Hổ Vàng Meme</button>
+        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('quay')">💃 Quẩy Party</button>
+      </div>
+
+      <label class="field-lbl">Tìm kiếm API Sticker Zalo theo từ khóa hoặc dán Link Ảnh / GIF / Video ≤3s / Chữ Die-Cut 512×512:</label>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <input type="text" id="sticker-input" placeholder="Nhập từ khóa Sticker Zalo, mã ID, link ảnh/video ≤3s hoặc chữ...">
+        <button class="btn btn-outline" onclick="searchZaloStickersUI()" style="white-space:nowrap">🔍 Tìm API Sticker</button>
+        <button class="btn btn-success" onclick="createAndSendCustomSticker()" style="white-space:nowrap">🎨 Bắn Nhãn Dán</button>
+      </div>
+      <div id="sticker-search-results" style="display:none;margin-bottom:12px;padding:10px;background:#f8fafc;border:1px solid var(--border);border-radius:10px;max-height:150px;overflow-y:auto"></div>
+
+      <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:8px">
+        <div style="font-weight:800;color:#1d4ed8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+          <span>📂 Quản Lý Kho File (.txt), Test Lệnh .menu & 12 Nguồn Fake Typing</span>
+          <span style="font-size:12px;color:#059669">Nhạy 100% Zalo • Mess • Discord</span>
+        </div>
+        <div class="btn-row" style="margin-bottom:8px">
+          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.menu')">📋 Bắn .menu Vào Box</button>
+          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.typing on')">⌨️ Bật Fake Typing 12 Nguồn</button>
+          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.typing off')">🛑 Tắt Fake Typing</button>
+          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.ping')">🏓 Check .ping</button>
+          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.nhaygiaitan')">📢 Giải Tán Zalo</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <input type="text" id="web-cmd-inp" placeholder="Gõ lệnh trực tiếp (VD: .menu, .typing on, .sticker, .gif, .nhaygiaitan, .t, .ta)...">
+          <button class="btn btn-primary" onclick="dispatchWebCommand()" style="white-space:nowrap">⚡ Gửi Lệnh</button>
+        </div>
+        <details>
+          <summary style="cursor:pointer;font-weight:700;color:#059669">➕ Tạo / Tải Lên File Kịch Bản (.txt) Mới</summary>
+          <form method="POST" action="/file/create" style="margin-top:8px;background:var(--panel-alt);padding:12px;border-radius:10px">
+            <input type="text" name="filename" placeholder="Tên file (VD: nhay_vip.txt)" required style="margin-bottom:8px">
+            <textarea name="content" rows="3" placeholder="Mỗi câu 1 dòng..." required style="margin-bottom:8px"></textarea>
+            <button type="submit" class="btn btn-success btn-sm">💾 Lưu File .txt</button>
+          </form>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- HÀNG 3: BẢNG GIÁM SÁT TIẾN TRÌNH & LỊCH SỬ LỆNH THỜI GIAN THỰC -->
+  <div class="card">
+    <div class="card-header">
+      <h2>📊 5. Giám Sát Chiến Dịch Đang Chạy & Nhật Ký Hệ Thống (Thời Gian Thực)</h2>
+      <div class="btn-row">
+        <button class="btn btn-danger btn-sm" onclick="stopAllTasks()">🛑 Dừng Tất Cả Chiến Dịch (.stopall)</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Mã Task</th>
+            <th>Chế Độ</th>
+            <th>Số Acc Chạy</th>
+            <th>Số Box</th>
+            <th>Đã Gửi</th>
+            <th>Delay</th>
+            <th>Trạng Thái</th>
+            <th>Thao Tác</th>
+          </tr>
+        </thead>
+        <tbody id="tasks-tbody">
+          <tr><td colspan="8" style="text-align:center;color:var(--muted)">Chưa có chiến dịch nào đang chạy.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+let ALL_BOXES = [];
+let QR_POLL_TIMER = null;
+
+function showToast(msg, isErr=false){
+  const el = document.getElementById('toast-box');
+  el.style.display = 'block';
+  el.style.background = isErr ? 'rgba(239,68,68,0.18)' : 'rgba(16,185,129,0.18)';
+  el.style.borderColor = isErr ? 'rgba(239,68,68,0.45)' : 'rgba(16,185,129,0.45)';
+  el.style.color = isErr ? '#fca5a5' : '#6ee7b7';
+  el.textContent = msg;
+  setTimeout(()=>{ el.style.display = 'none'; }, 5000);
+}
+
+function getSelectedAccountIds(){
+  return Array.from(document.querySelectorAll('.acc-chk:checked')).map(el => parseInt(el.value));
+}
+
+function getSelectedTargets(){
+  return Array.from(document.querySelectorAll('.box-chk:checked')).map(el => ({
+    id: el.value,
+    name: el.getAttribute('data-name') || ('Box ' + el.value),
+    type: el.getAttribute('data-type') || 'group'
+  }));
+}
+
+function updateSelectedCounts(){
+  const aCnt = getSelectedAccountIds().length;
+  const bCnt = getSelectedTargets().length;
+  document.getElementById('sel-acc-count').textContent = aCnt + ' Acc đã chọn';
+  document.getElementById('sel-box-count').textContent = bCnt + ' Box đã chọn';
+}
+
+function selectTopAccounts(n){
+  const chks = Array.from(document.querySelectorAll('.acc-chk'));
+  chks.forEach((c, idx) => { c.checked = (idx < n); });
+  updateSelectedCounts();
+}
+
+function selectTopBoxes(n){
+  const chks = Array.from(document.querySelectorAll('.box-chk'));
+  chks.forEach((c, idx) => { c.checked = (idx < n); });
+  updateSelectedCounts();
+}
+
+async function scanBoxes(plat='zalo', force=false){
+  const cont = document.getElementById('box-list-container');
+  cont.innerHTML = '<div style="padding:18px;text-align:center;color:#2563eb">⏳ Đang quét danh sách Box ' + plat.toUpperCase() + '...</div>';
+  try{
+    let url = '/api/all_groups' + (force ? '?refresh=1' : '');
+    if(plat === 'discord') url = '/api/discord_channels' + (force ? '?refresh=1' : '');
+    if(plat === 'messenger') url = '/api/messenger_threads' + (force ? '?refresh=1' : '');
+    const r = await fetch(url);
+    const d = await r.json();
+    let items = [];
+    if(plat === 'zalo'){
+      (d.groups || []).forEach(g => items.push({id: g.id, name: g.name || ('Nhóm ' + g.id), type: 'group', plat: 'zalo', accs: (g.acc_names || []).join(', ')}));
+    }else if(plat === 'discord'){
+      (d.channels || []).forEach(c => items.push({id: c.id, name: c.name || ('Kênh ' + c.id), type: 'discord_channel', plat: 'discord', accs: (c.acc_names || []).join(', ')}));
+    }else{
+      (d.threads || []).forEach(t => items.push({id: t.id, name: t.name || ('Box ' + t.id), type: 'messenger_thread', plat: 'messenger', accs: (t.acc_names || []).join(', ')}));
+    }
+    ALL_BOXES = items;
+    renderBoxList(items);
+  }catch(e){
+    cont.innerHTML = '<div style="padding:18px;text-align:center;color:#f87171">Không thể quét danh sách Box: ' + e + '</div>';
+  }
+}
+
+function renderBoxList(items){
+  const cont = document.getElementById('box-list-container');
+  if(!items || !items.length){
+    cont.innerHTML = '<div style="padding:18px;text-align:center;color:var(--muted)">Chưa tìm thấy Box nào. Bạn có thể nhập trực tiếp ID Box vào ô phía trên và bấm <b>+ Thêm ID</b>!</div>';
+    updateSelectedCounts();
+    return;
+  }
+  cont.innerHTML = items.map((b, i) => `
+    <div class="list-item">
+      <div class="item-left">
+        <input type="checkbox" class="box-chk" value="${b.id}" data-name="${(b.name||'').replace(/"/g,'')}" data-type="${b.type}" ${i===0?'checked':''} onchange="updateSelectedCounts()" style="width:18px;height:18px;cursor:pointer">
+        <span class="tag-plat tag-${b.plat}">${b.plat}</span>
+        <div>
+          <div class="item-title">${b.name}</div>
+          <div class="item-sub">ID: <code>${b.id}</code> ${b.accs ? '• Acc: ' + b.accs : ''}</div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+  updateSelectedCounts();
+}
+
+function filterBoxList(){
+  const q = (document.getElementById('box-search-inp').value || '').toLowerCase().trim();
+  if(!q){ renderBoxList(ALL_BOXES); return; }
+  renderBoxList(ALL_BOXES.filter(b => (b.name||'').toLowerCase().includes(q) || String(b.id).includes(q)));
+}
+
+function addManualBoxId(){
+  const inp = document.getElementById('box-search-inp');
+  const val = (inp.value || '').trim();
+  if(!val) return;
+  ALL_BOXES.unshift({id: val, name: 'Box Mục Tiêu #' + val.slice(-6), type: 'group', plat: 'zalo', accs: 'Tất cả Acc'});
+  inp.value = '';
+  renderBoxList(ALL_BOXES);
+}
+
+async function startCampaignNow(){
+  const targets = getSelectedTargets();
+  if(!targets.length){
+    showToast('⚠️ Vui lòng tích chọn ít nhất 1 Nhóm/Box mục tiêu ở mục 2!', true);
+    return;
+  }
+  const accIds = getSelectedAccountIds();
+  const payload = {
+    targets: targets,
+    account_ids: accIds,
+    multi_acc: document.getElementById('camp-multi-acc').checked && accIds.length !== 1,
+    mode: document.getElementById('camp-mode').value,
+    file_id: document.getElementById('camp-file').value,
+    color_mode: document.getElementById('camp-color').value,
+    delay: parseFloat(document.getElementById('camp-delay').value || '0') || 0.0,
+    raw_text: document.getElementById('camp-raw-text').value,
+    tag_all: document.getElementById('camp-tag-all').checked,
+    is_heading: document.getElementById('camp-heading').checked,
+    antiband: true
+  };
+  const r = await fetch('/task/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+  const d = await r.json();
+  if(d.ok){
+    showToast('🚀 Đã khởi chạy chiến dịch thành công (' + accIds.length + ' Acc × ' + targets.length + ' Box)!');
+    refreshStatus();
+  }else{
+    showToast('❌ ' + (d.error || 'Lỗi khởi chạy'), true);
+  }
+}
+
+async function quickAddFacebookCookie(){
+  const ck = (document.getElementById('fast-fb-cookie').value || '').trim();
+  const nm = (document.getElementById('fast-fb-name').value || '').trim();
+  if(!ck){
+    showToast('⚠️ Hãy dán Cookie Facebook (có c_user và xs) vào ô!', true);
+    return;
+  }
+  showToast('💻 Đang khóa Thiết Bị Máy Tính, gửi thông báo xác nhận vào Facebook & bật lệnh .menu...');
+  try{
+    const r = await fetch('/api/messenger/verify_cookie', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cookies: ck, name: nm, auto_save: true})
+    });
+    const d = await r.json();
+    if(d.ok){
+      showToast('✅ ' + (d.message || 'Đã nạp Cookie Facebook & báo Máy Tính thành công!'));
+      setTimeout(() => location.reload(), 1000);
+    }else{
+      showToast('❌ ' + (d.error || 'Lỗi nạp Cookie Facebook'), true);
+    }
+  }catch(e){
+    showToast('❌ Lỗi kết nối: ' + e, true);
+  }
+}
+
+async function quickAddDiscordToken(){
+  const tk = (document.getElementById('fast-dc-token').value || '').trim();
+  const nm = (document.getElementById('fast-dc-name').value || '').trim();
+  if(!tk){
+    showToast('⚠️ Hãy dán Token Discord (hoặc Email|Pass) vào ô!', true);
+    return;
+  }
+  showToast('🛡️ Đang khóa vân tay Máy Tính Chrome 131 (Anti-Reg & Anti-Hack) cho Discord...');
+  try{
+    let url = '/api/discord/immortalize';
+    let bodyObj = {raw_input: tk, name: nm, auto_save: true};
+    if(tk.includes('|') && !tk.includes('.')){
+      const parts = tk.split('|');
+      url = '/api/discord/reg_login';
+      bodyObj = {email: parts[0].trim(), password: (parts[1]||'').trim(), two_fa: (parts[2]||'').trim(), auto_save: true};
+    }
+    const r = await fetch(url, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(bodyObj)
+    });
+    const d = await r.json();
+    if(d.ok){
+      showToast('✅ ' + (d.message || 'Đã đúc Token Discord chống quét & bật lệnh thành công!'));
+      setTimeout(() => location.reload(), 1000);
+    }else{
+      showToast('❌ ' + (d.error || 'Không thể nạp Token Discord'), true);
+    }
+  }catch(e){
+    showToast('❌ Lỗi kết nối: ' + e, true);
+  }
+}
+
+async function quickAddZaloCookie(){
+  const ck = (document.getElementById('fast-zalo-cookie').value || '').trim();
+  const im = (document.getElementById('fast-zalo-imei').value || '').trim();
+  const nm = (document.getElementById('fast-zalo-name').value || '').trim();
+  if(!ck){
+    showToast('⚠️ Hãy dán Cookie Zalo (zpw_sek hoặc zpsid) vào ô Cookie!', true);
+    return;
+  }
+  showToast('⏳ Đang xác thực Cookie Zalo, đồng bộ zpw_enk & kích hoạt bộ lắng nghe lệnh độc lập...');
+  try{
+    const r = await fetch('/api/zalo/verify_cookie_imei', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cookies: ck, imei: im, name: nm, auto_save: true})
+    });
+    const d = await r.json();
+    if(d.ok){
+      showToast('✅ ' + (d.message || 'Đã nạp Cookie Zalo & bật lệnh thành công!'));
+      setTimeout(() => location.reload(), 900);
+    }else{
+      showToast('❌ ' + (d.error || 'Không thể nạp Cookie Zalo'), true);
+    }
+  }catch(e){
+    showToast('❌ Lỗi kết nối khi nạp Cookie: ' + e, true);
+  }
+}
+
+async function searchZaloStickersUI(){
+  const q = (document.getElementById('sticker-input').value || '').trim();
+  const box = document.getElementById('sticker-search-results');
+  box.style.display = 'block';
+  box.innerHTML = '<span style="color:#2563eb;font-size:13px">⏳ Đang tìm kiếm trên API Sticker Zalo...</span>';
+  try{
+    const r = await fetch('/api/zalo/search_stickers?q=' + encodeURIComponent(q));
+    const d = await r.json();
+    const list = d.stickers || [];
+    if(!list.length){
+      box.innerHTML = '<span style="color:var(--muted);font-size:13px">Không tìm thấy mẫu có sẵn — Bấm [🎨 Bắn Nhãn Dán] để cắt khung tạo Sticker mới từ chữ/ảnh này!</span>';
+      return;
+    }
+    box.innerHTML = '<div style="font-size:12.5px;color:#1d4ed8;margin-bottom:6px;font-weight:700">Chạm vào mẫu bên dưới để bắn thẳng Nhãn Dán vào Box đang chọn:</div><div class="btn-row">' +
+      list.map(s => `<button class="btn btn-outline btn-sm" onclick="fireNativeSticker('${s.id}')">🎯 ${s.name} (#${s.id})</button>`).join('') +
+      '</div>';
+  }catch(e){
+    box.innerHTML = '<span style="color:#f87171;font-size:13px">Lỗi tra cứu Sticker: ' + e + '</span>';
+  }
+}
+
+async function fireNativeSticker(tag){
+  document.getElementById('sticker-input').value = tag;
+  await createAndSendCustomSticker();
+}
+
+async function createAndSendCustomSticker(){
+  const targets = getSelectedTargets();
+  if(!targets.length){
+    showToast('⚠️ Hãy chọn ít nhất 1 Nhóm/Box ở mục 2 để bắn Nhãn Dán Sticker!', true);
+    return;
+  }
+  const inputVal = (document.getElementById('sticker-input').value || '').trim();
+  const accIds = getSelectedAccountIds();
+  const r = await fetch('/api/zalo/create_sticker', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({targets: targets, account_ids: accIds, query: inputVal})
+  });
+  const d = await r.json();
+  if(d.ok){
+    showToast('🎨 ' + (d.message || 'Đã bắn Nhãn Dán Sticker [Sticker] chuẩn Zalo thành công!'));
+  }else{
+    showToast('❌ ' + (d.error || 'Không thể tạo Sticker'), true);
+  }
+}
+
+async function quickRunWebCmd(c){
+  const inp = document.getElementById('web-cmd-inp');
+  if(inp){ inp.value = c; }
+  await dispatchWebCommand();
+}
+
+async function dispatchWebCommand(){
+  const cmd = (document.getElementById('web-cmd-inp').value || '').trim();
+  if(!cmd) return;
+  const targets = getSelectedTargets();
+  const tid = targets.length ? targets[0].id : '';
+  const r = await fetch('/api/command/dispatch_web', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({cmd: cmd, thread_id: tid})
+  });
+  const d = await r.json();
+  showToast(d.message || 'Đã thực thi lệnh!', !d.ok);
+  refreshStatus();
+}
+
+async function startZaloQR(){
+  const box = document.getElementById('qr-modal');
+  const txt = document.getElementById('qr-status-txt');
+  const img = document.getElementById('qr-img');
+  box.style.display = 'block';
+  img.style.display = 'none';
+  txt.textContent = '⏳ Đang cấp phát Máy Tính Singapore & tạo mã QR Zalo...';
+  if(QR_POLL_TIMER) clearInterval(QR_POLL_TIMER);
+  const r = await fetch('/api/zalo/qr_start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({region:'SG', auto_save:true})});
+  const d = await r.json();
+  if(!d.ok){
+    txt.textContent = '❌ Lỗi tạo QR: ' + (d.error || '');
+    return;
+  }
+  const sid = d.session_id;
+  QR_POLL_TIMER = setInterval(async () => {
+    try{
+      const sr = await fetch('/api/zalo/qr_status/' + sid);
+      const sd = await sr.json();
+      if(sd.has_qr){
+        img.src = '/api/zalo/qr_image/' + sid + '.png?t=' + Date.now();
+        img.style.display = 'block';
+        txt.textContent = '📲 Hãy mở Zalo quét mã QR bên dưới (' + (sd.pc_name || 'Singapore PC') + '):';
+      }
+      if(sd.status === 'scanned'){
+        txt.textContent = '📱 Đã quét mã QR! Hãy bấm [Đăng nhập] trên điện thoại của bạn...';
+      }
+      if(sd.status === 'success'){
+        clearInterval(QR_POLL_TIMER);
+        txt.textContent = '✅ Đăng nhập thành công tài khoản: ' + (sd.display_name || sd.uid || 'Zalo VIP') + '! Đang tải lại...';
+        setTimeout(() => location.reload(), 1200);
+      }
+      if(sd.status === 'expired' || sd.status === 'error'){
+        clearInterval(QR_POLL_TIMER);
+        txt.textContent = '⌛ ' + (sd.message || 'Mã QR đã hết hạn. Hãy bấm Quét QR Zalo PC lại.');
+      }
+    }catch(e){}
+  }, 1500);
+}
+
+async function checkAllLive(){
+  showToast('🔍 Đang kiểm tra trạng thái Sống/Die của toàn bộ tài khoản...');
+  const r = await fetch('/api/account/check_all_live', {method:'POST'});
+  const d = await r.json();
+  showToast(d.message || 'Đã kiểm tra xong!', !d.ok);
+}
+
+async function testSingleAcc(id){
+  const r = await fetch('/api/account/test_session', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({acc_id:id})});
+  const d = await r.json();
+  showToast(d.message || d.error || 'Đã kiểm tra', !d.ok);
+}
+
+async function toggleSingleCmd(id, en){
+  await fetch('/api/account/chat_cmd', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({acc_id:id, enabled:en})});
+  location.reload();
+}
+
+async function bulkToggleCmd(en){
+  await fetch('/api/account/cmd_permissions_bulk', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode: en ? 'enable_all' : 'disable_all'})});
+  location.reload();
+}
+
+async function reconnectAll(){
+  const r = await fetch('/api/account/reconnect_all', {method:'POST'});
+  const d = await r.json();
+  showToast(d.message || 'Đã kết nối lại!');
+}
+
+async function stopSingleTask(tid){
+  await fetch('/task/stop/' + tid, {method:'POST'});
+  refreshStatus();
+}
+
+asyncindex_ready = false;
+async function stopAllTasks(){
+  const r = await fetch('/task/stop_all', {method:'POST'});
+  const d = await r.json();
+  showToast('🛑 Đã dừng toàn bộ (' + (d.stopped || 0) + ' chiến dịch)!');
+  refreshStatus();
+}
+
+async function refreshStatus(){
+  try{
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const running = (d.tasks || []).filter(t => t.status === 'Đang chạy');
+    document.getElementById('stat-tasks').textContent = running.length;
+    if(d.ping_telemetry) document.getElementById('stat-rpm').textContent = d.ping_telemetry.total_rpm || 0;
+    const tb = document.getElementById('tasks-tbody');
+    if(!d.tasks || !d.tasks.length){
+      tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">Chưa có chiến dịch nào.</td></tr>';
+      return;
+    }
+    tb.innerHTML = d.tasks.slice(0, 18).map(t => `
+      <tr>
+        <td><code>#${t.id}</code></td>
+        <td><b>${t.mode}</b></td>
+        <td>${t.acc_count} Acc</td>
+        <td>${t.targets_count} Box</td>
+        <td><b style="color:#059669">${t.sent}</b></td>
+        <td>${t.delay}s</td>
+        <td><span style="color:${t.status==='Đang chạy'?'#34d399':'#94a3b8'};font-weight:700">${t.status}</span></td>
+        <td>${t.status==='Đang chạy' ? `<button class="btn btn-danger btn-sm" onclick="stopSingleTask('${t.id}')">🛑 Dừng</button>` : '-'}</td>
+      </tr>
+    `).join('');
+  }catch(e){}
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  updateSelectedCounts();
+  scanBoxes('zalo', false);
+  refreshStatus();
+  setInterval(refreshStatus, 2500);
+});
+</script>
+</body>
+</html>"""
+
+KEEPALIVE_HTML = DASHBOARD_HTML
+
+
+@app.route("/api/ui/physics")
+def api_ui_physics():
+    return jsonify({"ok": True, **TelegramUIPhysicsEngine.get_ui_bundle()})
+
+
+@app.route("/api/ui/pet_mascot")
+def api_ui_pet_mascot():
+    return jsonify(TelegramPetAnimationEngine.get_pet_bundle())
+
+
+@app.route("/api/zalo/geo_status")
+def api_zalo_geo_status():
+    reg = request.args.get("region", "VN").strip().upper()
+    px = request.args.get("proxy", "").strip()
+    force_scan = request.args.get("scan") == "1"
+    try:
+        from zalo_login import VietnamSingaporeGeoRouter
+        if px:
+            info = VietnamSingaporeGeoRouter.inspect_outbound_ip_geo(proxy_url=px, timeout=3.0)
+            if info.get("ok"):
+                return jsonify(info)
+        direct_info = VietnamSingaporeGeoRouter.get_direct_server_geo(force=force_scan)
+        if direct_info.get("ok") and direct_info.get("is_vn_or_sg"):
+            return jsonify(direct_info)
+        if force_scan:
+            route = VietnamSingaporeGeoRouter.select_best_route_for_qr(target_country=reg, custom_proxy=px)
+            return jsonify(route)
+        return jsonify(direct_info if direct_info.get("ok") else {
+            "ok": True,
+            "ip": "Direct",
+            "country_code": "SG" if "SG" in reg else "VN",
+            "country": "Singapore" if "SG" in reg else "Việt Nam",
+            "city": "Singapore" if "SG" in reg else "TP. Hồ Chí Minh",
+            "isp": "Singtel / Viettel Fiber",
+            "is_vn_or_sg": True,
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
+@app.route("/api/zalo/auto_scan_vn_sg_proxy", methods=["POST"])
+def api_zalo_auto_scan_vn_sg_proxy():
+    data = request.json or {}
+    reg = str(data.get("region") or "VN").strip().upper()
+    px = str(data.get("proxy") or "").strip()
+    try:
+        from zalo_login import VietnamSingaporeGeoRouter
+        route = VietnamSingaporeGeoRouter.select_best_route_for_qr(target_country=reg, custom_proxy=px)
+        if route.get("proxy_url"):
+            VietnamSingaporeGeoRouter._USER_CUSTOM_PROXY = route["proxy_url"]
+        cc = route.get("country_code") or ("SG" if "SG" in reg else "VN")
+        return jsonify({
+            "ok": True,
+            **route,
+            "message": (
+                f"Đã xác thực đường truyền thật tại {'Singapore (SG)' if cc == 'SG' else 'Việt Nam (VN)'} — IP: {route.get('ip') or 'Active'}!"
+                if route.get("is_vn_or_sg") else
+                f"Máy chủ hiện tại đang ở {route.get('country') or cc} ({route.get('ip')}). Hãy nhập Proxy VN/SG hoặc dùng cấu hình render.yaml (region: singapore)!"
+            ),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
+@app.route("/api/network/gateways")
+def api_network_gateways():
+    return jsonify(MessagingGatewayDirectory.get_directory_payload())
+
+
+@app.route("/api/messenger/typing_sources", methods=["GET", "POST"])
+def api_messenger_typing_sources():
+    """API tra cứu & kích hoạt 12 Nguồn Fake Soạn Tin Nhắn + Khiên Anti-Ban Cookie Messenger."""
+    if request.method == "GET":
+        return jsonify({
+            "ok": True,
+            "author": APP_AUTHOR,
+            "version": APP_VERSION,
+            "sources_count": len(MessengerClient.MESSENGER_TYPING_SOURCES),
+            "sources": MessengerClient.MESSENGER_TYPING_SOURCES,
+        })
+    data = request.json or {}
+    thread_id = str(data.get("thread_id") or "").strip()
+    enable = bool(data.get("enable", True))
+    accs = get_all_accounts_from_ram(platform="messenger", enabled_only=True)
+    if not accs or not thread_id:
+        return jsonify({"ok": False, "error": "Cần có ít nhất 1 Acc Messenger đang bật và truyền thread_id!"}), 400
+    fired = 0
+    for a in accs[:5]:
+        try:
+            mc = MessengerClient.get_pooled_client(a["cookies"], uid=a.get("uid") or "")
+            if mc.send_typing_mqtt(thread_id, is_typing=enable, multi_source=True):
+                fired += 1
+        except Exception:
+            pass
+    return jsonify({
+        "ok": fired > 0,
+        "fired_accounts": fired,
+        "sources_count": len(MessengerClient.MESSENGER_TYPING_SOURCES),
+        "message": f"Đã {'kích hoạt' if enable else 'tắt'} 12 Nguồn Fake Soạn Tin Nhắn trên {fired} Acc Messenger!"
+    })
+
+
+
+
+@app.context_processor
+def inject_nhk_3d_and_pets():
+    """Tự động bơm đồ họa 3D NHK & SVG vào mọi trang HTML (/login, /, errorhandler) để 100% luôn xuất hiện!"""
+    return {
+        "corgi_svg": TelegramPetAnimationEngine.get_corgi_svg(),
+        "cat_svg": TelegramPetAnimationEngine.get_cat_svg(),
+        "nhk_3d_svg": TelegramPetAnimationEngine.get_nhk_3d_emblem_svg(),
+    }
+
+
+@app.route("/api/proxies/upload_file", methods=["POST"])
+def api_upload_proxies_file():
+    """Duyệt & nạp 1 hoặc nhiều file PRX (.txt / .csv), tự động khởi chạy Keep-Alive & xếp hạng Proxy nhanh nhất!"""
+    uploaded_files = request.files.getlist("files") or []
+    single_f = request.files.get("file")
+    if single_f and single_f not in uploaded_files:
+        uploaded_files.append(single_f)
+
+    chunks = []
+    filenames = []
+    for uf in uploaded_files:
+        if uf and uf.filename:
+            filenames.append(os.path.basename(uf.filename))
+            try:
+                raw_b = uf.read()
+                chunks.append(raw_b.decode("utf-8", errors="ignore"))
+            except Exception:
+                pass
+
+    if not chunks and request.is_json:
+        data = request.json or {}
+        if data.get("proxies"):
+            chunks.append(str(data["proxies"]))
+
+    combined_text = "\n".join(chunks)
+    if not combined_text.strip():
+        return jsonify({"ok": False, "error": "File PRX trống hoặc chưa chọn file!"}), 400
+
+    append_mode = str(request.form.get("append_mode", "1")) != "0"
+    if append_mode:
+        added_cnt, total_cnt = ProxyPoolEngine.add_proxies_incremental(combined_text, auto_start=True)
+    else:
+        total_cnt = ProxyPoolEngine.save_proxies(combined_text, enabled=True, auto_start=True)
+        added_cnt = total_cnt
+
+    snap = ProxyPoolEngine.get_snapshot()
+    fn_label = ", ".join(filenames[:3]) if filenames else "File PRX"
+    return jsonify({
+        "ok": True,
+        "added": added_cnt,
+        "total": total_cnt,
+        "snapshot": snap,
+        "message": f"Đã nạp {added_cnt} PRX từ {fn_label} (Tổng: {total_cnt} PRX) & tự khởi chạy xếp hạng tốc độ phản hồi nhanh nhất!"
+    })
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(e):
+    if request.path.startswith("/api/") or request.path.startswith("/task/"):
+        return jsonify({"ok": False, "error": str(e)}), 200
+    try:
+        has_logo = bool(get_setting("brand_logo_b64", "") or get_setting("brand_logo_url", ""))
+        logo_ts = get_setting("brand_logo_ts", "1")
+        custom_title = get_setting("custom_web_title", "")
+        return render_template_string(
+            DASHBOARD_HTML,
+            accounts=[],
+            files=[],
+            has_logo=has_logo,
+            logo_ts=logo_ts,
+            custom_title=custom_title,
+            corgi_svg=TelegramPetAnimationEngine.get_corgi_svg(),
+            cat_svg=TelegramPetAnimationEngine.get_cat_svg(),
+            nhk_3d_svg=TelegramPetAnimationEngine.get_nhk_3d_emblem_svg(),
+        ), 200
+    except Exception:
+        return Response("System Ready", mimetype="text/plain"), 200
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    ip = get_client_ip()
+    allowed, wait_s = check_ip_bruteforce(ip)
+    has_logo = bool(get_setting("brand_logo_b64", "") or get_setting("brand_logo_url", ""))
+    logo_ts = get_setting("brand_logo_ts", "1")
+    custom_title = get_setting("custom_web_title", "")
+    if not allowed:
+        return render_template_string(
+            LOGIN_HTML,
+            error=f"Tạm khóa đăng nhập do nhập sai nhiều lần. Thử lại sau {wait_s} giây.",
+            has_logo=has_logo,
+            logo_ts=logo_ts,
+            custom_title=custom_title,
+            corgi_svg=TelegramPetAnimationEngine.get_corgi_svg(),
+            cat_svg=TelegramPetAnimationEngine.get_cat_svg(),
+            nhk_3d_svg=TelegramPetAnimationEngine.get_nhk_3d_emblem_svg(),
+        )
+    if request.method == "POST":
+        pw = (request.form.get("password") or "").strip()
+        is_valid = False
+        if pw and (pw == ACCESS_KEY or pw == DEFAULT_ADMIN_PASS):
+            is_valid = True
+        else:
+            try:
+                conn = db()
+                row = conn.execute("SELECT password FROM users WHERE username=?", (DEFAULT_ADMIN_USER,)).fetchone()
+                conn.close()
+                if row and verify_password_secure(row["password"], pw):
+                    is_valid = True
+            except Exception:
+                pass
+
+        if is_valid:
+            record_login_result(ip, True)
+            session.permanent = True
+            session["logged_in"] = True
+            return redirect("/")
+
+        record_login_result(ip, False)
+        return render_template_string(
+            LOGIN_HTML,
+            error="Mật khẩu truy cập không chính xác!",
+            has_logo=has_logo,
+            logo_ts=logo_ts,
+            custom_title=custom_title,
+            corgi_svg=TelegramPetAnimationEngine.get_corgi_svg(),
+            cat_svg=TelegramPetAnimationEngine.get_cat_svg(),
+            nhk_3d_svg=TelegramPetAnimationEngine.get_nhk_3d_emblem_svg(),
+        )
+    return render_template_string(LOGIN_HTML, error=None, has_logo=has_logo, logo_ts=logo_ts, custom_title=custom_title, corgi_svg=TelegramPetAnimationEngine.get_corgi_svg(), cat_svg=TelegramPetAnimationEngine.get_cat_svg(), nhk_3d_svg=TelegramPetAnimationEngine.get_nhk_3d_emblem_svg())
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
+@app.route("/api/menu_banner.png")
+def api_get_menu_banner():
+    banner_p = os.path.join(BASE_DIR, "menu_banner.png")
+    if os.path.exists(banner_p):
+        return send_from_directory(BASE_DIR, "menu_banner.png", mimetype="image/png")
+    return redirect("/api/logo")
+
+@app.route("/api/logo")
+def api_get_logo():
+    ext_url = get_setting("brand_logo_url", "").strip()
+    if ext_url and ext_url.startswith(("http://", "https://", "data:image/")):
+        if ext_url.startswith("data:image/"):
+            try:
+                header, b64_part = ext_url.split(",", 1)
+                mime_t = header.split(";")[0].replace("data:", "") or "image/png"
+                return Response(base64.b64decode(b64_part), mimetype=mime_t)
+            except Exception:
+                pass
+        return redirect(ext_url)
+    b64 = get_setting("brand_logo_b64", "")
+    mime = get_setting("brand_logo_mime", "image/png")
+    if not b64:
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0969da"/><stop offset="100%" stop-color="#1f883d"/></linearGradient></defs><rect width="64" height="64" rx="14" fill="url(#g)"/><path d="M20 34L28 42L44 22" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/><circle cx="32" cy="32" r="24" stroke="rgba(255,255,255,0.25)" stroke-width="2" fill="none"/></svg>'
+        return Response(svg, mimetype="image/svg+xml")
+    try:
+        raw = base64.b64decode(b64)
+        return Response(raw, mimetype=mime)
+    except Exception:
+        return Response(status=404)
+
+@app.route("/api/logo/upload", methods=["POST"])
+def api_upload_logo():
+    if request.is_json:
+        data = request.json or {}
+        logo_url = (data.get("logo_url") or "").strip()
+        custom_title = (data.get("custom_title") or "").strip()
+        if logo_url:
+            set_setting("brand_logo_url", logo_url)
+            set_setting("brand_logo_ts", str(int(time.time())))
+        if "custom_title" in data:
+            set_setting("custom_web_title", custom_title)
+        return jsonify({"ok": True, "message": "Đã cập nhật thương hiệu & Logo Website!"})
+
+    f = request.files.get("logo")
+    custom_title = (request.form.get("custom_title") or "").strip()
+    if custom_title:
+        set_setting("custom_web_title", custom_title)
+    if not f:
+        return jsonify({"ok": False, "error": "Chưa chọn ảnh"}), 400
+    raw = f.read()
+    if not raw or len(raw) > 10 * 1024 * 1024:
+        return jsonify({"ok": False, "error": "Ảnh không hợp lệ hoặc quá 10MB"}), 400
+    mime = f.mimetype or "image/png"
+    set_setting("brand_logo_url", "")
+    set_setting("brand_logo_b64", base64.b64encode(raw).decode("utf-8"))
+    set_setting("brand_logo_mime", mime)
+    set_setting("brand_logo_ts", str(int(time.time())))
+    return jsonify({"ok": True, "message": "Đã tải lên Logo Website thành công!"})
+
+@app.route("/api/logo/reset", methods=["POST"])
+def api_reset_logo():
+    set_setting("brand_logo_b64", "")
+    set_setting("brand_logo_url", "")
+    set_setting("custom_web_title", "")
+    set_setting("brand_logo_ts", str(int(time.time())))
+    return jsonify({"ok": True, "message": "Đã khôi phục Logo mặc định!"})
+
+@app.route("/healthz")
+def healthz():
+    return jsonify({"ok": True, "service": "BOT TREO 4APP VN", "admin_id": TELEGRAM_ADMIN_ID, "mode": "telegram_bot"}), 200
+
+@app.route("/")
+def index():
+    return route_zenvyre_miniapp()
+
+
+@app.route("/api/zalo/search_stickers", methods=["POST", "GET"])
+def api_zalo_search_stickers():
+    """API Tìm kiếm Nhãn Dán Zalo trực tiếp theo từ khóa (kết hợp Zalo Official Sticker Suggest API + Kho 68+ Sticker VIP)."""
+    q = (request.args.get("q") or (request.json or {}).get("query") or "").strip()
+    all_zalo_accs = get_all_accounts_from_ram(platform="zalo", enabled_only=True)
+    results = []
+    if all_zalo_accs and q:
+        try:
+            a0 = all_zalo_accs[0]
+            zc = Zalo.get_pooled_client(
+                a0["imei"], a0["cookies"],
+                user_agent=a0.get("user_agent") or "",
+                zpw_enk_hint=a0.get("zpw_enk") or "",
+                uid_hint=a0.get("uid") or ""
+            )
+            results.extend(zc.search_zalo_stickers_live(q))
+        except Exception:
+            pass
+    kw_norm = remove_vn_accents(q.lower()) if q else ""
+    for s_item in Zalo.ZALO_VIP_STICKERS:
+        if not kw_norm or kw_norm in remove_vn_accents(s_item.get("name", "").lower()) or any(kw_norm in t for t in s_item.get("tags", ())):
+            if not any(int(x.get("id", 0)) == int(s_item["id"]) for x in results):
+                results.append({
+                    "id": s_item["id"],
+                    "catId": s_item["catId"],
+                    "type": s_item.get("type", 7),
+                    "name": s_item.get("name", f"Sticker #{s_item['id']}"),
+                })
+    return jsonify({"ok": True, "stickers": results[:36], "count": len(results[:36])})
+
+
+@app.route("/api/zalo/create_sticker", methods=["POST"])
+def api_zalo_create_sticker():
+    """Tạo & bắn Nhãn Dán Sticker Zalo chuẩn [Sticker] trực tiếp từ Web UI tới 1 hoặc nhiều Box cùng lúc."""
+    data = request.json or {}
+    targets = data.get("targets") or []
+    acc_ids = [int(x) for x in (data.get("account_ids") or []) if str(x).isdigit()]
+    query_str = str(data.get("query") or "").strip()
+
+    all_zalo_accs = get_all_accounts_from_ram(platform="zalo", enabled_only=True)
+    if acc_ids:
+        sel_accs = [a for a in all_zalo_accs if int(a["id"]) in acc_ids] or all_zalo_accs
+    else:
+        sel_accs = all_zalo_accs
+
+    if not sel_accs:
+        return jsonify({"ok": False, "error": "Chưa có tài khoản Zalo nào đang kết nối!"}), 400
+    if not targets:
+        return jsonify({"ok": False, "error": "Hãy chọn ít nhất 1 Box Zalo mục tiêu!"}), 400
+
+    q_kw = remove_vn_accents(query_str.lower())
+    is_native_kw = (not query_str) or q_kw in ("rong", "meo", "khia", "quay", "corgi", "vit", "meme", "gau", "cuoi", "tim") or q_kw.isdigit()
+
+    res_st = None
+    if not is_native_kw:
+        if query_str.startswith(("http://", "https://", "data:")) or os.path.exists(query_str):
+            is_vid = any(query_str.lower().split("?")[0].endswith(ext) for ext in (".mp4", ".mov", ".webm", ".mkv", ".avi"))
+            res_st = ZaloStickerMakerEngine.create_short_video_sticker(query_str) if is_vid else ZaloStickerMakerEngine.create_sharp_image_sticker(query_str)
+        else:
+            res_st = ZaloStickerMakerEngine.create_text_sticker_512(query_str)
+        if not res_st.get("ok"):
+            return jsonify({"ok": False, "error": res_st.get("error") or "Lỗi tạo Sticker"}), 400
+
+    fired_cnt = 0
+    for a_item in sel_accs[:12]:
+        try:
+            zc = Zalo.get_pooled_client(
+                a_item["imei"], a_item["cookies"],
+                user_agent=a_item.get("user_agent") or "",
+                zpw_enk_hint=a_item.get("zpw_enk") or "",
+                uid_hint=a_item.get("uid") or ""
+            )
+            for t in targets[:20]:
+                tid_s = str(t.get("id") or "").strip()
+                if not tid_s:
+                    continue
+                if is_native_kw:
+                    zc.send_native_sticker(tid_s, keyword=q_kw, is_group=(t.get("type", "group") == "group"))
+                else:
+                    m_bytes = res_st.get("webp_bytes") or res_st.get("gif_bytes") or res_st.get("png_bytes") or b""
+                    zc.send_custom_sticker_media(
+                        tid_s, m_bytes,
+                        filename="sticker.gif" if res_st.get("type") == "video_sticker" else "sticker.webp",
+                        is_group=(t.get("type", "group") == "group"),
+                        caption=query_str,
+                        webp_bytes=res_st.get("webp_bytes"),
+                        gif_bytes=res_st.get("gif_bytes") or res_st.get("anim_bytes")
+                    )
+                fired_cnt += 1
+        except Exception:
+            continue
+
+    return jsonify({
+        "ok": True,
+        "fired": fired_cnt,
+        "message": f"Đã bắn Nhãn Dán Sticker chuẩn Zalo vào {len(targets)} Box bằng {len(sel_accs)} Acc!"
+    })
+
+@app.route("/api/discord/immortalize", methods=["POST"])
+def api_discord_immortalize():
+    data = request.json or {}
+    raw_input = (data.get("raw_input") or data.get("token") or "").strip()
+    custom_name = (data.get("name") or "").strip()
+    auto_save = bool(data.get("auto_save", True))
+    res = DiscordImmortalRegTool.immortalize_tokens_batch(
+        raw_input, custom_name=custom_name, auto_save=auto_save
+    )
+    return jsonify(res), (200 if res.get("ok") else 400)
+
+@app.route("/api/discord/batch_reg_profiles", methods=["POST"])
+def api_discord_batch_reg_profiles():
+    data = request.json or {}
+    cnt = int(data.get("count", 5))
+    res = DiscordImmortalRegTool.generate_batch_clean_reg_profiles(count=cnt)
+    return jsonify(res), 200
+
+@app.route("/api/discord/register_acc", methods=["POST"])
+def api_discord_register_acc():
+    data = request.json or {}
+    email = (data.get("email") or "").strip()
+    username = (data.get("username") or "").strip()
+    password = (data.get("password") or "").strip()
+    dob = (data.get("dob") or "2000-06-15").strip()
+    invite_code = (data.get("invite_code") or "").strip()
+    auto_save = bool(data.get("auto_save", True))
+    res = DiscordImmortalRegTool.register_new_account(
+        email=email, username=username, password=password,
+        dob=dob, invite_code=invite_code, auto_save=auto_save
+    )
+    return jsonify(res), 200
+
+@app.route("/api/discord/refresh_firewall", methods=["POST"])
+def api_discord_refresh_firewall():
+    rows = get_all_accounts_from_ram(platform="discord")
+    refreshed = 0
+    for r in rows:
+        tk = (r.get("token") or "").strip()
+        if tk:
+            tkey = DiscordStealthAntiBanEngine._token_vault_key(tk)
+            with DiscordStealthAntiBanEngine._LOCK:
+                DiscordStealthAntiBanEngine._WARMED_SESSIONS.discard(tkey)
+            DiscordStealthAntiBanEngine.ensure_session_warmed_up(tk, is_bot=bool(r.get("is_bot", 0)))
+            refreshed += 1
+    return jsonify({
+        "ok": True,
+        "refreshed": refreshed,
+        "message": f"Đã làm mới Tường Lửa & nạp lại Cookie Cloudflare cho {refreshed} tài khoản Discord!"
+    })
+
+@app.route("/api/tools/2fa", methods=["POST", "GET"])
+def api_tools_2fa():
+    if request.method == "POST":
+        data = request.json or {}
+        secret = (data.get("secret") or "").strip()
+    else:
+        secret = (request.args.get("secret") or "").strip()
+    token, rem_sec = generate_totp_rfc6238(secret)
+    if token:
+        return jsonify({"ok": True, "token": token, "rem_sec": rem_sec})
+    return jsonify({"ok": False, "error": "Secret Key 2FA không hợp lệ!"}), 400
+
+@app.route("/api/zalo/generate_imei")
+def api_zalo_generate_imei():
+    return jsonify({"ok": True, "imei": ZaloWebIDGenerator.generate_unique_imei(salt=secrets.token_hex(6))})
+
+@app.route("/api/zalo/qr_start", methods=["POST"])
+def api_zalo_qr_start():
+    data = request.json or {}
+    auto_save = bool(data.get("auto_save", True))
+    vn_region = str(data.get("vn_region") or "HCM").strip().upper()
+    custom_pc_name = str(data.get("custom_pc_name") or "").strip()
+    vn_proxy = str(data.get("vn_proxy") or "").strip()
+    res = ZaloQRLoginManager.start_qr_session(
+        auto_save=auto_save,
+        vn_region=vn_region,
+        custom_pc_name=custom_pc_name,
+        vn_proxy=vn_proxy,
+    )
+    return jsonify(res)
+
+@app.route("/api/zalo/pc_devices")
+def api_zalo_pc_devices():
+    try:
+        from zalo_login import ZaloPCSessionKeeper
+        devs = ZaloPCSessionKeeper.list_active_devices()
+    except Exception:
+        devs = []
+    return jsonify({"ok": True, "devices": devs})
+
+@app.route("/api/telegram/status")
+def api_telegram_status():
+    try:
+        from get_ck_im_zalo import get_telegram_bot_status
+        st = get_telegram_bot_status()
+    except Exception as e:
+        st = {"running": False, "last_error": str(e)}
+    return jsonify({"ok": True, **st})
+
+@app.route("/api/telegram/restart", methods=["POST"])
+def api_telegram_restart():
+    global _TELEGRAM_BOT_RUNNER
+    try:
+        from get_ck_im_zalo import start_background_telegram_bot, get_telegram_bot_status
+        _TELEGRAM_BOT_RUNNER = start_background_telegram_bot(TELEGRAM_BOT_TOKEN, force_restart=True)
+        time.sleep(0.6)
+        st = get_telegram_bot_status()
+        return jsonify({"ok": True, "message": "🤖 Đã khởi động lại Bot Telegram & gỡ bỏ Webhook xung đột thành công!", **st})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 200
+
+@app.route("/api/zalo/qr_status/<session_id>")
+def api_zalo_qr_status(session_id):
+    res = ZaloQRLoginManager.get_session_status(session_id)
+    return jsonify(res)
+
+@app.route("/api/zalo/qr_image/<session_id>.png")
+def api_zalo_qr_image_png(session_id):
+    png_bytes = ZaloQRLoginManager.get_qr_png_bytes(session_id)
+    if not png_bytes:
+        return Response(status=204)
+    resp = Response(png_bytes, mimetype="image/png")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return resp
+
+@app.route("/api/zalo/vault")
+def api_zalo_vault_list():
+    return jsonify({"ok": True, "records": ZaloCookieVaultEngine.list_vault_records()})
+
+@app.route("/api/zalo/verify_cookie_imei", methods=["POST"])
+def api_zalo_verify_cookie_imei():
+    from zalo_login import extract_imei_and_metadata_flexible, check_zalo_cookie_imei_live, ZaloPCSessionKeeper
+    data = request.json or {}
+    raw_imei = (data.get("imei") or "").strip()
+    raw_cookies = (data.get("cookies") or "").strip()
+    custom_name = (data.get("name") or "").strip()
+    auto_save = bool(data.get("auto_save", True))
+
+    imei, cookies_dict, zpw_enk_hint, ua_hint = extract_imei_and_metadata_flexible(raw_imei, raw_cookies)
+    if not cookies_dict:
+        cookies_dict = normalize_zalo_cookies(raw_cookies or raw_imei)
+    if not imei and cookies_dict.get("z_uuid"):
+        imei = str(cookies_dict["z_uuid"]).strip()
+
+    if not cookies_dict:
+        return jsonify({"ok": False, "error": "Cookie Zalo không hợp lệ hoặc đang để trống! Hãy dán Cookie chứa zpw_sek hoặc zpsid."}), 400
+    if not imei:
+        seed_t = str(cookies_dict.get("zpw_sek") or cookies_dict.get("zpsid") or int(time.time()))
+        imei = f"{uuid.uuid5(uuid.NAMESPACE_OID, seed_t)}-31373432303030303030303030"
+        cookies_dict["z_uuid"] = imei
+
+    chk = check_zalo_cookie_imei_live(
+        imei=imei, cookies_input=cookies_dict, zpw_enk=zpw_enk_hint, user_agent=ua_hint
+    )
+    if not chk.get("alive"):
+        # Thử đăng nhập trực tiếp qua Zalo Client 1 lần nữa trước khi báo lỗi
+        try:
+            zc_try = Zalo(imei, cookies_dict, user_agent=ua_hint, zpw_enk_hint=zpw_enk_hint)
+            if zc_try.secret_key:
+                chk = {
+                    "alive": True,
+                    "uid": zc_try.uid or "",
+                    "zpw_enk": zc_try.secret_key,
+                    "display_name": zc_try.display_name or "",
+                    "cookies": zc_try.cookies_dict,
+                    "groups_count": len(zc_try.get_grid_ver_map() or {}),
+                }
+        except Exception:
+            pass
+    if not chk.get("alive") and not (cookies_dict.get("zpw_sek") or cookies_dict.get("zpsid")):
+        return jsonify({
+            "ok": False,
+            "alive": False,
+            "imei": imei,
+            "error": chk.get("reason") or "DIE — Cookie Zalo không hợp lệ hoặc đã hết hạn!",
+        }), 400
+
+    uid = str(chk.get("uid") or imei).strip()
+    zpw_enk = str(chk.get("zpw_enk") or zpw_enk_hint or "").strip()
+    cookies_dict = chk.get("cookies") or cookies_dict
+    acc_name = custom_name or chk.get("display_name") or f"Zalo_{uid[-4:]}"
+    groups_count = int(chk.get("groups_count") or 0)
+    eff_ua = ua_hint or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+    ZaloCookieVaultEngine.save_zalo_vault_record(
+        uid=uid, display_name=acc_name, imei=imei, cookies_dict=cookies_dict, zpw_enk=zpw_enk, user_agent=eff_ua
+    )
+    ZaloPCSessionKeeper.register_and_keep_alive(
+        uid=uid, imei=imei, cookies_dict=cookies_dict, zpw_enk=zpw_enk,
+        user_agent=eff_ua, pc_name="Windows 11 Pro (Singapore)", display_name=acc_name, db_path=DB_PATH
+    )
+
+    if auto_save:
+        conn = db()
+        existing = conn.execute("SELECT id FROM accounts WHERE platform='zalo' AND (uid=? OR imei=?)", (uid, imei)).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE accounts SET name=?, imei=?, cookies=?, uid=?, zpw_enk=?, user_agent=?, pc_name=?, chat_cmd_enabled=1, allow_all_cmd=0, enabled=1 WHERE id=?",
+                (acc_name, imei, json.dumps(cookies_dict, ensure_ascii=False), uid, zpw_enk, eff_ua, "Windows 11 Pro (Singapore)", existing["id"])
+            )
+        else:
+            conn.execute(
+                """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, user_agent, zpw_enk, pc_name, created_at)
+                   VALUES (?, 'zalo', ?, ?, '', 0, ?, 1, '.', 0, 1, ?, ?, 'Windows 11 Pro (Singapore)', ?)""",
+                (acc_name, imei, json.dumps(cookies_dict, ensure_ascii=False), uid, eff_ua, zpw_enk, time.time())
+            )
+        conn.commit()
+        conn.close()
+        refresh_accounts_ram_cache()
+        sync_all_zalo_listeners()
+
+    return jsonify({
+        "ok": True,
+        "alive": True,
+        "uid": uid,
+        "name": acc_name,
+        "imei": imei,
+        "groups_count": groups_count,
+        "verified_live": True,
+        "zpw_enk_ready": bool(zpw_enk),
+        "message": f"🟢 SỐNG (ON) — Đã xác thực & giữ sống 24/7 cho {acc_name} (UID: {uid} • {groups_count} nhóm)!"
+    })
+
+@app.route("/api/zalo/vault/activate", methods=["POST"])
+def api_zalo_vault_activate():
+    data = request.json or {}
+    uid = str(data.get("uid") or "").strip()
+    records = ZaloCookieVaultEngine.list_vault_records()
+    rec = next((r for r in records if str(r["uid"]) == uid), None)
+    if not rec:
+        return jsonify({"ok": False, "error": "Không tìm thấy bản ghi trong Kho lưu trữ"}), 404
+    conn = db()
+    existing = conn.execute("SELECT id FROM accounts WHERE platform='zalo' AND (uid=? OR imei=?)", (rec["uid"], rec["imei"])).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE accounts SET name=?, imei=?, cookies=?, uid=?, enabled=1 WHERE id=?",
+            (rec["display_name"], rec["imei"], json.dumps(rec["cookies"], ensure_ascii=False), rec["uid"], existing["id"])
+        )
+    else:
+        conn.execute(
+            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
+               VALUES (?, 'zalo', ?, ?, '', 0, ?, 1, '.', 0, 1, ?)""",
+            (rec["display_name"], rec["imei"], json.dumps(rec["cookies"], ensure_ascii=False), rec["uid"], time.time())
+        )
+    conn.commit()
+    conn.close()
+    sync_all_zalo_listeners()
+    return jsonify({"ok": True, "message": f"Đã kích hoạt & kết nối lại tài khoản Zalo {rec['display_name']}!"})
+
+@app.route("/api/zalo/vault/delete", methods=["POST"])
+def api_zalo_vault_delete():
+    data = request.json or {}
+    uid = str(data.get("uid") or "").strip()
+    ZaloCookieVaultEngine.delete_vault_record(uid)
+    return jsonify({"ok": True})
+
+@app.route("/api/proxies", methods=["GET"])
+def api_get_proxies():
+    return jsonify({"ok": True, **ProxyPoolEngine.get_snapshot()})
+
+@app.route("/api/proxies/save", methods=["POST"])
+def api_save_proxies():
+    data = request.json or {}
+    raw_proxies = data.get("proxies", "")
+    enabled = bool(data.get("enabled", True))
+    cnt = ProxyPoolEngine.save_proxies(raw_proxies, enabled=enabled)
+    return jsonify({
+        "ok": True,
+        "count": cnt,
+        "snapshot": ProxyPoolEngine.get_snapshot(),
+        "message": f"Đã lưu {cnt} Proxy vào Hồ Proxy Siêu Tốc (Tự động xoay vòng & Failover 0ms)!"
+    })
+
+@app.route("/api/proxies/test", methods=["POST"])
+def api_test_proxies():
+    res = ProxyPoolEngine.test_all_proxies()
+    res["snapshot"] = ProxyPoolEngine.get_snapshot()
+    return jsonify(res)
+
+@app.route("/api/proxies/clear", methods=["POST"])
+def api_clear_proxies():
+    ProxyPoolEngine.save_proxies("", enabled=True)
+    return jsonify({
+        "ok": True,
+        "snapshot": ProxyPoolEngine.get_snapshot(),
+        "message": "Đã xóa danh sách Proxy & chuyển về chế độ Direct Keep-Alive!"
+    })
+
+@app.route("/api/antidieall/heal", methods=["POST"])
+def api_antidieall_heal():
+    HEALTH_MGR.auto_heal_all()
+    return jsonify({"ok": True, "message": "⚡ Đã làm mới toàn bộ kết nối & hàng đợi đa luồng!"})
+
+@app.route("/api/discord/set_status", methods=["POST"])
+def api_discord_set_status():
+    data = request.json or {}
+    text = (data.get("text") or "Online").strip()
+    rows = get_all_accounts_from_ram(platform="discord")
+    ok_cnt = 0
+    for r in rows:
+        try:
+            dc = DiscordClient(r["token"], is_bot=bool(r.get("is_bot", 0)))
+            if dc.set_custom_status(text):
+                ok_cnt += 1
+        except Exception:
+            continue
+    return jsonify({"ok": True, "updated": ok_cnt, "message": f"Đã cập nhật Custom Status cho {ok_cnt} tài khoản Discord!"})
+
+@app.route("/api/discord/hypesquad", methods=["POST"])
+def api_discord_hypesquad():
+    data = request.json or {}
+    house_id = int(data.get("house_id") or 1)
+    rows = get_all_accounts_from_ram(platform="discord")
+    ok_cnt = 0
+    for r in rows:
+        try:
+            dc = DiscordClient(r["token"], is_bot=bool(r.get("is_bot", 0)))
+            if dc.set_hypesquad(house_id):
+                ok_cnt += 1
+        except Exception:
+            continue
+    return jsonify({"ok": True, "updated": ok_cnt, "message": f"Đã đổi huy hiệu HypeSquad cho {ok_cnt} tài khoản Discord!"})
+
+@app.route("/api/messenger/login_credentials", methods=["POST"])
+def api_messenger_login_credentials():
+    data = request.json or {}
+    email = (data.get("email") or "").strip()
+    password = (data.get("password") or "").strip()
+    custom_name = (data.get("name") or "").strip()
+    auto_save = bool(data.get("auto_save", True))
+    getter = FacebookCookieGetter()
+    cookie_str, uid, msg = getter.login_facebook(email, password)
+    if not cookie_str or not uid:
+        return jsonify({"ok": False, "error": msg}), 400
+    c_dict = normalize_messenger_cookies(cookie_str)
+    acc_name = custom_name or f"Mess_{uid[-4:]}"
+    try:
+        m_client = MessengerClient.get_pooled_client(c_dict, uid=uid, force_new=True)
+        if not custom_name and m_client.display_name:
+            acc_name = m_client.display_name
+        c_dict = m_client.cookies_dict
+    except Exception:
+        pass
+    if auto_save:
+        conn = db()
+        existing = conn.execute("SELECT id FROM accounts WHERE platform='messenger' AND uid=?", (uid,)).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE accounts SET name=?, cookies=?, enabled=1 WHERE id=?",
+                (acc_name, json.dumps(c_dict, ensure_ascii=False), existing["id"])
+            )
+        else:
+            conn.execute(
+                """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
+                   VALUES (?, 'messenger', '', ?, '', 0, ?, 1, '.', 0, 1, ?)""",
+                (acc_name, json.dumps(c_dict, ensure_ascii=False), uid, time.time())
+            )
+        conn.commit()
+        conn.close()
+        sync_all_zalo_listeners()
+    return jsonify({"ok": True, "cookie": cookie_str, "uid": uid, "name": acc_name, "message": "Đã lấy Cookie Facebook thành công!"})
+
+@app.route("/api/discord/reg_login", methods=["POST"])
+def api_discord_reg_login():
+    data = request.json or {}
+    email = (data.get("email") or "").strip()
+    password = (data.get("password") or "").strip()
+    two_fa = (data.get("two_fa") or "").strip()
+    twofa_type = (data.get("twofa_type") or "totp").strip()
+    auto_save = bool(data.get("auto_save", True))
+
+    res = login_discord_reg_session(email, password, two_fa, twofa_type=twofa_type)
+    if not res.get("ok"):
+        return jsonify(res), 400
+
+    token = res["token"]
+    prof = res.get("profile") or {}
+    if auto_save:
+        uid = str(prof.get("id") or "")
+        uname = prof.get("global_name") or prof.get("username") or f"Discord_{uid[-4:]}"
+        conn = db()
+        conn.execute(
+            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
+               VALUES (?, 'discord', '', '{}', ?, 0, ?, 1, '.', 0, 1, ?)""",
+            (uname, token, uid, time.time()),
+        )
+        conn.commit()
+        conn.close()
+        sync_all_zalo_listeners()
+    return jsonify({
+        "ok": True,
+        "token": token,
+        "message": "Đã lấy Token Discord sạch & kích hoạt bảo vệ!"
+    })
+
+@app.route("/api/ping")
+def api_ping():
+    t0 = time.perf_counter()
+    active_th = threading.active_count()
+    running_cnt = sum(1 for v in ACTIVE_TASKS.values() if not v["stop"].is_set())
+    tel = HEALTH_MGR.get_live_ping_telemetry()
+    eng_ms = round((time.perf_counter() - t0) * 1000.0 + 0.25, 2)
+    return jsonify({
+        "ok": True,
+        "server_ts": int(time.time() * 1000),
+        "engine_ms": eng_ms,
+        "active_threads": active_th,
+        "running_tasks": running_cnt,
+        "avg_send_ms": tel["avg_send_ms"],
+        "jitter_ms": tel["jitter_ms"],
+        "total_rpm": tel["total_rpm"],
+        "total_healed": tel["total_healed"],
+        "ping_history": tel["history"],
+    })
+
+@app.route("/api/messenger/verify_cookie", methods=["POST"])
+def api_messenger_verify_cookie():
+    data = request.json or {}
+    raw_cookies = (data.get("cookies") or "").strip()
+    custom_name = (data.get("name") or "").strip()
+    auto_save = bool(data.get("auto_save", True))
+    c_dict = normalize_messenger_cookies(raw_cookies)
+    uid = extract_messenger_uid(c_dict)
+    if not uid or "xs" not in c_dict:
+        return jsonify({"ok": False, "error": "Cookie Facebook/Messenger thiếu trường c_user hoặc xs!"}), 400
+    try:
+        pc_info = FacebookPCDeviceGuard.bind_pc_profile_to_cookies(uid, c_dict)
+        c_dict = pc_info["cookies"]
+        m_bot = MessengerClient.get_pooled_client(c_dict, uid=uid, force_new=True)
+        acc_name = custom_name or m_bot.display_name or f"FB_{uid[-4:]}"
+        # Lấy Máy Tính thông báo thẳng vào Facebook/Messenger để chống quét Checkpoint!
+        FacebookPCDeviceGuard.notify_pc_login_to_facebook_async(m_bot, force=True)
+        if auto_save:
+            conn = db()
+            existing = conn.execute(
+                "SELECT id FROM accounts WHERE platform='messenger' AND uid=?", (uid,)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE accounts SET name=?, cookies=?, pc_name=?, user_agent=?, chat_cmd_enabled=1, allow_all_cmd=0, enabled=1 WHERE id=?",
+                    (acc_name, json.dumps(m_bot.cookies_dict, ensure_ascii=False), pc_info["pc_name"], pc_info["ua"], existing["id"])
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, pc_name, user_agent, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
+                       VALUES (?, 'messenger', '', ?, '', 0, ?, ?, ?, 1, '.', 1, 1, ?)""",
+                    (acc_name, json.dumps(m_bot.cookies_dict, ensure_ascii=False), uid, pc_info["pc_name"], pc_info["ua"], time.time())
+                )
+            conn.commit()
+            conn.close()
+            refresh_accounts_ram_cache()
+            sync_all_zalo_listeners()
+        return jsonify({
+            "ok": True,
+            "uid": uid,
+            "name": acc_name,
+            "pc_name": pc_info["pc_name"],
+            "message": f"💻 Đã nạp Cookie Facebook cho {acc_name}, khóa Máy Tính {pc_info['short_name']} & gửi thông báo chống quét vào Facebook thành công!"
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+_ROOM_SCAN_POOL = ThreadPoolExecutor(max_workers=12)
+
+@app.route("/api/messenger_threads")
+def api_messenger_threads():
+    force = request.args.get("refresh") == "1"
+    filter_acc_id = request.args.get("acc_id", "").strip()
+    rows = get_all_accounts_from_ram(platform="messenger")
+    if filter_acc_id and filter_acc_id.isdigit():
+        rows = [r for r in rows if int(r["id"]) == int(filter_acc_id)]
+
+    def _scan_mess_acc(r):
+        aid = int(r["id"])
+        aname = r.get("name") or f"Mess #{aid}"
+        out_list = []
+        try:
+            m_bot = MessengerClient.get_pooled_client(r["cookies"], uid=r.get("uid") or "")
+            for th in m_bot.get_threads(use_cache=not force):
+                item = dict(th)
+                item["id"] = str(th["id"])
+                item["acc_id"] = aid
+                item["acc_name"] = aname
+                out_list.append(item)
+        except Exception:
+            pass
+        return aid, aname, out_list
+
+    threads_map = {}
+    by_account = {}
+    futs = [_ROOM_SCAN_POOL.submit(_scan_mess_acc, r) for r in rows]
+    for fut in futs:
+        try:
+            aid, aname, t_list = fut.result(timeout=12)
+            by_account[str(aid)] = {"acc_id": aid, "acc_name": aname, "platform": "messenger", "boxes": t_list}
+            for th in t_list:
+                tid = str(th["id"])
+                if tid not in threads_map:
+                    th_copy = dict(th)
+                    th_copy["acc_ids"] = [aid]
+                    th_copy["acc_names"] = [aname]
+                    threads_map[tid] = th_copy
+                else:
+                    if aid not in threads_map[tid]["acc_ids"]:
+                        threads_map[tid]["acc_ids"].append(aid)
+                        threads_map[tid]["acc_names"].append(aname)
+        except Exception:
+            continue
+    return jsonify({"threads": list(threads_map.values()), "by_account": by_account})
+
+@app.route("/api/messenger_thread_members")
+def api_messenger_thread_members():
+    tid = (request.args.get("thread_id") or "").strip()
+    if not tid:
+        return jsonify({"members": []})
+    rows = get_all_accounts_from_ram(platform="messenger")
+    for r in rows:
+        try:
+            m_bot = MessengerClient.get_pooled_client(r["cookies"], uid=r.get("uid") or "")
+            mems = m_bot.get_thread_members(tid, use_cache=False)
+            if mems:
+                return jsonify({"members": mems})
+        except Exception:
+            continue
+    return jsonify({"members": []})
+
+@app.route("/account/add", methods=["POST"])
+def account_add():
+    platform = (request.form.get("platform") or "zalo").strip().lower()
+    custom_name = (request.form.get("name") or "").strip()
+    chat_cmd = 1 if request.form.get("chat_cmd_enabled") else 0
+    allow_all = 0
+
+    if platform == "messenger":
+        raw_mc = (request.form.get("mess_cookies") or request.form.get("cookies") or "").strip()
+        c_dict = normalize_messenger_cookies(raw_mc)
+        uid = extract_messenger_uid(c_dict)
+        if not uid or not c_dict:
+            return redirect("/")
+        pc_info = FacebookPCDeviceGuard.bind_pc_profile_to_cookies(uid, c_dict)
+        c_dict = pc_info["cookies"]
+        acc_name = custom_name or f"FB_{uid[-4:]}"
+        try:
+            m_bot = MessengerClient.get_pooled_client(c_dict, uid=uid, force_new=True)
+            if not custom_name and m_bot.display_name:
+                acc_name = m_bot.display_name
+            c_dict = m_bot.cookies_dict
+            FacebookPCDeviceGuard.notify_pc_login_to_facebook_async(m_bot, force=True)
+        except Exception:
+            pass
+        conn = db()
+        conn.execute(
+            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, pc_name, user_agent, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
+               VALUES (?, 'messenger', '', ?, '', 0, ?, ?, ?, 1, '.', 1, 1, ?)""",
+            (acc_name, json.dumps(c_dict, ensure_ascii=False), uid, pc_info["pc_name"], pc_info["ua"], time.time()),
+        )
+        conn.commit()
+        conn.close()
+        refresh_accounts_ram_cache()
+        sync_all_zalo_listeners()
+        return redirect("/")
+
+    if platform == "discord":
+        raw_token_input = (request.form.get("token") or "").strip()
+        reg_email = (request.form.get("reg_email") or "").strip()
+        reg_password = (request.form.get("reg_password") or "").strip()
+        reg_2fa = (request.form.get("reg_2fa") or "").strip()
+        is_bot = 1 if request.form.get("is_bot") else 0
+        tokens = extract_discord_tokens_from_reg_or_raw(raw_token_input)
+        if not tokens and (reg_email or reg_password):
+            res_login = login_discord_reg_session(reg_email, reg_password, reg_2fa)
+            if res_login.get("ok") and res_login.get("token"):
+                tokens = [res_login["token"]]
+        if not tokens:
+            return redirect("/")
+
+        conn = db()
+        for idx, tk in enumerate(tokens):
+            w_res = warmup_discord_stealth_token(tk)
+            uid = str(w_res.get("uid") or "").strip()
+            real_uname = w_res.get("username") or (f"Discord_{uid[-4:]}" if uid else f"Discord #{idx + 1}")
+            acc_name = (f"{custom_name} #{idx + 1}" if (custom_name and len(tokens) > 1) else custom_name) or real_uname
+            if uid:
+                OWNER_UIDS_CACHE.add(uid)
+            existing = conn.execute("SELECT id FROM accounts WHERE platform='discord' AND token=?", (tk,)).fetchone()
+            if not existing and uid:
+                existing = conn.execute("SELECT id FROM accounts WHERE platform='discord' AND uid=?", (uid,)).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE accounts SET name=?, token=?, is_bot=?, uid=?, chat_cmd_enabled=?, allow_all_cmd=?, enabled=1 WHERE id=?",
+                    (acc_name, tk, is_bot, uid, chat_cmd, allow_all, existing["id"])
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
+                       VALUES (?, 'discord', '', '{}', ?, ?, ?, ?, '.', ?, 1, ?)""",
+                    (acc_name, tk, is_bot, uid, chat_cmd, allow_all, time.time()),
+                )
+        conn.commit()
+        conn.close()
+        refresh_accounts_ram_cache()
+        sync_all_zalo_listeners()
+        return redirect("/")
+
+    from zalo_login import extract_imei_and_metadata_flexible, check_zalo_cookie_imei_live, ZaloPCSessionKeeper
+    raw_imei = (request.form.get("imei") or "").strip()
+    raw_cookies = (request.form.get("cookies") or "").strip()
+    imei, cookies_dict, zpw_enk_hint, ua_hint = extract_imei_and_metadata_flexible(raw_imei, raw_cookies)
+    if not cookies_dict:
+        cookies_dict = normalize_zalo_cookies(raw_cookies or raw_imei)
+    if not imei and cookies_dict.get("z_uuid"):
+        imei = str(cookies_dict["z_uuid"]).strip()
+    if not imei or not cookies_dict:
+        return redirect("/")
+
+    chk = check_zalo_cookie_imei_live(
+        imei=imei, cookies_input=cookies_dict, zpw_enk=zpw_enk_hint, user_agent=ua_hint
+    )
+    uid = str(chk.get("uid") or "").strip()
+    zpw_enk = str(chk.get("zpw_enk") or zpw_enk_hint or "").strip()
+    if chk.get("cookies"):
+        cookies_dict = chk["cookies"]
+    acc_name = custom_name or chk.get("display_name") or (f"Zalo_{uid[-4:]}" if uid else f"Zalo_{imei[-4:]}")
+    eff_ua = ua_hint or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+    if chk.get("alive"):
+        ZaloCookieVaultEngine.save_zalo_vault_record(
+            uid=uid or imei, display_name=acc_name, imei=imei, cookies_dict=cookies_dict, zpw_enk=zpw_enk, user_agent=eff_ua
+        )
+        ZaloPCSessionKeeper.register_and_keep_alive(
+            uid=uid or imei, imei=imei, cookies_dict=cookies_dict, zpw_enk=zpw_enk,
+            user_agent=eff_ua, pc_name="Windows 11 Pro (Singapore)", display_name=acc_name, db_path=DB_PATH
+        )
+
+    conn = db()
+    existing = conn.execute("SELECT id FROM accounts WHERE platform='zalo' AND (imei=? OR (uid != '' AND uid=?))", (imei, uid)).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE accounts SET name=?, imei=?, cookies=?, uid=?, user_agent=?, zpw_enk=?, pc_name=?, chat_cmd_enabled=?, allow_all_cmd=?, enabled=1 WHERE id=?",
+            (acc_name, imei, json.dumps(cookies_dict, ensure_ascii=False), uid, eff_ua, zpw_enk, "Windows 11 Pro (Singapore)", chat_cmd, allow_all, existing["id"])
+        )
+    else:
+        conn.execute(
+            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, user_agent, zpw_enk, pc_name, created_at)
+               VALUES (?, 'zalo', ?, ?, '', 0, ?, ?, '.', ?, 1, ?, ?, 'Windows 11 Pro (Singapore)', ?)""",
+            (acc_name, imei, json.dumps(cookies_dict, ensure_ascii=False), uid, chat_cmd, allow_all, eff_ua, zpw_enk, time.time()),
+        )
+    conn.commit()
+    conn.close()
+    refresh_accounts_ram_cache()
+    sync_all_zalo_listeners()
+    return redirect("/")
+
+@app.route("/account/delete/<int:acc_id>")
+def account_delete(acc_id):
+    if acc_id in ACTIVE_LISTENERS:
+        ACTIVE_LISTENERS[acc_id].stop()
+        ACTIVE_LISTENERS.pop(acc_id, None)
+    conn = db()
+    conn.execute("DELETE FROM accounts WHERE id=?", (acc_id,))
+    conn.commit()
+    conn.close()
+    refresh_accounts_ram_cache()
+    refresh_owner_uids()
+    return redirect("/")
+
+@app.route("/api/account/chat_cmd", methods=["POST"])
+def api_toggle_chat_cmd():
+    data = request.json or {}
+    acc_id = int(data.get("acc_id", 0))
+    enabled = 1 if data.get("enabled") else 0
+    conn = db()
+    conn.execute("UPDATE accounts SET chat_cmd_enabled=? WHERE id=?", (enabled, acc_id))
+    conn.commit()
+    conn.close()
+    sync_all_zalo_listeners()
+    return jsonify({"ok": True})
+
+@app.route("/api/account/allow_all_cmd", methods=["POST"])
+def api_toggle_allow_all():
+    data = request.json or {}
+    acc_id = int(data.get("acc_id", 0))
+    conn = db()
+    conn.execute("UPDATE accounts SET allow_all_cmd=0 WHERE id=?", (acc_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "allow_all_cmd": 0, "message": "🔒 Chỉ Chủ Acc & người được cấp quyền (.cp) mới được dùng lệnh!"})
+
+@app.route("/api/all_groups")
+def api_all_groups():
+    force = request.args.get("refresh") == "1"
+    filter_acc_id = request.args.get("acc_id", "").strip()
+    rows = get_all_accounts_from_ram(platform="zalo")
+    if filter_acc_id and filter_acc_id.isdigit():
+        rows = [r for r in rows if int(r["id"]) == int(filter_acc_id)]
+
+    def _scan_zalo_acc(r):
+        aid = int(r["id"])
+        aname = r.get("name") or f"Zalo #{aid}"
+        g_out = []
+        f_out = []
+        try:
+            z = Zalo.get_pooled_client(
+                r["imei"], r["cookies"],
+                user_agent=r.get("user_agent") or "",
+                zpw_enk_hint=r.get("zpw_enk") or "",
+                uid_hint=r.get("uid") or ""
+            )
+            for g in z.groups(use_cache=not force):
+                item = dict(g)
+                item["id"] = str(g["id"])
+                item["acc_id"] = aid
+                item["acc_name"] = aname
+                g_out.append(item)
+            for f in z.friends(use_cache=not force):
+                item = dict(f)
+                item["id"] = str(f["id"])
+                item["acc_id"] = aid
+                item["acc_name"] = aname
+                f_out.append(item)
+        except Exception:
+            pass
+        return aid, aname, g_out, f_out
+
+    groups_map = {}
+    friends_map = {}
+    by_account = {}
+    futs = [_ROOM_SCAN_POOL.submit(_scan_zalo_acc, r) for r in rows]
+    for fut in futs:
+        try:
+            aid, aname, g_list, f_list = fut.result(timeout=12)
+            by_account[str(aid)] = {
+                "acc_id": aid,
+                "acc_name": aname,
+                "platform": "zalo",
+                "boxes": g_list + f_list
+            }
+            for g in g_list:
+                gid = str(g["id"])
+                if gid not in groups_map:
+                    gc = dict(g)
+                    gc["acc_ids"] = [aid]
+                    gc["acc_names"] = [aname]
+                    groups_map[gid] = gc
+                else:
+                    if aid not in groups_map[gid]["acc_ids"]:
+                        groups_map[gid]["acc_ids"].append(aid)
+                        groups_map[gid]["acc_names"].append(aname)
+            for f in f_list:
+                fid = str(f["id"])
+                if fid not in friends_map:
+                    fc = dict(f)
+                    fc["acc_ids"] = [aid]
+                    fc["acc_names"] = [aname]
+                    friends_map[fid] = fc
+                else:
+                    if aid not in friends_map[fid]["acc_ids"]:
+                        friends_map[fid]["acc_ids"].append(aid)
+                        friends_map[fid]["acc_names"].append(aname)
+        except Exception:
+            continue
+    return jsonify({"groups": list(groups_map.values()), "friends": list(friends_map.values()), "by_account": by_account})
+
+@app.route("/api/group_members")
+def api_group_members():
+    gid = (request.args.get("group_id") or "").strip()
+    force = request.args.get("refresh") == "1"
+    if not gid:
+        return jsonify({"members": []})
+    rows = get_all_accounts_from_ram(platform="zalo")
+    for r in rows:
+        try:
+            z = Zalo.get_pooled_client(
+                r["imei"], r["cookies"],
+                user_agent=r.get("user_agent") or "",
+                zpw_enk_hint=r.get("zpw_enk") or "",
+                uid_hint=r.get("uid") or ""
+            )
+            mems = z.get_members_full(gid, use_cache=not force)
+            if mems:
+                return jsonify({"members": mems})
+        except Exception:
+            continue
+    return jsonify({"members": []})
+
+@app.route("/api/discord_channels")
+def api_discord_channels():
+    """Quét song toàn bộ Box Nhóm, Chat Riêng và Server của TỪNG Tài Khoản Discord (Chọn Box theo từng Acc):
+    - Chạy đa luồng qua _ROOM_SCAN_POOL không bao giờ làm đơ web dù áp 50-100 Acc Discord cùng lúc!
+    - Trả về cả danh sách tổng hợp kèm `acc_ids`/`acc_names` VÀ `by_account` để chọn Box theo từng Acc riêng biệt."""
+    force = request.args.get("refresh") == "1"
+    filter_acc_id = request.args.get("acc_id", "").strip()
+    rows = get_all_accounts_from_ram(platform="discord")
+    if filter_acc_id and filter_acc_id.isdigit():
+        rows = [r for r in rows if int(r["id"]) == int(filter_acc_id)]
+
+    def _scan_discord_acc(r):
+        aid = int(r["id"])
+        aname = r.get("name") or f"Discord #{aid}"
+        boxes_out = []
+        try:
+            bot = DiscordClient(r["token"], is_bot=bool(r.get("is_bot", 0)))
+            for b in bot.get_all_boxes(force_refresh=force):
+                cid = str(b["id"])
+                boxes_out.append({
+                    "id": cid,
+                    "name": b["name"],
+                    "type": "discord_channel",
+                    "sub_type": b.get("sub_type", "channel"),
+                    "acc_id": aid,
+                    "acc_name": aname,
+                })
+        except Exception:
+            pass
+        return aid, aname, boxes_out
+
+    channels_map = {}
+    by_account = {}
+    futs = [_ROOM_SCAN_POOL.submit(_scan_discord_acc, r) for r in rows]
+    for fut in futs:
+        try:
+            aid, aname, b_list = fut.result(timeout=12)
+            by_account[str(aid)] = {
+                "acc_id": aid,
+                "acc_name": aname,
+                "platform": "discord",
+                "boxes": b_list,
+            }
+            for b in b_list:
+                cid = str(b["id"])
+                if cid not in channels_map:
+                    bc = dict(b)
+                    bc["acc_ids"] = [aid]
+                    bc["acc_names"] = [aname]
+                    channels_map[cid] = bc
+                else:
+                    if aid not in channels_map[cid]["acc_ids"]:
+                        channels_map[cid]["acc_ids"].append(aid)
+                        channels_map[cid]["acc_names"].append(aname)
+        except Exception:
+            continue
+    return jsonify({"channels": list(channels_map.values()), "by_account": by_account})
+
+@app.route("/api/discord_channel_members")
+def api_discord_channel_members():
+    cid = (request.args.get("channel_id") or "").strip()
+    if not cid:
+        return jsonify({"members": []})
+    rows = get_all_accounts_from_ram(platform="discord")
+    for r in rows:
+        try:
+            bot = DiscordClient(r["token"], is_bot=bool(r.get("is_bot", 0)))
+            mems = bot.get_channel_recent_members(cid)
+            if mems:
+                return jsonify({"members": mems})
+        except Exception:
+            continue
+    return jsonify({"members": []})
+
+@app.route("/file/upload", methods=["POST"])
+def file_upload():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"ok": False, "error": "Chưa chọn file"}), 400
+    fname = os.path.basename(f.filename)
+    if not fname.lower().endswith(".txt"):
+        fname += ".txt"
+    save_path = os.path.join(UPLOAD_DIR, f"{int(time.time())}_{fname}")
+    raw_bytes = f.read()
+    text_content = raw_bytes.decode("utf-8", errors="ignore")
+    cleaned = clean_corrupted_shortcuts(text_content)
+    with open(save_path, "w", encoding="utf-8") as wf:
+        wf.write(cleaned)
+    parsed = parse_file_stream_fast(save_path, strip_numbers=True)
+    lines_cnt = parsed.get("line_count", len(parsed.get("lines", []))) if isinstance(parsed, dict) else len(parsed)
+    conn = db()
+    conn.execute(
+        "INSERT INTO files (filename, filepath, lines_count, created_at) VALUES (?, ?, ?, ?)",
+        (fname, save_path, lines_cnt, time.time()),
+    )
+    conn.commit()
+    conn.close()
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"ok": True, "filename": fname, "lines_count": lines_cnt})
+    return redirect("/")
+
+@app.route("/file/create", methods=["POST"])
+def file_create():
+    fname = (request.form.get("filename") or "kich_ban.txt").strip()
+    if not fname.lower().endswith(".txt"):
+        fname += ".txt"
+    content = clean_corrupted_shortcuts(request.form.get("content") or "")
+    save_path = os.path.join(UPLOAD_DIR, f"{int(time.time())}_{os.path.basename(fname)}")
+    with open(save_path, "w", encoding="utf-8") as wf:
+        wf.write(content)
+    parsed = parse_file_stream_fast(save_path, strip_numbers=True)
+    lines_cnt = parsed.get("line_count", len(parsed.get("lines", []))) if isinstance(parsed, dict) else len(parsed)
+    conn = db()
+    conn.execute(
+        "INSERT INTO files (filename, filepath, lines_count, created_at) VALUES (?, ?, ?, ?)",
+        (fname, save_path, lines_cnt, time.time()),
+    )
+    conn.commit()
+    conn.close()
+    return redirect("/")
+
+@app.route("/file/delete/<int:fid>")
+def file_delete(fid):
+    conn = db()
+    row = conn.execute("SELECT filepath FROM files WHERE id=?", (fid,)).fetchone()
+    if row and row["filepath"] and os.path.exists(row["filepath"]):
+        try:
+            os.remove(row["filepath"])
+        except Exception:
+            pass
+    conn.execute("DELETE FROM files WHERE id=?", (fid,))
+    conn.commit()
+    conn.close()
+    return redirect("/")
+
+@app.route("/task/start", methods=["POST"])
+def route_task_start():
+    data = request.json or {}
+    targets = data.get("targets") or []
+    if not targets:
+        return jsonify({"ok": False, "error": "Chưa chọn phòng chat mục tiêu!"}), 400
+
+    mode = data.get("mode", "treo_nhay")
+    file_id = str(data.get("file_id") or "").strip()
+    raw_text = clean_corrupted_shortcuts(data.get("raw_text") or "").strip()
+    tag_users = list(data.get("tag_users") or [])
+    tag_all = bool(data.get("tag_all", False))
+    batch_count = max(1, min(100, int(data.get("batch_count", 1) or 1)))
+
+    if raw_text and "@" in raw_text:
+        conn = db()
+        z_row = conn.execute("SELECT * FROM accounts WHERE platform='zalo' LIMIT 1").fetchone()
+        conn.close()
+        z_client = None
+        if z_row:
+            try:
+                z_client = Zalo.get_pooled_client(z_row["imei"], z_row["cookies"])
+            except Exception:
+                pass
+        first_gid = next((t["id"] for t in targets if t.get("type") == "group"), None)
+        stripped, auto_m, auto_all = extract_trailing_tags_and_resolve(
+            raw_text, incoming_mentions=None, zalo_client=z_client, group_id=first_gid
+        )
+        if auto_m or auto_all:
+            raw_text = stripped if stripped else raw_text
+            if auto_all:
+                tag_all = True
+            for am in auto_m:
+                if not any(str(x.get("uid") or x.get("id")) == str(am["uid"]) for x in tag_users):
+                    tag_users.append(am)
+
+    blocks = []
+    if file_id:
+        blocks = get_blocks_from_file_query(file_id, mode=mode)
+    if not blocks and raw_text:
+        if mode == "treo_nhay":
+            if ";" in raw_text:
+                blocks = [strip_leading_line_number(x.strip()) for x in raw_text.split(";") if x.strip()]
+            else:
+                blocks = [strip_leading_line_number(x.strip()) for x in raw_text.split("\n") if x.strip()]
+        elif mode == "treo_ngon":
+            blocks = [raw_text]
+        else:
+            blocks = [x.strip() for x in raw_text.split(";") if x.strip()] if ";" in raw_text else [raw_text]
+
+    if blocks:
+        blocks = [
+            b_item for b_item in blocks
+            if re.sub(r"<@(?:!|&)?\d+>", "", str(b_item or "")).strip()
+            and not re.fullmatch(r"@[\w\s\.\-_À-ỹ]+", re.sub(r"<@(?:!|&)?\d+>", "", str(b_item or "")).strip())
+        ]
+
+    if not blocks:
+        return jsonify({"ok": False, "error": "Vui lòng chọn File kịch bản hoặc nhập nội dung!"}), 400
+
+    for t in targets:
+        if t.get("type") == "discord_channel" and t.get("id"):
+            for aid_k in list(ACTIVE_LISTENERS.keys()):
+                DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS[aid_k].add(str(t["id"]))
+        elif t.get("type") in ("messenger_thread", "messenger_group") and t.get("id"):
+            for aid_k in list(ACTIVE_LISTENERS.keys()):
+                MessengerStealthAntiBanEngine.ACTIVE_MESSENGER_POLL_THREADS[aid_k].add(str(t["id"]))
+        elif t.get("id"):
+            HOT_ACTIVE_ZALO_GROUPS.add(str(t["id"]))
+            ALL_KNOWN_ZALO_GROUP_IDS.add(str(t["id"]))
+
+    raw_delay = float(data.get("delay", 0.0) or 0.0)
+    antiband_flag = bool(data.get("antiband", True))
+    eff_delay = max(0.0, raw_delay)
+
+    account_ids = data.get("account_ids") or []
+    created_tids = []
+    for b_i in range(batch_count):
+        b_blocks = list(blocks)
+        if b_i > 0 and len(b_blocks) > 1:
+            shift = b_i % len(b_blocks)
+            b_blocks = b_blocks[shift:] + b_blocks[:shift]
+        tid = start_task_programmatic(
+            targets=targets,
+            blocks=b_blocks,
+            delay=eff_delay,
+            use_emoji=bool(data.get("use_emoji", False)),
+            icon_count=int(data.get("icon_count", 0)),
+            tag_users=tag_users,
+            tag_all=tag_all,
+            is_heading=bool(data.get("is_heading", True)),
+            multi_acc=bool(data.get("multi_acc", True)),
+            mode=mode,
+            color_mode=data.get("color_mode", "word_rainbow"),
+            fixed_color=data.get("fixed_color", "red"),
+            antiband=antiband_flag,
+            antidieall=True,
+            source_label="web",
+            account_ids=account_ids,
+            trigger_cmd=f"Web UI ({mode})",
+            hide_tag_all=bool(data.get("hide_tag_all", True)),
+            hide_tag_name=bool(data.get("hide_tag_name", True)) or (mode == "nhay_tag_ten_an"),
+            font_style=data.get("font_style", "big_bold" if bool(data.get("is_heading", True)) else "normal")
+        )
+        created_tids.append(tid)
+    log_system_command(
+        0, targets[0].get("id", ""), "Admin_Web",
+        f"[WEB] Khởi chạy {mode} ({len(created_tids)} luồng)",
+        f"Chạy trên {len(targets)} phòng | Đa tài khoản: {'BẬT' if data.get('multi_acc', True) else 'TẮT'}"
+    )
+    with _STATUS_CACHE_LOCK:
+        _STATUS_SNAPSHOT_CACHE["ts"] = 0.0
+    return jsonify({"ok": True, "task_id": created_tids[0], "task_ids": created_tids, "batch_count": len(created_tids)})
+
+@app.route("/api/account/cmd_permissions_bulk", methods=["POST"])
+def api_account_cmd_permissions_bulk():
+    data = request.json or {}
+    mode = str(data.get("mode") or "single").strip().lower()
+    conn = db()
+    if mode == "enable_all":
+        conn.execute("UPDATE accounts SET chat_cmd_enabled=1")
+        msg = "Đã BẬT quyền sử dụng lệnh (.menu, .n, .g, .t) cho TẤT CẢ các Acc!"
+    elif mode == "disable_all":
+        conn.execute("UPDATE accounts SET chat_cmd_enabled=0")
+        msg = "Đã TẮT nhận lệnh trên tất cả các Acc!"
+    elif mode in ("allow_all_on", "allow_all_off"):
+        conn.execute("UPDATE accounts SET allow_all_cmd=0")
+        msg = "🔒 Hệ thống đã khóa bảo mật: Chỉ Chủ Acc & người được cấp quyền (.cp) mới được dùng lệnh!"
+    elif mode == "enable_selected":
+        acc_ids = [int(x) for x in (data.get("acc_ids") or []) if str(x).isdigit()]
+        conn.execute("UPDATE accounts SET chat_cmd_enabled=0")
+        if acc_ids:
+            placeholders = ",".join("?" for _ in acc_ids)
+            conn.execute(f"UPDATE accounts SET chat_cmd_enabled=1 WHERE id IN ({placeholders})", tuple(acc_ids))
+        msg = f"Đã khóa chỉ cho phép đúng {len(acc_ids)} Acc đang chọn sử dụng lệnh!"
+    else:
+        acc_id = int(data.get("acc_id") or 0)
+        if "chat_cmd_enabled" in data:
+            en = 1 if data.get("chat_cmd_enabled") else 0
+            conn.execute("UPDATE accounts SET chat_cmd_enabled=? WHERE id=?", (en, acc_id))
+        conn.execute("UPDATE accounts SET allow_all_cmd=0 WHERE id=?", (acc_id,))
+        msg = f"Đã cập nhật quyền sử dụng lệnh cho Acc #{acc_id}!"
+    conn.commit()
+    rows = refresh_accounts_ram_cache()
+    sync_all_zalo_listeners()
+    return jsonify({
+        "ok": True,
+        "message": msg,
+        "accounts": [
+            {"id": r["id"], "chat_cmd_enabled": int(r.get("chat_cmd_enabled") or 0), "allow_all_cmd": int(r.get("allow_all_cmd") or 0)}
+            for r in rows
+        ],
+    })
+
+
+@app.route("/api/account/check_all_live", methods=["POST"])
+def api_account_check_all_live():
+    from zalo_login import check_zalo_cookie_imei_live, ZaloPCSessionKeeper
+    rows = get_all_accounts_from_ram()
+    results = []
+    alive_cnt = 0
+    die_cnt = 0
+
+    def _probe_acc(acc):
+        aid = acc["id"]
+        plat = (acc.get("platform") or "zalo").lower()
+        if plat == "zalo":
+            chk = check_zalo_cookie_imei_live(
+                imei=acc.get("imei") or "",
+                cookies_input=acc.get("cookies") or "{}",
+                zpw_enk=acc.get("zpw_enk") or "",
+                user_agent=acc.get("user_agent") or "",
+                uid=acc.get("uid") or "",
+            )
+            if chk["alive"]:
+                ZaloPCSessionKeeper.register_and_keep_alive(
+                    uid=chk["uid"] or acc.get("uid") or acc.get("imei"),
+                    imei=acc.get("imei"),
+                    cookies_dict=chk["cookies"],
+                    zpw_enk=chk["zpw_enk"],
+                    user_agent=acc.get("user_agent") or "",
+                    pc_name=acc.get("pc_name") or "Windows 11 Pro (Singapore)",
+                    display_name=chk["display_name"] or acc.get("name") or "",
+                    db_path=DB_PATH,
+                )
+            return {
+                "id": aid,
+                "platform": "zalo",
+                "name": chk.get("display_name") or acc.get("name") or f"Zalo #{aid}",
+                "alive": bool(chk["alive"]),
+                "groups_count": int(chk.get("groups_count") or 0),
+                "reason": chk.get("reason") or "",
+            }
+        elif plat == "discord":
+            dc = DiscordClient(acc.get("token") or "", is_bot=bool(acc.get("is_bot", 0)))
+            ok_c = dc.check(force_network=False)
+            if ok_c:
+                ZaloPCSessionKeeper.register_token_keep_alive(
+                    acc.get("token") or "", platform="discord",
+                    uid=dc.user_id or acc.get("uid") or "",
+                    display_name=acc.get("name") or "", db_path=DB_PATH
+                )
+            return {
+                "id": aid,
+                "platform": "discord",
+                "name": acc.get("name") or f"Discord #{aid}",
+                "alive": bool(ok_c),
+                "groups_count": 0,
+                "reason": "Token đang hoạt động 24/7" if ok_c else "Token DIE hoặc đã đổi mật khẩu",
+            }
+        else:
+            try:
+                mc = MessengerClient.get_pooled_client(acc.get("cookies") or "{}", uid=acc.get("uid") or "")
+                return {"id": aid, "platform": "messenger", "name": mc.display_name, "alive": True, "groups_count": 0, "reason": "ONLINE"}
+            except Exception as ex_m:
+                return {"id": aid, "platform": "messenger", "name": acc.get("name") or "", "alive": False, "groups_count": 0, "reason": str(ex_m)}
+
+    if rows:
+        with ThreadPoolExecutor(max_workers=min(16, len(rows))) as pool:
+            for r_out in pool.map(_probe_acc, rows):
+                results.append(r_out)
+                if r_out["alive"]:
+                    alive_cnt += 1
+                else:
+                    die_cnt += 1
+
+    sync_all_zalo_listeners()
+    return jsonify({
+        "ok": True,
+        "alive_count": alive_cnt,
+        "die_count": die_cnt,
+        "results": results,
+        "message": f"Kết quả Check Sống/Die: {alive_cnt} Acc SỐNG (Đang giữ hoạt động 24/7) • {die_cnt} Acc DIE (Đã thoát Acc)!",
+    })
+
+
+@app.route("/api/account/test_session", methods=["POST"])
+def api_account_test_session():
+    from zalo_login import check_zalo_cookie_imei_live, ZaloPCSessionKeeper
+    data = request.json or {}
+    acc_id = int(data.get("acc_id") or 0)
+    acc = get_account_from_ram(acc_id)
+    if not acc:
+        return jsonify({"ok": False, "error": "Không tìm thấy tài khoản"}), 404
+    plat = (acc.get("platform") or "zalo").lower()
+    try:
+        if plat == "zalo":
+            chk = check_zalo_cookie_imei_live(
+                imei=acc.get("imei") or "",
+                cookies_input=acc.get("cookies") or "{}",
+                zpw_enk=acc.get("zpw_enk") or "",
+                user_agent=acc.get("user_agent") or "",
+                uid=acc.get("uid") or "",
+            )
+            if not chk["alive"]:
+                return jsonify({
+                    "ok": False,
+                    "alive": False,
+                    "groups_count": 0,
+                    "error": chk["reason"],
+                    "message": f"🔴 DIE — {chk['reason']}",
+                }), 200
+            ZaloPCSessionKeeper.register_and_keep_alive(
+                uid=chk["uid"] or acc.get("uid") or acc.get("imei"),
+                imei=acc.get("imei"),
+                cookies_dict=chk["cookies"],
+                zpw_enk=chk["zpw_enk"],
+                user_agent=acc.get("user_agent") or "",
+                pc_name=acc.get("pc_name") or "Windows 11 Pro (Singapore)",
+                display_name=chk["display_name"] or acc.get("name") or "",
+                db_path=DB_PATH,
+            )
+            sync_all_zalo_listeners()
+            log_system_command(acc_id, chk["uid"] or "", chk["display_name"] or "", "Check Cookie+IMEI", f"SỐNG TRONG ACC ({chk['groups_count']} nhóm)")
+            return jsonify({
+                "ok": True,
+                "alive": True,
+                "groups_count": chk["groups_count"],
+                "message": f"🟢 SỐNG (ON) — Máy tính của '{chk['display_name']}' đang ở trong Acc Zalo (UID: {chk['uid']}, {chk['groups_count']} nhóm, giữ sống 24/7)!"
+            })
+        elif plat == "discord":
+            dc = DiscordClient(acc["token"], is_bot=bool(acc.get("is_bot", 0)))
+            ok_c = dc.check(force_network=False)
+            if ok_c:
+                ZaloPCSessionKeeper.register_token_keep_alive(
+                    acc["token"], platform="discord", uid=dc.user_id or "",
+                    display_name=acc.get("name") or "", db_path=DB_PATH
+                )
+            sync_all_zalo_listeners()
+            return jsonify({
+                "ok": ok_c,
+                "alive": ok_c,
+                "message": f"🟢 SỐNG — Token Discord '{acc.get('name')}' đang hoạt động 24/7 (UID: {dc.user_id})!" if ok_c else "🔴 DIE — Token Discord đã hết hạn hoặc bị đổi mật khẩu!"
+            })
+        else:
+            mc = MessengerClient.get_pooled_client(acc["cookies"], uid=acc.get("uid") or "")
+            sync_all_zalo_listeners()
+            return jsonify({"ok": True, "alive": True, "message": f"🟢 SỐNG — Tài khoản Messenger '{mc.display_name}' đang hoạt động tốt!"})
+    except Exception as e:
+        return jsonify({"ok": False, "alive": False, "error": f"🔴 DIE — Lỗi kiểm tra phiên: {e}"}), 200
+
+@app.route("/api/account/reconnect_all", methods=["POST"])
+def api_account_reconnect_all():
+    refresh_accounts_ram_cache()
+    for aid, lst in list(ACTIVE_LISTENERS.items()):
+        try:
+            lst.stop()
+        except Exception:
+            pass
+    ACTIVE_LISTENERS.clear()
+    sync_all_zalo_listeners()
+    return jsonify({
+        "ok": True,
+        "message": f"Đã kết nối lại & giữ phiên PC Online 24/7 cho {len(ACTIVE_LISTENERS)} tài khoản!"
+    })
+
+@app.route("/api/command/dispatch_web", methods=["POST"])
+def api_command_dispatch_web():
+    data = request.json or {}
+    raw_cmd = (data.get("cmd") or "").strip()
+    thread_id = str(data.get("thread_id") or "").strip()
+    if not raw_cmd:
+        return jsonify({"ok": False, "error": "Chưa nhập lệnh!"}), 400
+    if not raw_cmd.startswith((".", "/", "!")):
+        raw_cmd = "." + raw_cmd
+
+    accs = get_all_accounts_from_ram(enabled_only=True)
+    if not accs:
+        log_system_command(0, thread_id or "Web_Console", "Admin_Web", raw_cmd, "Đã ghi nhận lệnh trên Web Console (Chưa có tài khoản kết nối)")
+        return jsonify({"ok": True, "message": f"Đã ghi nhận lệnh '{raw_cmd}' trên Bảng Soi Lệnh!"})
+
+    acc0 = accs[0]
+    plat = (acc0.get("platform") or "zalo").lower()
+    z_cli, d_cli, m_cli = None, None, None
+    try:
+        if plat == "zalo":
+            z_cli = Zalo.get_pooled_client(
+                acc0["imei"], acc0["cookies"],
+                user_agent=acc0.get("user_agent") or "",
+                zpw_enk_hint=acc0.get("zpw_enk") or "",
+                uid_hint=acc0.get("uid") or ""
+            )
+            if not thread_id:
+                gs = z_cli.groups(use_cache=True)
+                thread_id = str(gs[0]["id"]) if gs else str(z_cli.uid or "0")
+        elif plat == "discord":
+            d_cli = DiscordClient(acc0["token"], is_bot=bool(acc0.get("is_bot", 0)))
+            if not thread_id:
+                bs = d_cli.get_all_boxes()
+                thread_id = str(bs[0]["id"]) if bs else "0"
+        elif plat == "messenger":
+            m_cli = MessengerClient.get_pooled_client(acc0["cookies"], uid=acc0.get("uid") or "")
+            if not thread_id:
+                ts = m_cli.get_threads(use_cache=True)
+                thread_id = str(ts[0]["id"]) if ts else str(m_cli.uid or "0")
+    except Exception:
+        pass
+
+    executed = parse_and_execute_inchat_command(
+        zalo_client=z_cli,
+        acc_row=acc0,
+        thread_id=thread_id or "Web_Console",
+        is_group=True,
+        sender_id=str(acc0.get("uid") or "0"),
+        raw_msg=raw_cmd,
+        discord_client=d_cli,
+        messenger_client=m_cli,
+        platform=plat,
+        pre_claimed_slot=True
+    )
+    if not executed:
+        log_system_command(acc0["id"], thread_id or "Web_Console", "Admin_Web", raw_cmd, f"Đã thực thi lệnh từ Web Console ({plat.upper()})")
+    return jsonify({"ok": True, "message": f"Đã thực thi lệnh '{raw_cmd}' thành công!"})
+
+@app.route("/task/stop/<tid>", methods=["POST"])
+def route_task_stop(tid):
+    info = ACTIVE_TASKS.pop(tid, None)
+    if info:
+        if info.get("stop"):
+            info["stop"].set()
+        for t_id in (info.get("targets") or []):
+            bump_stop_epoch(t_id)
+            DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(t_id)
+    else:
+        bump_stop_epoch(None)
+
+    with TASKS_RAM_LOCK:
+        if tid in TASKS_RAM_STORE:
+            TASKS_RAM_STORE[tid]["status"] = "stopped"
+            TASKS_RAM_STORE[tid]["dirty"] = True
+
+    def _async_stop_single():
+        try:
+            conn = db()
+            conn.execute("UPDATE tasks SET status='stopped' WHERE id=?", (tid,))
+            conn.commit()
+        except Exception:
+            pass
+
+    threading.Thread(target=_async_stop_single, daemon=True).start()
+    with _STATUS_CACHE_LOCK:
+        _STATUS_SNAPSHOT_CACHE["ts"] = 0.0
+    return jsonify({"ok": True})
+
+@app.route("/task/stop_all", methods=["POST"])
+def route_task_stop_all():
+    cnt = stop_tasks_for_thread(None)
+    return jsonify({"ok": True, "stopped": cnt})
+
+_STATUS_SNAPSHOT_CACHE = {"ts": 0.0, "payload": None}
+_STATUS_CACHE_LOCK = threading.RLock()
+
+@app.route("/api/status")
+def api_status():
+    """API Trạng Thái & Bảng Soi Lệnh Thời Gian Thực:"""
+    t0 = time.perf_counter()
+    now = time.time()
+    with _STATUS_CACHE_LOCK:
+        if _STATUS_SNAPSHOT_CACHE["payload"] is not None and (now - _STATUS_SNAPSHOT_CACHE["ts"] < 0.25):
+            return jsonify(_STATUS_SNAPSHOT_CACHE["payload"])
+
+    task_list = []
+    with TASKS_RAM_LOCK:
+        sorted_tasks = sorted(TASKS_RAM_STORE.values(), key=lambda x: x.get("started_at", 0), reverse=True)[:100]
+        for t_obj in sorted_tasks:
+            tid = t_obj.get("id", "")
+            is_active = (tid in ACTIVE_TASKS and not ACTIVE_TASKS[tid]["stop"].is_set() and t_obj.get("status") == "running")
+            meta = t_obj.get("meta") or {}
+            live_opts = (ACTIVE_TASKS.get(tid) or {}).get("opts") or {}
+            task_list.append({
+                "id": tid,
+                "mode": t_obj.get("type") or live_opts.get("mode") or "treo_nhay",
+                "source": meta.get("source") or "web",
+                "trigger_cmd": meta.get("trigger_cmd") or "",
+                "acc_count": int(t_obj.get("acc_count") or 1),
+                "by_acc": t_obj.get("by_acc") or {},
+                "targets_count": meta.get("box_count") or len(meta.get("targets") or []),
+                "sent": int(t_obj.get("sent", 0)),
+                "fail": int(t_obj.get("fail", 0)),
+                "status": "Đang chạy" if is_active else "Đã dừng",
+                "delay": live_opts.get("delay", t_obj.get("delay", meta.get("delay", 1.0))),
+            })
+
+    acc_rows = get_all_accounts_from_ram()
+    health_out = []
+    for a in acc_rows:
+        aid = a["id"]
+        snap = HEALTH_MGR.get_snapshot(aid)
+        lst = ACTIVE_LISTENERS.get(aid)
+        ws_st = getattr(lst, "ws_status", "Đang trực chiến 24/7") if lst else "Tắt nhận lệnh"
+        health_out.append({
+            "id": aid,
+            "platform": a.get("platform") or "zalo",
+            "name": a.get("name") or f"Acc #{aid}",
+            "masked_name": mask_account_name(a.get("name") or "Account"),
+            "circuit": snap["circuit"],
+            "rpm": snap["rpm"],
+            "ok_total": snap["ok_total"],
+            "risk_score": snap["risk_score"],
+            "ws_status": sanitize_log_text(ws_st),
+        })
+
+    masked_logs = []
+    for l in list(BOT_LOGS_RAM_DEQUE)[:45]:
+        ts_val = float(l.get("created_at") or time.time())
+        s_uid = str(l.get("sender_id") or "").strip()
+        s_name = l.get("sender_name") or GLOBAL_USER_NAME_CACHE.get(s_uid) or (l.get("acc_name") if s_uid in ("0", "") else f"UID_{s_uid[-4:]}")
+        masked_logs.append({
+            "time_str": l.get("time_str") or time.strftime("%H:%M:%S", time.localtime(ts_val)),
+            "platform": l.get("platform") or "CHAT",
+            "acc_name": l.get("acc_name") or f"Acc #{l.get('acc_id', 0)}",
+            "sender_id": s_uid,
+            "sender_name": s_name,
+            "thread_id": str(l.get("thread_id") or ""),
+            "cmd_text": sanitize_log_text(l.get("cmd_text") or ""),
+            "action_taken": sanitize_log_text(l.get("action_taken") or ""),
+            "masked_thread": mask_sensitive_id(l.get("thread_id") or "", 5),
+            "created_at": ts_val,
+        })
+
+    with SYSTEM_CFG_LOCK:
+        rt_cfg_snap = dict(SYSTEM_RUNTIME_CONFIG)
+
+    auth_users_list = list_authorized_users()
+    for au in auth_users_list:
+        au["time_str"] = time.strftime("%H:%M:%S %d/%m", time.localtime(float(au.get("added_at") or time.time())))
+
+    tel = HEALTH_MGR.get_live_ping_telemetry()
+    eng_ms = round((time.perf_counter() - t0) * 1000.0 + 0.15, 2)
+    payload = {
+        "tasks": task_list,
+        "accounts_health": health_out,
+        "cmd_logs": masked_logs,
+        "authorized_users": auth_users_list,
+        "runtime_config": rt_cfg_snap,
+        "discord_firewall": DiscordFirewallEngine.get_firewall_snapshot(),
+        "proxy_pool": ProxyPoolEngine.get_snapshot(),
+        "ping_telemetry": {
+            "engine_ms": eng_ms,
+            "active_threads": threading.active_count(),
+            "avg_send_ms": tel["avg_send_ms"],
+            "jitter_ms": tel["jitter_ms"],
+            "total_rpm": tel["total_rpm"],
+            "total_healed": tel["total_healed"],
+        }
+    }
+    with _STATUS_CACHE_LOCK:
+        _STATUS_SNAPSHOT_CACHE["ts"] = time.time()
+        _STATUS_SNAPSHOT_CACHE["payload"] = payload
+    return jsonify(payload)
+
+@app.route("/api/runtime_config/update", methods=["POST"])
+def api_runtime_config_update():
+    data = request.json or {}
+    updates = {}
+    if "icon_count" in data:
+        ic_n = max(0, min(10, int(data.get("icon_count") or 0)))
+        updates["icon_count"] = ic_n
+        updates["use_emoji"] = (ic_n > 0)
+    if "use_emoji" in data and "icon_count" not in data:
+        updates["use_emoji"] = bool(data["use_emoji"])
+    if "delay" in data:
+        updates["delay"] = max(0.0, float(data.get("delay") or 0.0))
+    if "color_mode" in data:
+        updates["color_mode"] = str(data["color_mode"])
+    if "fixed_color" in data:
+        updates["fixed_color"] = str(data["fixed_color"])
+    if "font_style" in data:
+        fs = str(data["font_style"])
+        updates["font_style"] = fs
+        updates["is_heading"] = (fs in ("big_bold", "alternating_bold", "italic_bold", "underline_bold"))
+    if "is_heading" in data and "font_style" not in data:
+        updates["is_heading"] = bool(data["is_heading"])
+    if "antiband" in data:
+        updates["antiband"] = bool(data["antiband"])
+    if "hide_tag_all" in data:
+        updates["hide_tag_all"] = bool(data["hide_tag_all"])
+    if "hide_tag_name" in data:
+        updates["hide_tag_name"] = bool(data["hide_tag_name"])
+    cnt = update_running_tasks_config(thread_id=None, **updates)
+    log_system_command(0, "ALL_GROUPS", "Admin_Web", f"[WEB-SYNC] {json.dumps(updates, ensure_ascii=False)}", f"Đồng bộ cấu hình lên toàn bộ các nhóm ({cnt} tiến trình)", sender_name="Admin Web")
+    with SYSTEM_CFG_LOCK:
+        snap = dict(SYSTEM_RUNTIME_CONFIG)
+    return jsonify({"ok": True, "updated_tasks": cnt, "runtime_config": snap, "message": "Đã áp dụng cấu hình lên toàn bộ các nhóm & đồng bộ Web!"})
+
+@app.route("/api/permissions/add", methods=["POST"])
+def api_permissions_add():
+    data = request.json or {}
+    uid = str(data.get("uid") or "").strip().lstrip("@")
+    name = str(data.get("name") or "").strip().lstrip("@") or uid
+    if not uid:
+        return jsonify({"ok": False, "error": "Vui lòng nhập UID hoặc Tên người dùng cần cấp quyền (.cp)!"}), 400
+    add_authorized_user(uid, name, acc_id=0)
+    log_system_command(0, "Web_Permissions", "Admin_Web", f".cp @{name} ({uid})", f"Cấp quyền điều khiển (.cp) từ Web cho {name}", sender_name="Admin Web")
+    return jsonify({"ok": True, "authorized_users": list_authorized_users(), "message": f"Đã cấp quyền (.cp) cho {name} ({uid})!"})
+
+@app.route("/api/permissions/remove", methods=["POST"])
+def api_permissions_remove():
+    data = request.json or {}
+    uid = str(data.get("uid") or "").strip()
+    if uid in ("__all__", "all", "tatca"):
+        remove_authorized_user("__all__")
+        log_system_command(0, "Web_Permissions", "Admin_Web", ".xq all", "Thu hồi toàn bộ quyền điều khiển phụ (.cp)", sender_name="Admin Web")
+        return jsonify({"ok": True, "authorized_users": [], "message": "Đã thu hồi sạch 100% danh sách quyền (.cp) — Chỉ Chủ Acc được dùng lệnh!"})
+    remove_authorized_user(uid)
+    log_system_command(0, "Web_Permissions", "Admin_Web", f".xq {uid}", f"Đã xóa quyền (.cp) của {uid}", sender_name="Admin Web")
+    return jsonify({"ok": True, "authorized_users": list_authorized_users(), "message": f"Đã xóa quyền (.cp) của {uid}!"})
+
+# TỰ ĐỘNG KHỞI CHẠY BOT TELEGRAM PHAN ANH KHÔI (RIKE) CÙNG WEB SERVER
+_TELEGRAM_BOT_RUNNER = None
+
+def ensure_telegram_bot_started():
+    global _TELEGRAM_BOT_RUNNER
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    if _TELEGRAM_BOT_RUNNER is not None:
+        return
+    try:
+        from get_ck_im_zalo import start_background_telegram_bot
+        _TELEGRAM_BOT_RUNNER = start_background_telegram_bot(TELEGRAM_BOT_TOKEN)
+    except Exception:
+        pass
+
+if TELEGRAM_BOT_TOKEN and os.environ.get("DISABLE_TELEGRAM_BOT", "0") != "1":
+    threading.Thread(target=ensure_telegram_bot_started, daemon=True).start()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, threaded=True)
