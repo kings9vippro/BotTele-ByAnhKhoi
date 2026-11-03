@@ -5,7 +5,7 @@
 # ==============================================================================
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "2026.11.03"
+APP_VERSION = "1.1.0"
 
 import os
 import re

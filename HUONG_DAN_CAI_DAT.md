@@ -1,19 +1,15 @@
-# HƯỚNG DẪN DỰ ÁN ZENVYRE ULTRA UPGRADED (2026)
+# HƯỚNG DẪN DỰ ÁN GLAZE
 Nhà Phát Triển: Dev Khôi Phan & Dev Anh Khôi
-Phiên Bản: v2026.25.0 VIP
+Phiên Bản: v1.1.0
 
-## 1. CÁC FILE ĐÃ ĐƯỢC NÂNG CẤP & TỐI ƯU HOÁ:
-- `app.py`: File máy chủ trung tâm tích hợp Flask, Zalo, Discord, Messenger, Telegram.
-  + Đã sửa toàn bộ lỗi code, lỗi đệ quy sticker, lỗi font chữ.
-  + Đã tối ưu hoá bộ nhớ Render Free: Tự động dọn RAM (malloc_trim), cắt tỉa bot_logs, checkpoint SQLite WAL, không bao giờ bị vượt GB.
-  + Lệnh `.menu` phản hồi siêu tốc 0ms, giao diện menu gọn gàng, tinh tế, không rác chữ.
-  + Chạy Đa Acc siêu mượt không bao giờ bị đơ/lag lệnh.
-  + Tích hợp đầy đủ lệnh `.lagbox` (pull, giaitan, mention, all) từ C++ Engine Khôi Phan.
-  + Nâng cấp Mini App: Đẹp hơn, mượt hơn, font UTF-8 chuẩn 100% không lỗi chữ, hỗ trợ upload file nhây / ngôn dung lượng cao mượt mà.
-- `zalo_lag_engine.py`: Động cơ Lag Box độc quyền của Dev Khôi Phan (EXEbykhoiphan).
-- `zalo_core.cpp` & `zalo_core.so`: Module C++ nhị phân hiệu năng cao.
-- `get_ck_im_zalo.py`: Bộ điều khiển Telegram Bot trung tâm.
-- `zalo_login.py`: Hệ thống đăng nhập QR & giữ sống cookie Zalo 24/7.
+## 1. Cấu trúc dự án
+
+- `app.py`: Máy chủ Flask, kết nối và xử lý tác vụ.
+- `zalo_core.cpp`: Mã nguồn C++ lưu tham khảo; ứng dụng hiện không nạp tệp nhị phân dựng sẵn.
+- `get_ck_im_zalo.py`: Bộ điều khiển Telegram.
+- `zalo_login.py`: Đăng nhập QR và quản lý phiên Zalo.
+- `templates/miniapp.html`: Giao diện Mini App.
+- `tests/`: Kiểm thử API và giao diện.
 
 ## 2. HƯỚNG DẪN CHẠY TRÊN RENDER / LOCAL:
 - Chạy: `python3 app.py`

@@ -5,7 +5,7 @@
 # ==============================================================================
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "2026.11.03"
+APP_VERSION = "1.1.0"
 
 import sys, types
 if __name__ == "__main__":
@@ -298,7 +298,7 @@ def add_security_headers(resp):
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     if request.path in ("/", "/miniapp", "/admin", "/zenvyre"):
         resp.headers["Cache-Control"] = "no-store, max-age=0"
-        resp.headers["X-Glaze-UI-Version"] = "miniapp-2026-11-03"
+        resp.headers["X-Glaze-UI-Version"] = "miniapp-1.1.0"
     return resp
 
 # BỘ LỌC ẨN LOG TÀI KHOẢN NHẠY CẢM (STEALTH ACCOUNT LOG MASKING)
@@ -10199,15 +10199,14 @@ class ZaloQRLoginManager:
         st["uid"] = uid
         st["file_name"] = safe_fn
         st["file_content"] = f_content
-        st["status"] = "success"
-        st["message"] = (
-            f"Đã đăng nhập & ghim máy tính {pc_name} sống 24/7 trong tài khoản Zalo của {d_name} "
-            f"(UID: {uid} • {live_groups_count} nhóm • Cookie & IMEI đang hoạt động)!"
-        )
+        st["status"] = "confirmed"
+        st["message"] = "Đã xác nhận đăng nhập. Đang lưu tài khoản..."
         cls._persist_qr_state_to_db(st, async_write=False)
 
         saved_acc_id = 0
+        saved_account = False
         if st.get("auto_save") and clean_c:
+            conn = None
             try:
                 conn = db()
                 existing = None
@@ -10229,6 +10228,7 @@ class ZaloQRLoginManager:
                     )
                     saved_acc_id = cur.lastrowid
                 conn.commit()
+                saved_account = True
                 refresh_accounts_ram_cache()
                 sync_all_zalo_listeners()
                 log_system_command(
@@ -10237,7 +10237,25 @@ class ZaloQRLoginManager:
                     f"[ZALO PC] Thiết bị {pc_name} đã ghim cố định vào tài khoản {d_name} ({live_groups_count} nhóm Online 24/7)"
                 )
             except Exception:
-                pass
+                if not saved_account:
+                    if conn is not None:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+                    st["status"] = "error"
+                    st["message"] = "Đăng nhập đã xác nhận nhưng không lưu được tài khoản. Vui lòng thử lại."
+                    cls._persist_qr_state_to_db(st, async_write=False)
+                    return
+        elif st.get("auto_save"):
+            st["status"] = "error"
+            st["message"] = "Không nhận được dữ liệu phiên để lưu tài khoản. Vui lòng thử lại."
+            cls._persist_qr_state_to_db(st, async_write=False)
+            return
+
+        st["status"] = "success"
+        st["message"] = f"Đã đăng nhập Zalo cho {d_name}." if not st.get("auto_save") else f"Đã đăng nhập và lưu tài khoản {d_name}."
+        cls._persist_qr_state_to_db(st, async_write=False)
 
     @staticmethod
     def _is_valid_cookie_val(val, cookie_name=""):
@@ -20154,7 +20172,7 @@ class TelegramPetAnimationEngine:
 class TelegramUIPhysicsEngine:
     @classmethod
     def get_ui_bundle(cls):
-        return {"version": "telegram-only-v2026"}
+        return {"version": "telegram-only-v1.1.0"}
 
 
 class MessagingGatewayDirectory:
@@ -20189,7 +20207,7 @@ input[type="password"]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgb
 </head>
 <body>
 <div class="login-card">
-  <div class="badge">● AUTHOR: DEV ANH KHÔI • v2026.12.0 ULTRA VIP</div>
+  <div class="badge">● AUTHOR: DEV ANH KHÔI • v1.1.0</div>
   <h1>BOT TREO 4APP 🇻🇳 — DEV ANH KHÔI</h1>
   <p class="sub">Hệ thống điều phối Đa Tài Khoản Zalo • Discord • Messenger & Tạo Nhãn Dán Sticker Chuẩn Zalo.</p>
   {% if error %}
@@ -20410,9 +20428,9 @@ th{color:var(--primary);font-weight:800;background:var(--panel-alt)}
 <body>
 <div class="topbar">
   <div class="brand">
-    <div class="brand-badge">DEV ANH KHÔI • v2026.12.0 OMNI VIP</div>
+    <div class="brand-badge">DEV ANH KHÔI • v1.1.0</div>
     <div class="brand-title">
-      <h1>SIÊU HỆ THỐNG ĐA NỀN TẢNG ZALO • MESSENGER • DISCORD (v2026.15.0 Ultra VIP)</h1>
+      <h1>HỆ THỐNG ĐA NỀN TẢNG ZALO • MESSENGER • DISCORD (v1.1.0)</h1>
       <p>👨‍💻 Author: <b>Dev Anh Khôi</b> • 12 Nguồn Fake Soạn Tin Messenger • Khiên Anti-Ban Chống Die Cookie 9 Lớp • Lệnh .menu Nhạy 100% Cả 3 App</p>
     </div>
   </div>

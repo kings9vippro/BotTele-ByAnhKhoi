@@ -29,12 +29,34 @@ class MiniAppTests(unittest.TestCase):
         self.assertEqual(result.json["qr_base64"], "image")
         self.assertNotIn("cookies", result.json)
 
+    def test_qr_does_not_report_success_when_account_save_fails(self):
+        from zalo_login import ZaloPCSessionKeeper
+        state = {"auto_save": True, "status": "confirmed"}
+        fake_zalo = Mock(uid="123456", secret_key="key", display_name="User", cookies_dict={})
+        with patch.object(app.Zalo, "get_pooled_client", return_value=fake_zalo), patch.object(ZaloPCSessionKeeper, "register_and_keep_alive"), patch.object(app.ZaloCookieVaultEngine, "save_zalo_vault_record"), patch.object(app.ZaloQRLoginManager, "_persist_qr_state_to_db"), patch.object(app, "db", side_effect=app.sqlite3.OperationalError("write failure")):
+            app.ZaloQRLoginManager._finalize_zalo_credentials(state, "device", {"zpsid": "abcdefghijklmnop"}, user_info_dict={"uid": "123456", "zpw_enk": "key", "_groups_count": 1})
+        self.assertEqual(state["status"], "error")
+        self.assertIn("không lưu", state["message"])
+
+    def test_qr_reports_success_only_after_commit(self):
+        from zalo_login import ZaloPCSessionKeeper
+        state = {"auto_save": True, "status": "confirmed"}
+        fake_zalo = Mock(uid="123456", secret_key="key", display_name="User", cookies_dict={})
+        connection = Mock()
+        connection.execute.side_effect = [Mock(fetchone=Mock(return_value=None)), Mock(fetchone=Mock(return_value=None)), Mock(lastrowid=7)]
+        statuses = []
+        with patch.object(app.Zalo, "get_pooled_client", return_value=fake_zalo), patch.object(ZaloPCSessionKeeper, "register_and_keep_alive"), patch.object(app.ZaloCookieVaultEngine, "save_zalo_vault_record"), patch.object(app.ZaloQRLoginManager, "_persist_qr_state_to_db", side_effect=lambda st, **kw: statuses.append(st["status"])), patch.object(app, "db", return_value=connection), patch.object(app, "refresh_accounts_ram_cache"), patch.object(app, "sync_all_zalo_listeners"), patch.object(app, "log_system_command"):
+            app.ZaloQRLoginManager._finalize_zalo_credentials(state, "device", {"zpsid": "abcdefghijklmnop"}, user_info_dict={"uid": "123456", "zpw_enk": "key", "_groups_count": 1})
+        connection.commit.assert_called_once()
+        self.assertEqual(statuses, ["confirmed", "success"])
+
     def test_oversized_upload_preserves_existing_file(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(app, "UPLOAD_DIR", folder):
             path = os.path.join(folder, "existing.txt")
             with open(path, "wb") as output:
                 output.write(b"original")
             response = self.client.post("/api/miniapp/upload_file", data={"file": (io.BytesIO(b"x" * (app.MAX_MINIAPP_TEXT_BYTES + 1)), "existing.txt")})
+            self.addCleanup(response.request.environ["wsgi.input"].close)
             self.assertEqual(response.status_code, 413)
             with open(path, "rb") as existing:
                 self.assertEqual(existing.read(), b"original")
@@ -174,7 +196,7 @@ class MiniAppTests(unittest.TestCase):
 
     def test_miniapp_has_fresh_build_header(self):
         response = self.client.get("/miniapp")
-        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-2026-11-03")
+        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-1.1.0")
         self.assertIn("no-store", response.headers["Cache-Control"])
 
     def test_custom_sticker_upload_plain_response_reaches_send(self):
