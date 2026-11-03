@@ -5,7 +5,7 @@
 # ==============================================================================
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "GLAZE"
+APP_VERSION = "2026.11.03"
 
 import os
 import re
@@ -1066,6 +1066,8 @@ class DirectTelegramBotRunner:
         self.executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="TgFastWorker")
         # Reserve a few workers for navigation when long-running jobs are busy.
         self.interactive_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="TgInteractive")
+        self._update_slots = threading.BoundedSemaphore(64)
+        self._interactive_update_slots = threading.BoundedSemaphore(32)
         self._cached_welcome_file_id = _get_db_setting("tg_welcome_file_id", "")
         self._cached_welcome_kind = _get_db_setting("tg_welcome_kind", "animation")
         self._cached_boxes_by_user = {}
@@ -2253,35 +2255,38 @@ class DirectTelegramBotRunner:
                 user_agent=eff_ua,
                 owner_tg_id=str(user_id),
             )
+            if not acc_id:
+                if wait_mid:
+                    self.delete_msg(chat_id, wait_mid)
+                self.send_text(chat_id, "Không lưu được tài khoản. Vui lòng kiểm tra cơ sở dữ liệu và thử lại.", reply_to=reply_to)
+                return
             self._cached_boxes_by_user.clear()
 
             if wait_mid:
                 self.delete_msg(chat_id, wait_mid)
 
             st_text = (
-                f"<b>SỐNG TRONG ACC 24/7 ({grp_cnt} nhóm)</b>"
+                f"<b>Kiểm tra thành công ({grp_cnt} nhóm)</b>"
                 if chk.get("alive")
                 else "<b>Đã lưu vào hệ thống & đang tự động đồng bộ phiên</b>"
             )
-            enk_preview = eff_enk if eff_enk else "Tự động lấy khi chạy"
             msg_out = (
-                f"{tg_anim('check', '')} <b>ĐÃ NẠP COOKIE + IMEI & KÍCH HOẠT 32 LỆNH TRÊN ACC ZALO!</b>\n\n"
+                f"{tg_anim('check', '')} <b>ĐÃ LƯU TÀI KHOẢN ZALO</b>\n\n"
                 f"<blockquote>"
                 f"Tài khoản: <b>#{acc_id} — {eff_name}</b>\n"
                 f"🆔 UID Zalo: <code>{eff_uid or 'Tự động nhận diện'}</code>\n"
                 f"Trạng thái: {st_text}\n"
                 f"Quyền quản lý Cookie: <b>Chỉ bạn & Admin chính xem được</b>\n"
-                f"Lệnh trên Acc Zalo: <b>ĐÃ BẬT TRỌN BỘ 32 LỆNH</b>\n"
-                f"• Gõ trực tiếp trong bất kỳ Box Zalo nào: <code>.menu</code>, <code>.treodo</code>, <code>.damau</code>, <code>.gif</code>, <code>.word</code>, <code>.nhay</code>, <code>.ngon</code>, <code>.nhaytag</code>, <code>.anall</code>, <code>.xa</code>, <code>.combo</code>, <code>.2c</code>, <code>.so</code>, <code>.nhaypoll</code> (0s không nghỉ), <code>.nhaytyping</code>, <code>.tenbox</code>, <code>.todo</code>, <code>.bank</code>, <code>.card</code>, <code>.d</code>, <code>.mau</code>, <code>.t</code>, <code>.ta</code>!"
+                f"Lệnh chat: <b>ĐÃ BẬT</b>\n"
+                f"Gõ <code>.menu</code> để xem các lệnh hiện có."
                 f"</blockquote>\n\n"
-                f"<b>Token Khóa Phiên (zpw_enk):</b>\n<pre>{enk_preview}</pre>\n\n"
-                f"<b>IMEI (z_uuid):</b>\n<pre>{imei_str}</pre>"
+                f"Thông tin phiên đã được lưu trong hệ thống."
             )
             self.send_text(chat_id, msg_out, reply_to=reply_to)
-        except Exception as e:
+        except Exception:
             if wait_mid:
                 self.delete_msg(chat_id, wait_mid)
-            self.send_text(chat_id, f"Lỗi khi nạp Cookie + IMEI: <code>{str(e)[:250]}</code>", reply_to=reply_to)
+            self.send_text(chat_id, "Không thể thêm tài khoản. Vui lòng kiểm tra kết nối và thử lại.", reply_to=reply_to)
 
     # KIỂM TRA & TỰ ĐỘNG CỨU SỐNG COOKIE ZALO (ADMIN XEM TẤT CẢ, USER CHỈ XEM ACC CỦA MÌNH)
     def handle_check_all_stored_zalo_cookies(self, chat_id, user_id=ROOT_ADMIN_ID, reply_to=None):
@@ -4012,6 +4017,23 @@ class DirectTelegramBotRunner:
         except Exception as e:
             self.last_error = str(e)
 
+    def _submit_update(self, upd):
+        msg = upd.get("message") or upd.get("edited_message") or {}
+        parts = str(msg.get("text") or "").split(None, 1)
+        command = parts[0].lower().split("@")[0] if parts else ""
+        interactive = "callback_query" in upd or command in ("/start", "/menu", "/help", "/bot", "/ping")
+        executor = self.interactive_executor if interactive else self.executor
+        slots = self._interactive_update_slots if interactive else self._update_slots
+        if not slots.acquire(blocking=False):
+            return False
+        try:
+            future = executor.submit(self._safe_process_update, upd)
+        except Exception:
+            slots.release()
+            raise
+        future.add_done_callback(lambda _: slots.release())
+        return True
+
     def run_forever(self):
         self.running = True
         self.last_poll_ok_ts = time.time()
@@ -4035,13 +4057,12 @@ class DirectTelegramBotRunner:
                     fail_streak = 0
                     for upd in res["result"]:
                         uid_upd = upd.get("update_id", 0)
+                        if not self._submit_update(upd):
+                            # Keep this update unacknowledged; Telegram returns it on the next poll.
+                            time.sleep(0.2)
+                            break
                         if uid_upd >= self.offset:
                             self.offset = uid_upd + 1
-                        msg = upd.get("message") or upd.get("edited_message") or {}
-                        command = str(msg.get("text") or "").split(None, 1)
-                        command = command[0].lower().split("@")[0] if command else ""
-                        executor = self.interactive_executor if "callback_query" in upd or command in ("/start", "/menu", "/help", "/bot", "/ping") else self.executor
-                        executor.submit(self._safe_process_update, upd)
                 else:
                     fail_streak += 1
                     desc_err = str(res.get("description") or "").lower()

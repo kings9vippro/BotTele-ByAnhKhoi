@@ -5,7 +5,7 @@
 # ==============================================================================
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "GLAZE"
+APP_VERSION = "2026.11.03"
 
 import sys, types
 if __name__ == "__main__":
@@ -17743,11 +17743,15 @@ class ZaloRealtimeListener:
         sock.sendall(bytes(header) + masked_payload)
 
     def _try_decompress_or_json(self, raw_bytes):
-        if not raw_bytes:
+        if not raw_bytes or len(raw_bytes) > 2 * 1024 * 1024:
             return None
+        max_decoded = 8 * 1024 * 1024
         for wbits in (16 + zlib.MAX_WBITS, zlib.MAX_WBITS, -zlib.MAX_WBITS):
             try:
-                decomp = zlib.decompress(raw_bytes, wbits)
+                decoder = zlib.decompressobj(wbits)
+                decomp = decoder.decompress(raw_bytes, max_decoded + 1)
+                if len(decomp) > max_decoded or decoder.unconsumed_tail or not decoder.eof:
+                    continue
                 txt = decomp.decode("utf-8", errors="ignore").strip()
                 if txt.startswith("{") or txt.startswith("["):
                     return json.loads(txt)
@@ -19553,6 +19557,7 @@ def api_miniapp_qr_status(session_id):
 @app.route("/api/miniapp/telemetry")
 def api_miniapp_telemetry():
     now_ts = time.time()
+    accounts = get_all_accounts_from_ram()
     tasks_list = []
     for tid_k, v in list(ACTIVE_TASKS.items()):
         st_ev = v.get("stop")
@@ -19570,7 +19575,8 @@ def api_miniapp_telemetry():
         "author": APP_AUTHOR,
         "version": APP_VERSION,
         "admin_id": TELEGRAM_ADMIN_ID,
-        "live_accs": len(get_all_accounts_from_ram(enabled_only=True)),
+        "live_accs": sum(1 for account in accounts if account.get("enabled", 1)),
+        "total_accs": len(accounts),
         "running_tasks": len(tasks_list),
         "tasks": tasks_list,
         "watched_boxes": len(CanhTreoWatchdogEngine.get_watched_boxes()),

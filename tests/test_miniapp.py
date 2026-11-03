@@ -2,6 +2,9 @@ import io
 import os
 import tempfile
 import unittest
+import threading
+import zlib
+from concurrent.futures import Future
 from unittest.mock import patch
 from unittest.mock import Mock
 
@@ -39,6 +42,51 @@ class MiniAppTests(unittest.TestCase):
     def test_miniapp_api_requires_authentication(self):
         client = app.app.test_client()
         self.assertEqual(client.get("/api/miniapp/qr_status/abc").status_code, 401)
+
+    def test_websocket_json_decompression_has_bounded_output(self):
+        listener = app.ZaloRealtimeListener(1)
+        self.assertEqual(listener._try_decompress_or_json(zlib.compress(b'{"event":1}')), {"event": 1})
+        self.assertIsNone(listener._try_decompress_or_json(zlib.compress(b'"' + b'x' * (8 * 1024 * 1024) + b'"')))
+        self.assertIsNone(listener._try_decompress_or_json(b'x' * (2 * 1024 * 1024 + 1)))
+
+    def test_telegram_inflight_limit_releases_after_completion(self):
+        import get_ck_im_zalo as telegram
+        runner = telegram.DirectTelegramBotRunner.__new__(telegram.DirectTelegramBotRunner)
+        runner._update_slots = threading.BoundedSemaphore(1)
+        runner._interactive_update_slots = threading.BoundedSemaphore(1)
+        pending = Future()
+        runner.executor = Mock()
+        runner.interactive_executor = Mock()
+        runner.executor.submit.return_value = pending
+        update = {"message": {"text": "hello"}}
+        self.assertTrue(runner._submit_update(update))
+        self.assertFalse(runner._submit_update(update))
+        pending.set_result(None)
+        runner.executor.submit.return_value = Future()
+        self.assertTrue(runner._submit_update(update))
+
+    def test_telegram_import_reports_save_failure_and_hides_session_key(self):
+        import get_ck_im_zalo as telegram
+        runner = telegram.DirectTelegramBotRunner.__new__(telegram.DirectTelegramBotRunner)
+        runner.send_text = Mock(return_value={"result": {"message_id": 10}})
+        runner.delete_msg = Mock()
+        runner._cached_boxes_by_user = {}
+        check = {"alive": True, "zpw_enk": "sensitive-session-key", "uid": "123456"}
+        with patch.object(telegram, "check_zalo_cookie_imei_live", return_value=check), patch.object(telegram, "sync_zalo_account_to_web_db", return_value=None):
+            runner.handle_import_zalo_cookie_imei(1, 2, "device-id", {"zpsid": "cookie"})
+        self.assertIn("Không lưu được", runner.send_text.call_args.args[1])
+        runner.send_text.reset_mock()
+        with patch.object(telegram, "check_zalo_cookie_imei_live", return_value=check), patch.object(telegram, "sync_zalo_account_to_web_db", return_value=5):
+            runner.handle_import_zalo_cookie_imei(1, 2, "device-id", {"zpsid": "cookie"})
+        text = runner.send_text.call_args.args[1]
+        self.assertIn("#5", text)
+        self.assertNotIn("sensitive-session-key", text)
+        self.assertNotIn("device-id", text)
+
+    def test_telemetry_distinguishes_total_and_enabled_accounts(self):
+        with patch.object(app, "get_all_accounts_from_ram", return_value=[{"enabled": 1}, {"enabled": 0}]):
+            response = self.client.get("/api/miniapp/telemetry")
+        self.assertEqual((response.json["total_accs"], response.json["live_accs"]), (2, 1))
 
     def test_sticker_wait_is_scoped_and_expires(self):
         engine = app.ZaloStickerMakerEngine
