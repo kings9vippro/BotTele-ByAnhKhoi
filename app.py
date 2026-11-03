@@ -19529,6 +19529,10 @@ def api_miniapp_qr_status(session_id):
 def api_miniapp_telemetry():
     now_ts = time.time()
     accounts = get_all_accounts_from_ram()
+    platform_counts = {"zalo": 0, "discord": 0, "messenger": 0, "other": 0}
+    for account in accounts:
+        platform = str(account.get("platform") or "zalo").lower()
+        platform_counts[platform if platform in platform_counts else "other"] += 1
     tasks_list = []
     for tid_k, v in list(ACTIVE_TASKS.items()):
         st_ev = v.get("stop")
@@ -19548,6 +19552,7 @@ def api_miniapp_telemetry():
         "admin_id": TELEGRAM_ADMIN_ID,
         "live_accs": sum(1 for account in accounts if account.get("enabled", 1)),
         "total_accs": len(accounts),
+        "account_platforms": platform_counts,
         "running_tasks": len(tasks_list),
         "tasks": tasks_list,
         "watched_boxes": len(CanhTreoWatchdogEngine.get_watched_boxes()),

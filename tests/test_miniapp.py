@@ -125,6 +125,13 @@ class MiniAppTests(unittest.TestCase):
             response = self.client.get("/api/miniapp/telemetry")
         self.assertEqual((response.json["total_accs"], response.json["live_accs"]), (2, 1))
 
+    def test_telemetry_counts_platforms_without_exposing_credentials(self):
+        accounts = [{"platform": "zalo", "enabled": 1, "token": "private"}, {"platform": "discord", "enabled": 0}, {"platform": "custom"}, {"platform": None}]
+        with patch.object(app, "get_all_accounts_from_ram", return_value=accounts):
+            response = self.client.get("/api/miniapp/telemetry")
+        self.assertEqual(response.json["account_platforms"], {"zalo": 2, "discord": 1, "messenger": 0, "other": 1})
+        self.assertNotIn("private", response.get_data(as_text=True))
+
     def test_sticker_wait_is_scoped_and_expires(self):
         engine = app.ZaloStickerMakerEngine
         with engine._PENDING_LOCK:

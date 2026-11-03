@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
     const path = url.pathname.replace('/api/miniapp/', '');
     calls.push(path);
     const data = {
-      telemetry: { ok: true, live_accs: 1, running_tasks: 1, watched_boxes: 2, ram_mb: 85, tasks: [{ id: 'task-1', mode: 'test', target_label: 'nhóm', uptime_s: 10 }] },
+      telemetry: { ok: true, live_accs: 1, total_accs: 2, account_platforms: {zalo: 1, discord: 1, messenger: 0, other: 0}, running_tasks: 1, watched_boxes: 2, ram_mb: 85, tasks: [{ id: 'task-1', mode: 'test', target_label: 'nhóm', uptime_s: 10 }] },
       accounts: { ok: true, accounts: [{ id: 1, name: '<Account>', platform: 'zalo', uid: '123', chat_cmd_enabled: true }] },
       files: { ok: true, files: [{ filename: 'demo.txt', lines: 2, size_kb: 1 }], selected_nhay: 'demo.txt', selected_ngon: 'ngon.txt' },
       start_qr: { ok: true, session_id: 'session-1' },
@@ -23,8 +23,12 @@ const assert = require('node:assert/strict');
   page.on('dialog', dialog => dialog.accept());
   await page.goto('http://127.0.0.1:5873/miniapp', { waitUntil: 'domcontentloaded' });
   await page.getByText('85 MB').waitFor();
+  await page.getByText('Phân tích tài khoản').waitFor();
+  assert.equal(await page.locator('#platform-analytics .analytics-row').count(), 3);
   assert.equal(await page.locator('html').evaluate(el => el.scrollWidth <= el.clientWidth), true);
   await page.screenshot({ path: '/tmp/glaze-miniapp-overview.png' });
+  await page.locator('#platform-analytics').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: '/tmp/glaze-miniapp-analytics.png' });
   await page.getByRole('tab', { name: 'Tài khoản' }).click();
   await page.getByText('<Account>', { exact: true }).waitFor();
   await page.getByRole('searchbox', { name: 'Tìm tài khoản' }).fill('missing');
