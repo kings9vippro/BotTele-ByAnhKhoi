@@ -15278,6 +15278,21 @@ def extract_multigroup_spec_and_clean_body(raw_body_str, cmd_token=""):
             kept_lines.append(lead_ws + joined_ln)
     return "\n".join(kept_lines).strip("\r\n"), spec_mode, spec_val, inline_tag_all
 
+def build_compact_inchat_menu(platform, active_count):
+    platform_tools = ".sticker — Tạo nhãn dán\n.qr — Kết nối Zalo\n" if platform == "zalo" else ""
+    return (
+        f"GLAZE • {APP_AUTHOR}\n"
+        f"Tài khoản đang bật: {active_count}\n\n"
+        "QUẢN LÝ\n"
+        ".running — Xem tác vụ đang chạy\n"
+        ".t — Dừng tác vụ trong cuộc trò chuyện\n"
+        ".ta — Dừng tất cả tác vụ\n"
+        ".cp / .xq — Quản lý quyền\n\n"
+        f"{platform_tools}"
+        ".ds — Xem kho tệp\n"
+        ".menu — Mở lại bảng lệnh"
+    )
+
 def parse_and_execute_inchat_command(
     zalo_client, acc_row, thread_id, is_group, sender_id, raw_msg,
     raw_mentions=None, discord_client=None, platform="zalo", messenger_client=None,
@@ -15602,72 +15617,10 @@ def parse_and_execute_inchat_command(
             executor.submit(_reply_for_acc, idx_a, a_item)
 
     if cmd_token in ("menu", "help", "lenh", "bot", "hdsd"):
-        with SYSTEM_CFG_LOCK:
-            cur_d = SYSTEM_RUNTIME_CONFIG["delay"]
-            nhay_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_nhay_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_nhay_file", "nhay.txt")
-            ngon_f_now = SYSTEM_RUNTIME_CONFIG.get("selected_ngon_by_acc", {}).get(str(acc_id)) or SYSTEM_RUNTIME_CONFIG.get("selected_ngon_file", "ngon.txt")
-            acc_flt_now = SYSTEM_RUNTIME_CONFIG.get("active_acc_filter", "ALL")
-            rep_x = int(SYSTEM_RUNTIME_CONFIG.get("cmd_repeat_count", 2) or 2)
-        active_accs_cnt = len(get_all_accounts_from_ram(platform=platform, enabled_only=True))
-        flt_lbl = f"Đa Acc ({active_accs_cnt})" if str(acc_flt_now).upper() == "ALL" else f"Acc #{acc_flt_now}"
-
-        short_nhay = (nhay_f_now[:18] + "..") if len(str(nhay_f_now)) > 20 else nhay_f_now
-        short_ngon = (ngon_f_now[:18] + "..") if len(str(ngon_f_now)) > 20 else ngon_f_now
-        if platform == "discord":
-            help_txt = (
-                f"GLAZE\n"
-                f"Author: Dev Anh Khôi | {flt_lbl} | Delay: {cur_d}s\n"
-                f"Nhây: {short_nhay} | Ngôn: {short_ngon}\n\n"
-                f"[TÁC VỤ]\n"
-                f".n [nd] : Nhây từng dòng\n"
-                f".g [nd] : Treo ngôn\n"
-                f".chan [file] : Bám sát 0s\n\n"
-                f"[ĐIỀU HÀNH & HỆ THỐNG]\n"
-                f".chonfile <số> : Chọn file | .ds : Kho file\n"
-                f".d <giây> : Chỉnh delay | .running : Tiến trình\n"
-                f".cp @Tên : Cấp quyền | .xq @Tên : Xoá quyền\n"
-                f".t : Dừng kênh này | .ta : Dừng tất cả"
-            )
-        elif platform == "messenger":
-            help_txt = (
-                f"GLAZE\n"
-                f"Author: Dev Anh Khôi | {flt_lbl} | Delay: {cur_d}s\n"
-                f"Nhây: {short_nhay} | Ngôn: {short_ngon}\n\n"
-                f"[TÁC VỤ]\n"
-                f".n [nd] : Nhây từng dòng\n"
-                f".g [nd] : Treo ngôn\n"
-                f".typing on/off | .nhaytyping | .poll\n\n"
-                f"[ĐIỀU HÀNH & HỆ THỐNG]\n"
-                f".chonfile <số> : Chọn file | .ds : Kho file\n"
-                f".d <giây> : Chỉnh delay | .running : Tiến trình\n"
-                f".cp @Tên : Cấp quyền | .xq @Tên : Xoá quyền\n"
-                f".t : Dừng nhóm này | .ta : Dừng tất cả"
-            )
-        else:
-            help_txt = (
-                f"GLAZE\n"
-                f"Author: Dev Anh Khôi | {flt_lbl} | Delay: {cur_d}s\n"
-                f"Nhây: {short_nhay} | Ngôn: {short_ngon}\n\n"
-                f"[TÁC VỤ]\n"
-                f".n [nd] : Nhây từng dòng\n"
-                f".g [nd] : Treo ngôn\n"
-                f".anall [nd] : Tag ẩn toàn nhóm\n"
-                f".chan [file] : Bám sát mục tiêu 0s\n\n"
-                f"[THÔNG BÁO HỆ THỐNG ZALO]\n"
-                f".giaitan : TB giải tán nhóm hệ thống\n"
-                f".lagbox <all/giaitan/topic/reminder/poll/link/pull> : Bão TB hệ thống\n"
-                f".xoakey : Thu hồi tin Non-Key | .kickall : Kick mem\n\n"
-                f"[TIỆN ÍCH & ĐIỀU HÀNH]\n"
-                f".anh : Gửi ảnh | .sticker : Tạo nhãn dán\n"
-                f".soi : Soi nhóm | .qr : Quét QR Zalo PC\n"
-                f".d <giây> : Chỉnh tốc độ | .mau <màu> : Phối màu\n"
-                f".chonfile <số> : Chọn file | .ds : Kho file\n"
-                f".running : Xem lệnh đang chạy\n"
-                f".cp @Tên : Cấp quyền | .xq @Tên : Xoá quyền\n"
-                f".t : Dừng nhóm này | .ta : Dừng tất cả"
-            )
+        active_count = len(get_all_accounts_from_ram(platform=platform, enabled_only=True))
+        help_txt = build_compact_inchat_menu(platform, active_count)
         _send_reply(help_txt, broadcast_all_accs=False, reply_color_mode="none")
-        log_system_command(acc_id, thread_id, sender_id, text, f"Hiển thị .menu GLAZE 0ms ({platform})")
+        log_system_command(acc_id, thread_id, sender_id, text, f"Hiển thị menu ({platform})")
         return True
 
     if cmd_token in ("running", "tasks", "dangchay", "tien_trinh"):

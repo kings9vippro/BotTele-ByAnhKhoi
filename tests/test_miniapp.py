@@ -19,6 +19,21 @@ class MiniAppTests(unittest.TestCase):
         with self.client.session_transaction() as session:
             session["logged_in"] = True
 
+    def test_compact_menu_is_platform_appropriate(self):
+        menu = app.build_compact_inchat_menu("zalo", 2)
+        self.assertIn("Tài khoản đang bật: 2", menu)
+        self.assertIn(".sticker", menu)
+        for unsafe in (".lagbox", ".kickall", ".floodbox", ".giaitan"):
+            self.assertNotIn(unsafe, menu)
+        self.assertNotIn(".sticker", app.build_compact_inchat_menu("discord", 1))
+
+    def test_telegram_keyboard_does_not_advertise_destructive_functions(self):
+        import get_ck_im_zalo as telegram
+        keyboard = telegram.DirectTelegramBotRunner.build_tabbed_keyboard("func", user_id=telegram.ROOT_ADMIN_ID)
+        callbacks = [button.get("callback_data", "") for row in keyboard["inline_keyboard"] for button in row]
+        for token in ("fn_lag_sys_all", "fn_kickall", "fn_floodbox", "fn_nhay_giaitan"):
+            self.assertFalse(any(token in callback for callback in callbacks))
+
     def test_qr_start_and_status_use_manager_without_leaking_credentials(self):
         with patch.object(app.ZaloQRLoginManager, "start_qr_session", return_value={"ok": True, "session_id": "abc", "status": "generating", "cookies": {"secret": "private"}}):
             result = self.client.post("/api/miniapp/start_qr")

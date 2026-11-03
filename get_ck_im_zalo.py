@@ -201,7 +201,10 @@ FUNCTION_ITEMS_32 = [
     {"id": "fn_fontstyle",     "label": "Cỡ & Kiểu Chữ",           "mode": "special_font",     "color_mode": "word_rainbow", "fixed_color": "red", "file_hint": "",         "desc": "Chọn cỡ chữ To Đậm (f_18), Vừa Đậm (f_15) (.font)", "emoji_id": "5368324170671202286"},
 ]
 
-COMPACT_TELE_FUNCTIONS_16 = FUNCTION_ITEMS_32[:16]
+COMPACT_TELE_FUNCTIONS_16 = [item for item in FUNCTION_ITEMS_32 if item["id"] in {
+    "fn_canh_treo", "fn_zsticker_ai", "fn_link_box", "fn_colormode",
+    "fn_stop_all", "fn_delay", "fn_fontstyle",
+}]
 
 FUNCTION_MAP_BY_ID = {item["id"]: item for item in FUNCTION_ITEMS_32}
 
@@ -1483,7 +1486,7 @@ class DirectTelegramBotRunner:
                 ],
                 [
                     tg_btn("ZSticker AI", "prompt_sticker_maker", emoji_key="magic"),
-                    tg_btn("Giải Tán Nhóm", "pickfn:fn_nhay_giaitan", emoji_key="fire"),
+                    tg_btn("Trạng Thái", "cmd_status", emoji_key="chart"),
                 ],
                 [
                     tg_btn("Chỉnh Tốc Độ Delay", "pickfn:fn_delay", emoji_key="bolt"),
