@@ -12,12 +12,14 @@ let browser;
   let selectedNgon = 'ngon.txt';
   let telemetryFailure = false;
   let providersFailure = false;
+  let taskState = 'running';
   await page.route('https://telegram.org/**', route => route.abort());
   await page.route('**/api/miniapp/**', async route => {
     const url = new URL(route.request().url());
     const path = url.pathname.replace('/api/miniapp/', '');
     calls.push(path);
     if (path === 'select_file') selectedNgon = route.request().postDataJSON().filename;
+    if (path === 'stop_task') taskState = 'stopping';
     if (path === 'telemetry' && telemetryFailure) {
       await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ok: false, error: 'Lỗi lưu trữ mô phỏng'}) });
       return;
@@ -27,12 +29,14 @@ let browser;
       return;
     }
     const data = {
-      telemetry: { ok: true, live_accs: 1, total_accs: 2, oauth_count: 1, listener_count: 1, account_platforms: {zalo: 1, discord: 1, messenger: 0, other: 0}, running_tasks: 1, watched_boxes: 2, ram_mb: 85, tasks: [{ id: 'task-1', mode: 'test', target_label: 'nhóm', uptime_s: 10 }] },
+      telemetry: { ok: true, version: '1.3.0', storage_id: 'abcdef123456abcdef123456abcdef12', live_accs: 1, total_accs: 2, oauth_count: 1, listener_count: 1, account_platforms: {zalo: 1, discord: 1, messenger: 0, other: 0}, running_tasks: taskState === 'running' ? 1 : 0, watched_boxes: 2, ram_mb: 85, tasks: [{ id: 'task-1', mode: 'test', name: 'Full task title', status: taskState, can_stop: true, target_label: 'nhóm', uptime_s: 10 }] },
       accounts: { ok: true, accounts: [{ id: 1, name: '<Account>', platform: 'zalo', uid: '123', chat_cmd_enabled: true }] },
       files: { ok: true, files: [{ filename: 'demo.txt', lines: 2, size_kb: 1 }], selected_nhay: 'demo.txt', selected_ngon: selectedNgon },
       'oauth/providers': { ok: true, providers: [{id: 'discord', label: 'Discord', configured: true}, {id: 'facebook', label: 'Facebook', configured: false, missing: ['FACEBOOK_APP_ID']}] },
       'oauth/connections': { ok: true, connections: [{id: 1, provider: 'discord', provider_uid: '456', display_name: 'My Discord', status: 'authorized'}] },
       'oauth/start': { ok: true, url: 'https://bot.example/oauth/begin/example' },
+      'oauth/configure': {ok: true, message: 'Đã lưu cấu hình', redirect_uri: 'https://bot.example/oauth/callback/discord'},
+      integrations: {ok: true, integrations: [{provider: 'discord', configured: true, name: 'Managed Bot', id: '1234', callback_path: '/integrations/discord'}, {provider: 'facebook', configured: false, callback_path: '/integrations/facebook'}]},
       commands: {ok: true, commands: [{usage: '.menu', title: 'Mở bảng lệnh', description: 'Bảng lệnh chính', platforms: ['zalo', 'discord'], owner_only: false}, {usage: '.sticker', title: 'Tạo nhãn dán', description: 'Gửi ảnh của chính bạn', platforms: ['zalo'], owner_only: false}]},
       start_qr: { ok: true, session_id: 'session-1' },
       'qr_status/session-1': { ok: true, status: 'waiting_scan', message: 'Quét mã QR', qr_base64: 'data:image/png;base64,iVBORw0KGgo=' },
@@ -48,6 +52,9 @@ let browser;
   await page.screenshot({ path: '/tmp/glaze-miniapp-overview.png' });
   await page.locator('#platform-analytics').scrollIntoViewIfNeeded();
   await page.screenshot({ path: '/tmp/glaze-miniapp-analytics.png' });
+  await page.locator('#receipt-storage').fill('abcdef123456');
+  await page.getByRole('button', {name: 'Đối chiếu tài khoản', exact: true}).click();
+  await page.locator('#storage-result').filter({hasText: 'Cùng kho dữ liệu'}).waitFor();
   await page.getByRole('tab', { name: 'Tài khoản' }).click();
   await page.getByText('<Account>', { exact: true }).waitFor();
   await page.getByText('My Discord', { exact: true }).waitFor();
@@ -55,6 +62,17 @@ let browser;
   await page.getByRole('button', { name: 'Đăng nhập Discord' }).click();
   await page.getByRole('link', { name: 'Tiếp tục trên Discord' }).waitFor();
   await page.screenshot({ path: '/tmp/glaze-miniapp-accounts.png' });
+  const oauthSetup = page.locator('#oauth-providers .provider.discord details');
+  await oauthSetup.getByText('Cấu hình ứng dụng', {exact: true}).click();
+  await oauthSetup.getByLabel('App / Client ID', {exact: true}).fill('1234');
+  await oauthSetup.getByLabel('App / Client Secret', {exact: true}).fill('browser-fixture-secret');
+  await oauthSetup.getByLabel('URL HTTPS của bot', {exact: true}).fill('https://bot.example');
+  await page.getByRole('button', {name: 'Đồng bộ', exact: true}).click();
+  await page.waitForFunction(() => !document.getElementById('refresh-accounts').disabled);
+  assert.equal(await oauthSetup.getByLabel('App / Client Secret', {exact: true}).inputValue(), 'browser-fixture-secret', 'background refresh must preserve configuration drafts');
+  await oauthSetup.getByRole('button', {name: 'Xác minh và lưu cấu hình', exact: true}).click();
+  await page.locator('#configuration-result').filter({hasText: 'https://bot.example/oauth/callback/discord'}).waitFor();
+  await page.getByRole('button', {name: 'Đăng ký 4 lệnh Discord', exact: true}).click();
   await page.getByRole('searchbox', { name: 'Tìm tài khoản' }).fill('missing');
   await page.getByText('Không tìm thấy tài khoản phù hợp.').waitFor();
   await page.getByRole('searchbox', { name: 'Tìm tài khoản' }).fill('Account');
@@ -71,6 +89,8 @@ let browser;
   await page.waitForFunction(() => document.getElementById('selected-ngon').textContent === 'demo.txt');
   await page.getByRole('tab', { name: 'Tác vụ' }).click();
   await page.getByRole('button', { name: 'Dừng', exact: true }).click();
+  await page.getByRole('button', {name: 'Đang dừng…', exact: true}).waitFor();
+  assert.equal(await page.getByRole('button', {name: 'Đang dừng…', exact: true}).isDisabled(), true);
   await page.getByRole('tab', { name: 'Lệnh' }).click();
   await page.getByText('.sticker', { exact: true }).waitFor();
   await page.getByRole('combobox', { name: 'Nền tảng lệnh' }).selectOption('discord');
@@ -83,9 +103,11 @@ let browser;
   telemetryFailure = true;
   await page.getByRole('tab', { name: 'Tác vụ' }).click();
   await page.getByText('Dữ liệu cũ', { exact: true }).waitFor();
-  assert.equal(await page.locator('#metric-accounts').textContent(), '1');
+  assert.equal(await page.locator('#metric-accounts').textContent(), '2');
   assert.equal(await page.locator('#metric-memory').textContent(), '85 MB');
   assert.equal(await page.locator('#sync-error').textContent(), 'Lỗi lưu trữ mô phỏng');
+  await page.getByLabel('Lọc tác vụ').selectOption('all');
+  assert.equal(await page.locator('#sync-error').isVisible(), true);
   telemetryFailure = false;
   await page.getByRole('button', { name: 'Làm mới', exact: true }).click();
   await page.getByText('Đã đồng bộ', { exact: true }).waitFor();
@@ -103,7 +125,7 @@ let browser;
   await page.locator('#account-list').getByText('<Account>', {exact: true}).waitFor();
   await page.getByText('OAuth tạm không khả dụng', {exact: true}).waitFor();
   assert.deepEqual(errors, []);
-  for (const path of ['telemetry', 'accounts', 'oauth/providers', 'oauth/connections', 'oauth/start', 'commands', 'start_qr', 'qr_status/session-1', 'toggle_acc_cmd', 'files', 'select_file', 'stop_task']) assert.ok(calls.includes(path), path);
+  for (const path of ['telemetry', 'accounts', 'oauth/providers', 'oauth/connections', 'oauth/start', 'oauth/configure', 'integrations/discord/commands', 'commands', 'start_qr', 'qr_status/session-1', 'toggle_acc_cmd', 'files', 'select_file', 'stop_task']) assert.ok(calls.includes(path), path);
   await browser.close();
   console.log('Mini App mobile navigation and mocked API flows passed');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => { if (browser) await browser.close(); });

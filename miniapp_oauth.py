@@ -1,9 +1,11 @@
-"""Official, admin-initiated OAuth connections. Author: Dev Anh Khôi. Version: 1.2.0.
+"""Official, admin-initiated OAuth connections. Author: Dev Anh Khôi. Version: 1.3.0.
 
 OAuth identities are deliberately separate from legacy chat automation accounts.
 No passwords, browser cookies, self-bot tokens or device impersonation are used.
 """
 import hashlib
+import base64
+import json
 import hmac
 import os
 import re
@@ -24,6 +26,7 @@ class OAuthError(ValueError):
 
 
 def init_oauth_tables(connection):
+    connection.execute("CREATE TABLE IF NOT EXISTS oauth_configuration (provider TEXT PRIMARY KEY, encrypted TEXT NOT NULL)")
     connection.execute("""CREATE TABLE IF NOT EXISTS oauth_attempts (
         state_hash TEXT PRIMARY KEY, provider TEXT NOT NULL, launch_hash TEXT UNIQUE,
         owner_id TEXT NOT NULL, created_at REAL NOT NULL, browser_hash TEXT,
@@ -42,10 +45,12 @@ def _digest(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _config(provider):
+def _config(provider, overrides=None):
     if provider not in PROVIDERS:
         raise OAuthError("Nền tảng không được hỗ trợ")
-    base = (os.environ.get("OAUTH_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    def setting(key):
+        return str((overrides or {}).get(key, os.environ.get(key, ""))).strip()
+    base = setting("OAUTH_PUBLIC_BASE_URL").rstrip("/")
     parsed = urlsplit(base)
     missing = []
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
@@ -53,17 +58,17 @@ def _config(provider):
     prefix = "DISCORD" if provider == "discord" else "FACEBOOK"
     id_key = prefix + ("_CLIENT_ID" if provider == "discord" else "_APP_ID")
     secret_key = prefix + ("_CLIENT_SECRET" if provider == "discord" else "_APP_SECRET")
-    client_id, client_secret = os.environ.get(id_key, "").strip(), os.environ.get(secret_key, "").strip()
+    client_id, client_secret = setting(id_key), setting(secret_key)
     for key, value in ((id_key, client_id), (secret_key, client_secret)):
         if not value:
             missing.append(key)
-    encryption_key = os.environ.get("OAUTH_ENCRYPTION_KEY", "").strip()
+    encryption_key = setting("OAUTH_ENCRYPTION_KEY")
     try:
         cipher = Fernet(encryption_key.encode("ascii"))
     except (ValueError, TypeError, UnicodeError):
         cipher = None
         missing.append("OAUTH_ENCRYPTION_KEY (Fernet)")
-    version = os.environ.get("FACEBOOK_GRAPH_VERSION", "").strip()
+    version = setting("FACEBOOK_GRAPH_VERSION")
     if provider == "facebook" and not re.fullmatch(r"v\d+\.\d+", version):
         missing.append("FACEBOOK_GRAPH_VERSION (phiên bản Meta app đang dùng)")
     return {"missing": missing, "client_id": client_id, "client_secret": client_secret,
@@ -123,6 +128,63 @@ def _exchange_profile(provider, config, code):
 
 
 def register_oauth_routes(app, db, owner_id):
+    def configuration_cipher(purpose="configuration"):
+        key = hashlib.sha256(("glaze-oauth-" + purpose + str(app.secret_key)).encode()).digest()
+        return Fernet(base64.urlsafe_b64encode(key))
+
+    def configuration(provider):
+        conn = db()
+        try:
+            row = conn.execute("SELECT encrypted FROM oauth_configuration WHERE provider=?", (provider,)).fetchone()
+        finally:
+            conn.close()
+        values = None
+        if row:
+            from cryptography.fernet import InvalidToken
+            try:
+                values = json.loads(configuration_cipher().decrypt(row[0].encode()).decode())
+            except (InvalidToken, ValueError):
+                raise OAuthError("SECRET_KEY đã thay đổi. Cần lưu lại cấu hình OAuth.") from None
+            values["OAUTH_ENCRYPTION_KEY"] = os.environ.get("OAUTH_ENCRYPTION_KEY") or base64.urlsafe_b64encode(hashlib.sha256(("glaze-oauth-tokens" + str(app.secret_key)).encode()).digest()).decode()
+        return _config(provider, values)
+
+    @app.post("/api/miniapp/oauth/configure")
+    def oauth_configure():
+        data = request.get_json(silent=True) or {}
+        provider = str(data.get("provider") or "")
+        if provider not in PROVIDERS:
+            return jsonify({"ok": False, "error": "Nền tảng không hợp lệ"}), 400
+        if not os.environ.get("SECRET_KEY"):
+            return jsonify({"ok": False, "error": "Máy chủ cần SECRET_KEY cố định trước khi lưu cấu hình"}), 503
+        client_id, secret = str(data.get("client_id") or "").strip(), str(data.get("client_secret") or "").strip()
+        if not client_id.isdigit() or not secret:
+            return jsonify({"ok": False, "error": "Cần App/Client ID dạng số và secret ứng dụng"}), 400
+        prefix = "DISCORD" if provider == "discord" else "FACEBOOK"
+        values = {"OAUTH_PUBLIC_BASE_URL": str(data.get("public_base_url") or "").strip().rstrip("/"),
+                  prefix + ("_CLIENT_ID" if provider == "discord" else "_APP_ID"): client_id,
+                  prefix + ("_CLIENT_SECRET" if provider == "discord" else "_APP_SECRET"): secret,
+                  "FACEBOOK_GRAPH_VERSION": str(data.get("graph_version") or "").strip(),
+                  "OAUTH_ENCRYPTION_KEY": base64.urlsafe_b64encode(hashlib.sha256(b"validation-only").digest()).decode()}
+        try:
+            validated = _config(provider, values)
+        except ValueError:
+            return jsonify({"ok": False, "error": "URL HTTPS không hợp lệ"}), 400
+        if validated["missing"]:
+            return jsonify({"ok": False, "error": "Cấu hình chưa hợp lệ: " + ", ".join(validated["missing"])}), 400
+        values.pop("OAUTH_ENCRYPTION_KEY")
+        encrypted = configuration_cipher().encrypt(json.dumps(values).encode()).decode()
+        conn = db()
+        try:
+            conn.execute("INSERT OR REPLACE INTO oauth_configuration(provider, encrypted) VALUES(?, ?)", (provider, encrypted))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        app.config["SESSION_COOKIE_SECURE"] = True
+        return jsonify({"ok": True, "message": "Đã lưu cấu hình được mã hóa. Đăng ký callback này trong ứng dụng của bạn.", "redirect_uri": validated["redirect_uri"]})
+
     def result_page(message, status=200):
         body = render_template_string("""<!doctype html><html lang="vi"><meta charset="utf-8">
         <meta name="viewport" content="width=device-width,initial-scale=1"><title>Kết nối GLAZE</title>
@@ -134,7 +196,7 @@ def register_oauth_routes(app, db, owner_id):
     def oauth_providers():
         providers = []
         for provider, label in PROVIDERS.items():
-            config = _config(provider)
+            config = configuration(provider)
             providers.append({"id": provider, "label": label, "configured": not config["missing"],
                               "missing": config["missing"], "redirect_uri": config["redirect_uri"] if config["base"] else None,
                               "scope": "identify" if provider == "discord" else "public_profile"})
@@ -148,7 +210,7 @@ def register_oauth_routes(app, db, owner_id):
     def oauth_start():
         provider = str((request.get_json(silent=True) or {}).get("provider") or "")
         try:
-            config = _config(provider)
+            config = configuration(provider)
         except OAuthError as error:
             return jsonify({"ok": False, "error": str(error)}), 400
         if config["missing"]:
@@ -185,7 +247,7 @@ def register_oauth_routes(app, db, owner_id):
             row = conn.execute("SELECT * FROM oauth_attempts WHERE state_hash=? AND launch_hash=? AND used=0 AND created_at>=?", (_digest(values["state"]), _digest(values["launch"]), time.time() - ATTEMPT_TTL)).fetchone()
             if not row:
                 return result_page("Liên kết đã dùng hoặc đã hết hạn.", 400)
-            config = _config(row["provider"])
+            config = configuration(row["provider"])
             if config["missing"]:
                 return result_page("Máy chủ chưa cấu hình đăng nhập OAuth.", 503)
             binding = secrets.token_urlsafe(32)
@@ -224,7 +286,7 @@ def register_oauth_routes(app, db, owner_id):
                 return result_page("Mã đăng nhập đã được sử dụng.", 400)
             if request.args.get("error") or not request.args.get("code"):
                 return result_page("Bạn chưa cấp quyền. Không có tài khoản nào được thêm.", 400)
-            config = _config(provider)
+            config = configuration(provider)
             if config["missing"]:
                 return result_page("Cấu hình OAuth đã thay đổi. Hãy kiểm tra cấu hình máy chủ.", 503)
             try:

@@ -1,4 +1,4 @@
-/* GLAZE · Author: Dev Anh Khôi · Version: 1.2.0 */
+/* GLAZE · Author: Dev Anh Khôi · Version: 1.3.0 */
 'use strict';
 
 (() => {
@@ -24,6 +24,9 @@
   let commands = [];
   let selected = {};
   let lastSuccess;
+  let telemetryCache;
+  let providerView = null;
+  let integrationView = null;
 
   function node(tag, text, className) {
     const element = document.createElement(tag);
@@ -117,7 +120,7 @@
   }
 
   const pages = {
-    overview: ['Một chạm. Mọi kết nối.', 'Tài khoản, dữ liệu và công cụ. Gọn trong một không gian.'],
+    overview: ['Không gian quản lý của bạn.', 'Tài khoản, dữ liệu và công cụ. Gọn trong một không gian.'],
     tasks: ['Theo dõi. Chủ động.', 'Kiểm tra và dừng các tác vụ trong hệ thống.'],
     accounts: ['Kết nối của bạn.', 'Ba nền tảng. Một nơi quản lý. Trạng thái rõ ràng.'],
     files: ['Kho tệp. Gọn gàng.', 'Tệp của bạn, lựa chọn của bạn — được lưu và đồng bộ.'],
@@ -134,6 +137,7 @@
   function switchTab(name) {
     if (!pages[name]) return;
     currentTab = name;
+    document.querySelector('.nav').style.setProperty('--tab-index', String(tabs.findIndex(tab => tab.dataset.tab === name)));
     document.querySelectorAll('[data-tab]').forEach(button => {
       const active = button.dataset.tab === name;
       button.setAttribute('aria-selected', String(active));
@@ -164,25 +168,35 @@
     if (!tasks.length) return empty(target, 'Chưa có tác vụ nào đang chạy.');
     target.replaceChildren();
     tasks.forEach(task => {
-      const item = row(task.mode || 'Tác vụ', `${task.target_label || '—'} · ${task.uptime_s || 0} giây`);
-      item.append(action('Dừng', async () => {
-        await post('stop_task', { task_id: task.id });
-        toast('Đã gửi yêu cầu dừng');
+      const labels = {running: 'Đang chạy', stopping: 'Đang dừng', stopped: 'Đã dừng', interrupted: 'Bị ngắt khi khởi động lại', finished: 'Đã kết thúc', completed: 'Hoàn tất', failed: 'Lỗi'};
+      const state = task.status || 'running';
+      const item = row(task.name || task.mode || 'Tác vụ', `${task.mode || 'task'} · ${task.target_label || '—'} · ${(task.account_names || []).join(', ') || 'Chưa có tên tài khoản'} · ${labels[state] || state} · ${task.uptime_s || 0} giây · Đã gửi ${task.sent || 0} / Lỗi ${task.failed || 0}`);
+      item.append(node('div', '#' + task.id, 'row-meta task-id'));
+      if (task.can_stop !== false && state !== 'stopped') {
+        const stopButton = action(state === 'stopping' ? 'Đang dừng…' : 'Dừng', async () => {
+        const result = await post('stop_task', { task_id: task.id });
+        toast(result.message || 'Đã gửi yêu cầu dừng');
         await refresh(true);
-      }, 'button small danger'));
+        }, 'button small danger');
+        stopButton.disabled = state === 'stopping';
+        item.append(stopButton);
+      }
       target.append(item);
     });
   }
 
   function renderTelemetry(data) {
-    $('metric-accounts').textContent = data.live_accs ?? '—';
-    $('metric-account-total').textContent = 'Đã lưu cho bot: ' + (data.total_accs ?? '—');
+    telemetryCache = data;
+    $('metric-accounts').textContent = data.total_accs ?? '—';
+    $('metric-account-total').textContent = 'Đang bật: ' + (data.live_accs ?? '—');
     $('metric-tasks').textContent = data.running_tasks ?? '—';
     $('metric-listeners').textContent = 'Luồng lắng nghe: ' + (data.listener_count ?? '—');
-    $('metric-oauth').textContent = data.oauth_count ?? '—';
+    $('metric-oauth').textContent = (data.oauth_count || 0) + (data.official_count || 0);
     $('metric-memory').textContent = data.ram_mb === undefined ? '—' : data.ram_mb + ' MB';
-    renderTasks($('overview-tasks'), (data.tasks || []).slice(0, 3));
-    renderTasks($('task-list'), data.tasks || []);
+    const visibleTasks = $('task-filter').value === 'all' ? (data.tasks || []) : (data.tasks || []).filter(task => ['running', 'stopping'].includes(task.status || 'running'));
+    renderTasks($('overview-tasks'), (data.tasks || []).filter(task => ['running', 'stopping'].includes(task.status || 'running')).slice(0, 3));
+    renderTasks($('task-list'), visibleTasks);
+    $('storage-info').textContent = `Kho dữ liệu: ${(data.storage_id || 'chưa xác định').slice(0, 12)} · Bản ${data.version || '—'} · ${data.total_accs ?? '—'} tài khoản`;
     const target = $('platform-analytics');
     target.replaceChildren();
     if (data.account_platforms) {
@@ -253,6 +267,9 @@
   }
 
   function renderProviders(providers) {
+    const view = JSON.stringify(providers);
+    if (view === providerView) return;
+    providerView = view;
     $('oauth-providers').replaceChildren();
     providers.forEach(provider => {
       const card = node('article', undefined, 'card provider ' + provider.id);
@@ -278,6 +295,17 @@
       }, 'button');
       button.disabled = !provider.configured;
       card.append(button);
+      const setup = node('details');
+      setup.append(node('summary', 'Cấu hình ứng dụng'));
+      const fields = [['client_id', 'App / Client ID'], ['client_secret', 'App / Client Secret', 'password'], ['public_base_url', 'URL HTTPS của bot', 'url']];
+      if (provider.id === 'facebook') fields.push(['graph_version', 'Phiên bản Graph API (vN.N)']);
+      setup.append(configurationForm(fields, async values => {
+        const result = await post('oauth/configure', {provider: provider.id, ...values});
+        $('configuration-result').textContent = result.message + ' Callback: ' + result.redirect_uri;
+        $('configuration-result').hidden = false;
+        await loadAccounts(true);
+      }));
+      card.append(setup);
       $('oauth-providers').append(card);
     });
   }
@@ -303,7 +331,7 @@
   function loadAccounts(fresh = false) {
     return once('accounts', async () => {
       // A failed provider service must not hide successfully stored Zalo accounts.
-      const results = await Promise.allSettled([api('accounts'), api('oauth/providers'), api('oauth/connections')]);
+      const results = await Promise.allSettled([api('accounts'), api('oauth/providers'), api('oauth/connections'), api('integrations')]);
       if (results[0].status === 'fulfilled') {
         accounts = results[0].value.accounts || [];
         renderAccounts();
@@ -311,11 +339,91 @@
       if (results[1].status === 'fulfilled') renderProviders(results[1].value.providers || []);
       else if (!$('oauth-providers').querySelector('.provider')) empty($('oauth-providers'), 'Chưa tải được cấu hình OAuth. Hãy Đồng bộ lại.');
       if (results[2].status === 'fulfilled') renderConnections(results[2].value.connections || []);
+      if (results[3].status === 'fulfilled') renderOfficialIntegrations(results[3].value.integrations || []);
       const failure = results.find(result => result.status === 'rejected');
       if (failure) throw failure.reason;
     }, fresh);
   }
   $('account-search').addEventListener('input', renderAccounts);
+  function configurationForm(fields, submit) {
+    const form = node('form', undefined, 'stack details-body');
+    for (const [name, title, type = 'text'] of fields) {
+      const label = node('label', title, 'field');
+      const input = node('input');
+      input.name = name;
+      input.type = type;
+      input.required = true;
+      input.autocomplete = type === 'password' ? 'new-password' : 'off';
+      if (name === 'public_base_url' && location.protocol === 'https:') input.value = location.origin;
+      label.append(input);
+      form.append(label);
+    }
+    const button = node('button', 'Xác minh và lưu cấu hình', 'button full');
+    button.type = 'submit';
+    form.append(button);
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const values = Object.fromEntries(new FormData(form));
+      busy(button, async () => { await submit(values); form.reset(); });
+    });
+    return form;
+  }
+
+  function renderOfficialIntegrations(integrations) {
+    const view = JSON.stringify(integrations);
+    if (view === integrationView) return;
+    integrationView = view;
+    $('official-integrations').replaceChildren();
+    for (const provider of ['discord', 'facebook']) {
+      const states = integrations.filter(item => item.provider === provider && (item.configured || item.id));
+      const title = provider === 'discord' ? 'Discord Bot' : 'Facebook Page';
+      const setupCard = node('article', undefined, 'card stack');
+      setupCard.append(node('h3', title), node('p', states.length + ' kết nối đã lưu'));
+      const details = node('details');
+      details.append(node('summary', 'Thêm hoặc cập nhật ' + title));
+      const fields = [['token', provider === 'discord' ? 'Bot Token (Discord Developer Portal)' : 'Page Access Token', 'password'], ['owner_ids', provider === 'discord' ? 'Discord User ID quản lý toàn hệ thống (phân cách dấu phẩy)' : 'PSID quản lý toàn hệ thống (phân cách dấu phẩy)']];
+      if (provider === 'discord') fields.push(['public_key', 'Application Public Key']);
+      else fields.push(['page_id', 'Page ID'], ['app_secret', 'Meta App Secret', 'password'], ['verify_token', 'Webhook Verify Token', 'password'], ['graph_version', 'Phiên bản Graph API (vN.N)']);
+      details.append(configurationForm(fields, async values => {
+        const result = await post('integrations/configure', {provider, ...values}, 25000);
+        $('configuration-result').textContent = result.message + ' Callback: ' + location.origin + result.callback_path;
+        $('configuration-result').hidden = false;
+        await allUpdates([loadAccounts(true), refresh(true)]);
+      }));
+      setupCard.append(details);
+      $('official-integrations').append(setupCard);
+      for (const state of states) {
+        const card = node('article', undefined, 'card stack');
+        card.append(node('h3', state.name || title + ' #' + state.id), node('p', 'ID ' + state.id + ' · ' + (state.configured ? 'Đã lưu cấu hình' : state.error || 'Cần cấu hình lại')));
+        card.append(node('p', 'Callback HTTPS: ' + location.origin + (state.callback_path || '/integrations/' + provider + '/' + state.id)));
+        if (provider === 'discord' && state.configured) card.append(action('Đăng ký 4 lệnh Discord', async () => {
+          const result = await post('integrations/discord/commands', {id: state.id}, 60000);
+          toast(result.message);
+        }, 'button'));
+        card.append(action('Xóa cấu hình ' + title, async () => {
+          if (!confirm('Xóa cấu hình ' + (state.name || title) + ' #' + state.id + ' lưu tại bot?')) return;
+          const result = await post('integrations/disconnect', {provider, id: state.id});
+          toast(result.message);
+          await allUpdates([loadAccounts(true), refresh(true)]);
+        }, 'button small danger'));
+        $('official-integrations').append(card);
+      }
+    }
+  }
+
+  $('task-filter').addEventListener('change', () => {
+    const tasks = telemetryCache?.tasks || [];
+    renderTasks($('task-list'), $('task-filter').value === 'all' ? tasks : tasks.filter(task => ['running', 'stopping'].includes(task.status || 'running')));
+  });
+  $('compare-storage').addEventListener('click', event => busy(event.currentTarget, async () => {
+    const expected = $('receipt-storage').value.trim().toLowerCase();
+    if (!/^[a-f0-9]{12,32}$/.test(expected)) throw new Error('Nhập mã kho trong xác nhận Telegram, không nhập cookie hoặc token');
+    await allUpdates([refresh(true), loadAccounts(true)]);
+    const actual = telemetryCache?.storage_id || '';
+    $('storage-result').textContent = actual.startsWith(expected)
+      ? `Cùng kho dữ liệu. Máy chủ hiện có ${telemetryCache.total_accs} tài khoản. Nếu số lượng không đúng, cần kiểm tra lần khởi động lại và lưu trữ của dịch vụ.`
+      : 'Hai mã kho khác nhau. Mini App đang đọc dữ liệu khác với xác nhận Telegram; kiểm tra URL dịch vụ và cấu hình DATABASE_PATH / APP_DATA_DIR.';
+  }));
   $('account-filter').addEventListener('change', renderAccounts);
   $('refresh-accounts').addEventListener('click', event => busy(event.currentTarget, async () => {
     await allUpdates([loadAccounts(true), refresh(true)]);
@@ -489,7 +597,15 @@
   }
 
   fire(refresh());
-  const refreshTimer = setInterval(() => { if (!document.hidden) fire(loadCurrent()); }, 10000);
+  let lastPoll = Date.now();
+  const refreshTimer = setInterval(() => {
+    if (document.hidden) return;
+    const stopping = telemetryCache?.tasks?.some(task => task.status === 'stopping');
+    if (Date.now() - lastPoll >= (stopping ? 2000 : 10000)) {
+      lastPoll = Date.now();
+      fire(loadCurrent());
+    }
+  }, 2000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) fire(loadCurrent()); });
   window.addEventListener('pagehide', () => { clearInterval(refreshTimer); clearTimeout(qrTimer); qrGeneration++; });
 })();

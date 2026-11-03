@@ -115,7 +115,7 @@ class MiniAppTests(unittest.TestCase):
             runner.handle_import_zalo_cookie_imei(1, 2, "device-id", {"zpsid": "cookie"})
         self.assertIn("Không lưu được", runner.send_text.call_args.args[1])
         runner.send_text.reset_mock()
-        with patch.object(telegram, "check_zalo_cookie_imei_live", return_value=check), patch.object(telegram, "sync_zalo_account_to_web_db", return_value=5):
+        with patch.object(telegram, "check_zalo_cookie_imei_live", return_value=check), patch.object(telegram, "sync_zalo_account_to_web_db", return_value=5), patch.object(telegram, "saved_account_receipt", return_value={"storage_id": "test-storage", "commands_enabled": True, "account_count": 1}):
             runner.handle_import_zalo_cookie_imei(1, 2, "device-id", {"zpsid": "cookie"})
         text = runner.send_text.call_args.args[1]
         self.assertIn("#5", text)
@@ -220,7 +220,7 @@ class MiniAppTests(unittest.TestCase):
 
     def test_miniapp_has_fresh_build_header(self):
         response = self.client.get("/miniapp")
-        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-1.2.0")
+        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-1.3.0")
         self.assertIn("no-store", response.headers["Cache-Control"])
 
     def test_custom_sticker_upload_plain_response_reaches_send(self):

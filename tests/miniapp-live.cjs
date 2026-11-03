@@ -17,7 +17,7 @@ let browser;
   await page.route('https://telegram.org/**', route => route.abort());
   const telemetryResponse = page.waitForResponse(response => response.url().includes('/api/miniapp/telemetry'));
   const response = await page.goto('http://127.0.0.1:5873/miniapp#tgWebAppData=' + encodeURIComponent(initData));
-  assert.equal(response.headers()['x-glaze-ui-version'], 'miniapp-1.2.0');
+  assert.equal(response.headers()['x-glaze-ui-version'], 'miniapp-1.3.0');
   assert.equal((await telemetryResponse).status(), 200, 'signed launch data works even when the Telegram SDK is unavailable');
   await page.getByText('Đã đồng bộ', {exact: true}).waitFor();
   const unauthorized = await page.request.get('http://127.0.0.1:5873/api/miniapp/accounts');

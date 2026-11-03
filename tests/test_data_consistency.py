@@ -19,6 +19,8 @@ class DataConsistencyTests(unittest.TestCase):
         self.addCleanup(self.folder.cleanup)
         for name, value in (("_ACTIVE_DB_PATH", os.path.join(self.folder.name, "test.db")),
                             ("_DB_TLS", threading.local()),
+                            ("ACCOUNTS_RAM_CACHE", {}),
+                            ("_LAST_ACCOUNTS_SYNC_TS", 0),
                             ("UPLOAD_DIR", self.folder.name),
                             ("SYSTEM_RUNTIME_CONFIG", copy.deepcopy(app.SYSTEM_RUNTIME_CONFIG))):
             patcher = patch.object(app, name, value)

@@ -20,16 +20,16 @@
     </header>
     <section class="hero">
       <div class="eyebrow">YOUR CONNECTED SPACE</div>
-      <h1 id="page-title">Một chạm.<br><span>Mọi kết nối.</span></h1>
+      <h1 id="page-title">Không gian quản lý<span> của bạn.</span></h1>
       <p id="page-description">Tài khoản, dữ liệu và công cụ. Gọn trong một không gian.</p>
       <div class="hero-line" aria-hidden="true"><span></span><span></span><span></span></div>
     </section>
     <div class="notice error" id="sync-error" role="alert" hidden></div>
     <section class="pane" id="overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
       <div class="metric-grid">
-        <article class="metric violet"><div class="metric-heading"><span>Tài khoản bật</span><span aria-hidden="true">◎</span></div><strong id="metric-accounts">—</strong><small id="metric-account-total">Đã lưu: —</small></article>
+        <article class="metric violet"><div class="metric-heading"><span>Tài khoản đã lưu</span><span aria-hidden="true">◎</span></div><strong id="metric-accounts">—</strong><small id="metric-account-total">Đang bật: —</small></article>
         <article class="metric cyan"><div class="metric-heading"><span>Tác vụ đang chạy</span><span aria-hidden="true">◷</span></div><strong id="metric-tasks">—</strong><small id="metric-listeners">Luồng lắng nghe: —</small></article>
-        <article class="metric pink"><div class="metric-heading"><span>Liên kết OAuth</span><span aria-hidden="true">→</span></div><strong id="metric-oauth">—</strong><small>Discord &amp; Facebook đã lưu</small></article>
+        <article class="metric pink"><div class="metric-heading"><span>Liên kết đã lưu</span><span aria-hidden="true">→</span></div><strong id="metric-oauth">—</strong><small>OAuth / Discord Bot / Page</small></article>
         <article class="metric amber"><div class="metric-heading"><span>Bộ nhớ</span><span aria-hidden="true">▤</span></div><strong id="metric-memory">—</strong><small>RAM của tiến trình</small></article>
       </div>
       <div class="section-head"><div><span class="kicker">BẮT ĐẦU TỪ ĐÂY</span><h2>Không gian làm việc</h2></div><span class="badge">3 nền tảng</span></div>
@@ -39,9 +39,11 @@
       <div class="section-head"><div><h2>Tác vụ hiện tại</h2><p>Chỉ hiển thị những tác vụ đang chạy</p></div><button class="text-button" data-go="tasks">Xem hết →</button></div>
       <div class="card" id="overview-tasks"><div class="empty">Đang tải…</div></div>
       <p id="last-updated" class="sync-time">Chưa có bản cập nhật thành công</p>
+      <div class="card stack"><p id="storage-info">Đang xác định kho dữ liệu…</p><label class="field">Đối chiếu mã kho trong xác nhận của Telegram<input id="receipt-storage" maxlength="32" placeholder="12 ký tự sau Kho dữ liệu"></label><button class="button" id="compare-storage">Đối chiếu tài khoản</button><p id="storage-result" role="status"></p></div>
     </section>
     <section class="pane" id="tasks" role="tabpanel" aria-labelledby="tab-tasks" tabindex="0" hidden>
       <div class="section-head"><div><h2>Đang hoạt động</h2><p>Trạng thái trong tiến trình máy chủ hiện tại</p></div><button class="button small" data-refresh>Làm mới</button></div>
+      <label class="field">Hiển thị tác vụ<select id="task-filter" aria-label="Lọc tác vụ"><option value="active">Đang chạy / đang dừng</option><option value="all">Cả tác vụ đã kết thúc</option></select></label>
       <div class="card" id="task-list"><div class="empty">Đang tải…</div></div>
       <button id="stop-all" class="button danger full">Dừng tất cả tác vụ</button>
     </section>
@@ -49,10 +51,14 @@
       <div class="section-head"><div><span class="kicker">KẾT NỐI CHÍNH CHỦ</span><h2>Discord &amp; Facebook</h2></div></div>
       <p class="section-description">Đăng nhập bằng email trên trang chính thức của nhà cung cấp. Bot không nhận mật khẩu và không xuất cookie phiên.</p>
       <div id="oauth-providers" class="provider-grid"><div class="card empty">Đang kiểm tra cấu hình…</div></div>
+      <div id="configuration-result" class="notice" role="status" hidden></div>
       <a id="oauth-link" class="button primary full" href="#" target="_blank" rel="noopener noreferrer" hidden>Tiếp tục đăng nhập →</a>
       <div class="notice">OAuth chỉ cấp quyền hồ sơ đã đồng ý; không biến tài khoản cá nhân thành bot gửi tin nhắn. Phiên hết hạn cần kết nối lại.</div>
       <div class="section-head"><div><h2>Liên kết đã xác minh</h2><p>Được lưu riêng với tài khoản chạy bot</p></div></div>
       <div class="card" id="oauth-connections"><div class="empty">Đang tải…</div></div>
+      <div class="section-head"><div><h2>Bot Discord &amp; Facebook Page</h2><p>Lệnh quản lý qua API chính thức</p></div></div>
+      <div class="notice">Discord dùng /menu, /status, /tasks, /stopall sau khi đăng ký Interactions URL. Facebook Page nhận menu, status, tasks, stopall từ các ID quản lý đã cấu hình; cần quyền pages_messaging và webhook của Meta.</div>
+      <div id="official-integrations" class="stack"><div class="empty">Đang tải cấu hình…</div></div>
       <div class="section-head"><div><h2>Kết nối Zalo</h2><p>Quét QR và xác nhận trên điện thoại của bạn</p></div><span class="badge">QR / Cookie</span></div>
       <div class="card stack">
         <button class="button primary full" id="start-qr">▦ Tạo mã QR</button>

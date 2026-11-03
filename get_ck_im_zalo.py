@@ -5,7 +5,7 @@
 # ==============================================================================
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 import os
 import re
@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from urllib.parse import urlencode
 import requests
-from app_storage import DATABASE_PATH, UPLOAD_PATH, connect_database
+from app_storage import DATABASE_PATH, UPLOAD_PATH, connect_database, storage_identity, account_receipt
 from requests.adapters import HTTPAdapter
 
 try:
@@ -48,8 +48,8 @@ from zalo_login import (
 )
 
 # CẤU HÌNH BOT TELEGRAM TRUNG TÂM (GLAZE)
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-ROOT_ADMIN_ID = str(os.environ.get("TELEGRAM_ADMIN_ID", "")).strip()
+from bot_settings import TELEGRAM_BOT_TOKEN, TELEGRAM_ADMIN_ID
+ROOT_ADMIN_ID = TELEGRAM_ADMIN_ID
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = DATABASE_PATH
@@ -276,6 +276,14 @@ def _open_db():
     except Exception:
         pass
     return connect_database(eff_path)
+
+
+def saved_account_receipt(account_id):
+    connection = _open_db()
+    try:
+        return account_receipt(connection, account_id)
+    finally:
+        connection.close()
 
 
 def _load_auth_ram_cache():
@@ -744,7 +752,7 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
                 """UPDATE accounts
                    SET name=?, imei=?, cookies=?, uid=CASE WHEN ? != '' THEN ? ELSE uid END,
                        zpw_enk=CASE WHEN ? != '' THEN ? ELSE zpw_enk END,
-                       user_agent=?, chat_cmd_enabled=1, cmd_prefix='.', allow_all_cmd=0, enabled=1,
+                       user_agent=?, allow_all_cmd=0, enabled=1,
                        owner_tg_id=?
                    WHERE id=?""",
                 (acc_label, imei_str, cookies_json, uid_str, uid_str, enk_str, enk_str, ua, eff_owner, acc_id),
@@ -1726,7 +1734,7 @@ class DirectTelegramBotRunner:
                 stopped = 0
             cap = self.build_tabbed_caption(
                 user_id=user_id, active_tab="func", page=2,
-                extra_notice=f"{tg_anim('stop', '')} <b>ĐÃ DỪNG TẤT CẢ ({stopped} chiến dịch)!</b>"
+                extra_notice=f"{tg_anim('stop', '')} <b>ĐÃ GỬI YÊU CẦU DỪNG ({stopped} tác vụ). Xem trạng thái trong Mini App.</b>"
             )
             self.edit_menu_message(chat_id, message_id, cap, reply_markup=self.build_tabbed_keyboard("func", 2, user_id=user_id))
             return
@@ -2286,6 +2294,7 @@ class DirectTelegramBotRunner:
                     self.delete_msg(chat_id, wait_mid)
                 self.send_text(chat_id, "Không lưu được tài khoản. Vui lòng kiểm tra cơ sở dữ liệu và thử lại.", reply_to=reply_to)
                 return
+            receipt = saved_account_receipt(acc_id)
             self._cached_boxes_by_user.clear()
 
             if wait_mid:
@@ -2294,7 +2303,7 @@ class DirectTelegramBotRunner:
             st_text = (
                 f"<b>Kiểm tra thành công ({grp_cnt} nhóm)</b>"
                 if chk.get("alive")
-                else "<b>Đã lưu vào hệ thống & đang tự động đồng bộ phiên</b>"
+                else "<b>Đã lưu; phiên đăng nhập chưa được xác minh</b>"
             )
             msg_out = (
                 f"{tg_anim('check', '')} <b>ĐÃ LƯU TÀI KHOẢN ZALO</b>\n\n"
@@ -2303,7 +2312,8 @@ class DirectTelegramBotRunner:
                 f"🆔 UID Zalo: <code>{eff_uid or 'Tự động nhận diện'}</code>\n"
                 f"Trạng thái: {st_text}\n"
                 f"Quyền quản lý Cookie: <b>Chỉ bạn & Admin chính xem được</b>\n"
-                f"Lệnh chat: <b>ĐÃ BẬT</b>\n"
+                f"Kho dữ liệu: <code>{receipt['storage_id'][:12]}</code> · {receipt['account_count']} tài khoản\n"
+                f"Lệnh chat: <b>{'ĐÃ BẬT' if receipt['commands_enabled'] else 'ĐANG TẮT'}</b>\n"
                 f"Gõ <code>.menu</code> để xem các lệnh hiện có."
                 f"</blockquote>\n\n"
                 f"Thông tin phiên đã được lưu trong hệ thống."

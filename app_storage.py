@@ -1,15 +1,36 @@
-"""Shared storage configuration. Author: Dev Anh Khôi. Version: 1.2.0."""
+"""Shared storage configuration. Author: Dev Anh Khôi. Version: 1.3.0."""
 import os
 import sqlite3
 import tempfile
 import threading
 import time
+import uuid
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.abspath(os.environ.get("APP_DATA_DIR") or BASE_DIR)
 DATABASE_PATH = os.path.abspath(os.environ.get("DATABASE_PATH") or os.path.join(DATA_DIR, "database.db"))
 UPLOAD_PATH = os.path.join(DATA_DIR, "uploads")
 FILE_WRITE_LOCK = threading.RLock()
+
+
+def storage_identity(connection):
+    """An opaque identifier shared by receipts and the Mini App, never a path."""
+    existing = connection.execute("SELECT value FROM app_settings WHERE key='storage_id'").fetchone()
+    if existing:
+        return existing[0]
+    connection.execute("INSERT OR IGNORE INTO app_settings(key, value) VALUES('storage_id', ?)", (uuid.uuid4().hex,))
+    connection.commit()
+    row = connection.execute("SELECT value FROM app_settings WHERE key='storage_id'").fetchone()
+    return row[0]
+
+
+def account_receipt(connection, account_id):
+    row = connection.execute("SELECT id, chat_cmd_enabled FROM accounts WHERE id=?", (account_id,)).fetchone()
+    if row is None:
+        raise ValueError("Tài khoản chưa có trong dữ liệu")
+    return {"account_id": row[0], "commands_enabled": bool(row[1] if row[1] is not None else 1),
+            "storage_id": storage_identity(connection),
+            "account_count": connection.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]}
 
 
 def normalize_file_index(connection, folder):

@@ -1,10 +1,14 @@
 # HƯỚNG DẪN DỰ ÁN GLAZE
 Nhà Phát Triển: Dev Khôi Phan & Dev Anh Khôi
-Phiên Bản: v1.2.0
+Phiên Bản: v1.3.0
 
 ## 1. Cấu trúc dự án
 
-- `app.py`: Máy chủ Flask, kết nối và xử lý tác vụ.
+- `app.py`: Điểm khởi động nhỏ, vẫn dùng lệnh `gunicorn app:app --config gunicorn.conf.py`.
+- `glaze_app.py`: Runtime Flask và kết nối nền, được nạp đúng một lần qua mọi điểm khởi động.
+- `bot_settings.py`: Cấu hình token/admin Telegram dùng chung; cấu hình hiện có được giữ nguyên ở đây.
+- `task_control.py`: Trạng thái tác vụ và gửi tín hiệu dừng.
+- `official_integrations.py`: Discord Interactions và webhook Facebook Page cho lệnh quản lý.
 - `zalo_core.cpp`: Mã nguồn C++ lưu tham khảo; ứng dụng hiện không nạp tệp nhị phân dựng sẵn.
 - `get_ck_im_zalo.py`: Bộ điều khiển Telegram.
 - `zalo_login.py`: Đăng nhập QR và quản lý phiên Zalo.
@@ -123,3 +127,91 @@ và `tests/miniapp-live.cjs` (API/SQLite thật trên máy local). Test live ch�
 với server local cô lập tại cổng 5873, `APP_DATA_DIR` là thư mục tạm,
 `TELEGRAM_BOT_TOKEN=test-token`, `TELEGRAM_ADMIN_ID=123`, `SECRET_KEY=test-secret`,
 và hai cờ DISABLE bên trên. Không dùng cấu hình thử nghiệm này trên production.
+
+## 6. Quản lý trong v1.3.0
+
+### Nhập tài khoản rồi Mini App vẫn báo 0
+
+Xác nhận nhập Zalo trên Telegram nay có `Kho dữ liệu: ...` và tổng tài khoản đọc
+lại từ SQLite. Tổng quan Mini App hiện mã kho cùng nút đối chiếu; dán **mã kho**,
+không dán cookie/token. Mã khác nhau nghĩa là đang đọc database/instance khác nhau
+hoặc database đã bị thay khi dịch vụ được triển khai lại. Mã giống nhau cho biết
+cùng kho, nhưng vẫn cần đối chiếu số tài khoản và thao tác xóa đã thực hiện.
+
+Không tự xóa tài khoản khi phiên mất kết nối. Nhập lại cookie cùng UID/IMEI cập
+nhật bản ghi hiện có và giữ lựa chọn tắt lệnh. Hàng chờ xử lý lệnh cũng kiểm tra
+trạng thái bật/tắt trước khi thực thi. Số "Tài khoản đã lưu" khác với số đang bật.
+
+Bộ xử lý lỗi không còn trả trang quản lý rỗng/HTTP 200 khi gặp ngoại lệ. API trả
+lỗi 500, lỗi SQLite 503; lỗi đường dẫn giữ 404. Mini App giữ số liệu đã tải thành
+công gần nhất và báo dữ liệu chưa được cập nhật thay vì tạo số liệu 0 từ lỗi.
+
+Render Free vẫn dùng filesystem tạm. Bản này **không thể bảo đảm giữ SQLite qua
+redeploy** nếu chưa có ổ lưu bền vững. Khi dùng mount bền vững, đặt APP_DATA_DIR về
+mount đó và chuyển dữ liệu trước khi khởi động. Mã kho giúp phát hiện bị đổi nơi
+lưu; nó không khôi phục được dữ liệu đã mất của instance cũ.
+
+### Tác vụ và dừng
+
+Tab Tác vụ hiển thị tên lệnh/chế độ, tên đầy đủ kênh đích, tài khoản, số gửi/lỗi
+và mã tác vụ. Có bộ lọc đang chạy/đang dừng hoặc cả lịch sử gần đây (tối đa 100).
+Nút Dừng gửi tín hiệu ngắt tới worker, chuyển sang Đang dừng nếu worker còn sống,
+chỉ hiển thị Đã dừng sau khi worker kết thúc. Một yêu cầu HTTP đã gửi đi có thể
+cần chờ timeout/phản hồi; không có cam kết thu hồi tin đã gửi lên nhà cung cấp.
+
+Stopall của một tài khoản nhận diện cả tác vụ có tài khoản đó trong nhóm nhiều
+tài khoản. Stopall từ Mini App quản lý toàn bộ tác vụ của tiến trình. Ghi trạng
+thái lỗi giữ cờ chờ ghi để lần đồng bộ sau thử lại. Không tự khởi chạy lại tác vụ
+cũ khi khởi động máy chủ.
+
+### Form OAuth Discord/Facebook
+
+Trong Tài khoản → Cấu hình ứng dụng, điền App/Client ID, secret, URL HTTPS và
+phiên bản Graph API cho Facebook. Máy chủ cần SECRET_KEY cố định. Secret cấu hình
+được mã hóa trong SQLite; API giao diện không trả lại secret. Có thể tiếp tục dùng
+các biến môi trường ở mục 4. Khi cấu hình qua form, khóa mã hóa phiên OAuth mặc
+định được tạo từ SECRET_KEY theo mục đích riêng nếu chưa đặt OAUTH_ENCRYPTION_KEY.
+Đổi SECRET_KEY yêu cầu cấu hình/kết nối lại. Lưu cấu hình không tự tạo ứng dụng hay
+đăng ký callback bên Discord/Meta.
+
+### Bot Discord và Facebook Page chính thức
+
+OAuth hồ sơ chỉ xác minh danh tính. Muốn điều khiển qua tin nhắn cần cấu hình
+riêng phần Bot Discord & Facebook Page trong Mini App:
+
+- Discord: nhập Bot Token, Application Public Key và Discord User ID người quản
+  lý. Bot Token được kiểm tra qua API chính thức, mã hóa trước khi lưu. Đặt
+  Interactions Endpoint URL là `https://TEN-MIEN/integrations/discord/BOT_ID` trong
+  Developer Portal. Bấm Đăng ký 4 lệnh Discord để thêm/cập nhật `/menu`, `/status`,
+  `/tasks`, `/stopall`. Không xóa các tên lệnh khác của ứng dụng. Mời ứng dụng vào
+  server với scope `applications.commands`. Callback kiểm tra chữ ký Ed25519 và
+  danh sách User ID quản lý; phản hồi riêng cho người gọi.
+- Facebook: dùng Page Access Token, Page ID, Meta App Secret, Verify Token, phiên
+  bản Graph API và PSID người quản lý Page. Cần `pages_messaging`, Page subscription
+  và chế độ ứng dụng/quyền đã được Meta cho phép. Callback là
+  `https://TEN-MIEN/integrations/facebook/PAGE_ID`; đăng ký sự kiện `messages`. Gửi `menu`,
+  `status`, `tasks`, `stopall` tới Page từ PSID đã khai báo. Callback kiểm tra chữ
+  ký HMAC; sự kiện trùng được nhận diện trong SQLite. Hàng chờ trả lời tối đa 16,
+  hai worker, để giới hạn tải. Lỗi gửi lên Meta được ghi bằng mã trạng thái, không
+  ghi token. Có nút xóa cấu hình lưu tại bot khi không dùng nữa.
+
+Có thể lưu nhiều Bot/Page; mỗi kết nối có callback và nút xóa riêng. Dùng callback
+hiện trên thẻ kết nối. Với nhiều Page thuộc cùng Meta app, callback chung
+`/integrations/facebook` phân luồng theo Page ID và xác minh chữ ký trước xử lý.
+
+Các lệnh quản lý trên không mở quyền chạy lệnh spam/phá nhóm hoặc giả lập phiên
+người dùng. Không có máy ảo né xác minh, vượt CAPTCHA hay đăng ký tài khoản hàng
+loạt. Chưa kiểm chứng kết nối Discord/Meta thật nếu chưa có credentials/callback
+HTTPS và quyền tương ứng; các bài kiểm thử dùng chữ ký thật và API giả lập.
+
+Tệp app.py cũ lớn hơn 1 MB đã nhiều lần bị ghi lại thiếu phần cuối. Khi sửa cấu
+hình Telegram hãy dùng bot_settings.py hoặc Environment; không dán đè toàn bộ
+runtime glaze_app.py bằng nội dung tải về đã bị rút ngắn. CI kiểm tra cả runtime,
+kiểm thử nhập tài khoản và lệnh khởi động Gunicorn trước khi báo đạt.
+
+Build command trong render.yaml nay chạy `python scripts/verify_startup.py` trước
+khi cài dependencies. Bộ kiểm tra không khởi chạy bot, không mở database, không
+in token; nó kiểm tra cú pháp Python 3.11 và các điểm khởi động thiết yếu để phát
+hiện cả trường hợp tệp bị cắt nhưng vẫn là Python hợp lệ. Nếu service Render được
+tạo bằng cấu hình thủ công thay vì Blueprint, cần đặt Build Command tương ứng
+trong Settings để bước này được áp dụng cho service đó.
