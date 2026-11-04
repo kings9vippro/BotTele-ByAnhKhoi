@@ -183,7 +183,7 @@ app.config["SESSION_COOKIE_SECURE"] = bool(os.environ.get("OAUTH_PUBLIC_BASE_URL
 
 # LÁ CHẮN BẢO MẬT WEB (CHỐNG BRUTE-FORCE, RATE-LIMIT API, HEADERS)
 LOGIN_ATTEMPTS = defaultdict(lambda: {"fails": 0, "lock_until": 0.0})
-API_RATE_BUCKETS = defaultdict(lambda: deque(maxlen=260))
+API_RATE_BUCKETS = defaultdict(lambda: deque(maxlen=320))
 SECURITY_LOCK = threading.RLock()
 
 def get_client_ip():
@@ -263,6 +263,14 @@ def is_miniapp_request_authorized():
 def security_middleware():
     if not WebSecurityFortress.inspect_request():
         return jsonify({"ok": False, "error": "Forbidden Request Signature"}), 403
+    protected = request.path.startswith(("/api/", "/task/", "/account/", "/file/"))
+    public_assets = {"/api/logo", "/api/glaze_logo.png", "/api/zenvyre_logo.png", "/api/menu_banner.png"}
+    if protected and request.path not in public_assets and not is_miniapp_request_authorized():
+        return jsonify({"ok": False, "error": "Phiên quản trị không hợp lệ hoặc đã hết hạn"}), 401
+    if protected:
+        origin = request.headers.get("Origin")
+        if (request.method not in ("GET", "HEAD", "OPTIONS") and origin and origin.rstrip("/") != request.host_url.rstrip("/")) or request.headers.get("Sec-Fetch-Site") == "cross-site":
+            return jsonify({"ok": False, "error": "Nguồn yêu cầu không hợp lệ"}), 403
     if request.path.startswith("/api/miniapp/") and not is_miniapp_request_authorized():
         return jsonify({"ok": False, "error": "Phiên Mini App không hợp lệ hoặc đã hết hạn"}), 401
     if request.path.startswith("/api/") or request.path.startswith("/task/"):
