@@ -9818,13 +9818,7 @@ def generate_totp_rfc6238(secret_key, time_step=30, digits=6):
             return str(code_int).zfill(digits), rem_sec
         except Exception:
             pass
-    try:
-        r = requests.get(f"https://keyherlyswar.x10.mx/Apidocs/tien_ich/2fa.php?secret={str(secret_key).replace(' ', '')}", timeout=6).json()
-        tk = r.get("token")
-        if tk:
-            return str(tk), rem_sec
-    except Exception:
-        pass
+    # A malformed secret must fail locally, never be sent to a remote helper.
     return None, 0
 
 class ZaloWebIDGenerator:
