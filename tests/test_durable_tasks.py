@@ -89,6 +89,12 @@ class DurableTaskTests(unittest.TestCase):
         self.assertIsNotNone(self.queue.claim())
         self.assertIsNone(self.queue.claim())
 
+    def test_claims_round_robin_between_owners(self):
+        for owner, channel in (('alice','a1'), ('alice','a2'), ('bob','b1'), ('bob','b2')):
+            self.queue.submit(owner, channel, 'notice')
+        claimed=[self.queue.claim()['owner'] for _ in range(4)]
+        self.assertEqual(claimed, ['alice','bob','alice','bob'])
+
     def test_ambiguous_send_is_not_automatically_retried(self):
         def send(*args):raise UncertainDelivery()
         self.queue.sender=send

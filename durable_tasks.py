@@ -152,7 +152,10 @@ class TaskQueue:
               AND NOT EXISTS (SELECT 1 FROM notification_tasks r WHERE r.channel=t.channel AND r.status='RETRYING' AND r.due>?)
               AND NOT EXISTS (SELECT 1 FROM notification_tasks r WHERE r.channel=t.channel AND r.status IN ('RUNNING','CANCELLING'))
               AND (SELECT COUNT(*) FROM notification_tasks r WHERE r.owner=t.owner AND r.status IN ('RUNNING','CANCELLING')) < 5
-              ORDER BY (t.owner=?), t.updated, t.created LIMIT 1''', (time.time(), time.time(), time.time(), self.last_owner)).fetchone()
+              -- Prefer a different owner after each claim, then fall back to the
+              -- oldest task. This keeps one owner's burst from monopolizing the
+              -- workers when several owners are waiting.
+              ORDER BY (t.owner=?) ASC, t.updated, t.created LIMIT 1''', (time.time(), time.time(), time.time(), self.last_owner)).fetchone()
             if not row:
                 return None
             self.last_owner = row['owner']
