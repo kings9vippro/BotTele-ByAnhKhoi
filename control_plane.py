@@ -214,25 +214,41 @@ def register(app, db, owner):
             return jsonify(ok=False,error='Đang có nhiều kết nối; thử lại sau'),503
         user = str(owner())
         cursor = max(0,request.args.get('cursor',0,type=int) or 0)
+        request_id = request.headers.get('X-Request-ID', '')
+        if not re.fullmatch(r'[A-Za-z0-9._:-]{1,160}', request_id):
+            request_id = ''
         @stream_with_context
         def generate():
             nonlocal cursor
             previous = None
             try:
                 for _ in range(15):
-                    data = snapshot(user,cursor)
-                    cursor = data['cursor']
-                    signature = json.dumps({k:v for k,v in data.items() if k not in ('snapshot_at','events')},sort_keys=True)
-                    if signature != previous or data['events']:
-                        yield 'event: snapshot\ndata: '+json.dumps(data)+'\n\n'
-                        previous = signature
-                    else:
-                        yield ': heartbeat\n\n'
+                    try:
+                        data = snapshot(user,cursor)
+                        cursor = data['cursor']
+                        signature = json.dumps({k:v for k,v in data.items() if k not in ('snapshot_at','events')},sort_keys=True)
+                        if signature != previous or data['events']:
+                            # Include the cursor as a resumable SSE id; clients still
+                            # send it explicitly because Telegram WebViews do not
+                            # consistently preserve Last-Event-ID across reconnects.
+                            yield f"id: {cursor}\nevent: snapshot\ndata: {json.dumps(data)}\n\n"
+                            previous = signature
+                        else:
+                            yield ': heartbeat\n\n'
+                    except Exception:
+                        # A transient database/provider failure must close this
+                        # bounded stream cleanly. The browser's capped backoff then
+                        # retries and performs a fresh cursor reconciliation.
+                        yield ': retry\n\n'
+                        break
                     if queue.shutdown_event.wait(2):
                         break
             finally:
                 streams.release()
-        return Response(generate(), mimetype='text/event-stream', headers={'Cache-Control':'no-store','X-Accel-Buffering':'no'})
+        headers={'Cache-Control':'no-store','X-Accel-Buffering':'no','Connection':'keep-alive'}
+        if request_id:
+            headers['X-Request-ID'] = request_id
+        return Response(generate(), mimetype='text/event-stream', headers=headers)
 
 
 def telegram_command(bot, user, chat, name, args):
