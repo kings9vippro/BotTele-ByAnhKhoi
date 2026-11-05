@@ -16229,7 +16229,10 @@ def api_reset_logo():
 
 @app.route("/healthz")
 def healthz():
-    return jsonify({"ok": True, "service": "BOT TREO 4APP VN", "admin_id": TELEGRAM_ADMIN_ID, "mode": "telegram_bot"}), 200
+    # Keep the liveness probe unauthenticated and deliberately minimal.  The
+    # administrator identifier is operational data, not a health signal, and
+    # should not be disclosed to every load-balancer probe.
+    return jsonify({"ok": True, "service": "BOT TREO 4APP VN", "mode": "telegram_bot"}), 200
 
 @app.route("/")
 def index():
