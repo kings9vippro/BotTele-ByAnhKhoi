@@ -1,6 +1,8 @@
 # V4 delivery record · 2026-11-05
 
-Author: Dev Anh Khôi. Runtime version: 2.0.0. Branch: `codex/v4-delivery`.
+Author: Dev Anh Khôi. Runtime version: 2.0.0. Source branch:
+`codex/v4-delivery`; integrated into `main` by PR #2 at merge commit
+`cf6845edaa8cca0c30a60f49b6d0b124dbc35710`.
 This record distinguishes local evidence from live platform verification. The
 previous `AUDIT_V4.md` is the baseline audit checkpoint; it is not a release
 certificate. No user database, credential or production account was used.

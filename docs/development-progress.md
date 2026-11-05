@@ -14,6 +14,8 @@
 - Finish removal of legacy Facebook/Messenger compatibility storage after a data migration review.
 - Verify OAuth and Zalo flows against staging accounts after deployment; tests deliberately do not use live credentials.
 
-## Delivery branch
+## Delivery status
 
-Changes are prepared on `codex/v4-delivery`.  `main` is not modified by this work.
+The verified delivery was merged into `main` through PR #2 at merge commit
+`cf6845edaa8cca0c30a60f49b6d0b124dbc35710`.  The source branch remains
+`codex/v4-delivery`; this document is maintained on the default branch.
