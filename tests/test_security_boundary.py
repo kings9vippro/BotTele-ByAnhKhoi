@@ -27,6 +27,11 @@ class SecurityBoundaryTests(unittest.TestCase):
         self.assertEqual(body.get('ok'), True)
         self.assertNotIn('admin_id', body)
 
+    def test_watchdog_uses_public_health_probe(self):
+        source = (Path(__file__).resolve().parents[1] / 'glaze_app.py').read_text()
+        self.assertIn('requests.get(f"{ext_url}/healthz", timeout=5)', source)
+        self.assertNotIn('requests.get(f"{ext_url}/api/network/gateways", timeout=5)', source)
+
     def test_retired_integrations_are_inaccessible_even_with_session(self):
         with self.client.session_transaction() as s:s['logged_in']=True
         for path in ['/api/discord/reg_login','/api/messenger/login_credentials','/integrations/facebook','/oauth/callback/facebook']:

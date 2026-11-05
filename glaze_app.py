@@ -15866,10 +15866,10 @@ def _listener_watchdog_loop():
                     try:
                         ext_url = (os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
                         if ext_url:
-                            requests.get(f"{ext_url}/api/network/gateways", timeout=5)
+                            requests.get(f"{ext_url}/healthz", timeout=5)
                         else:
                             port_loc = int(os.environ.get("PORT", 5000))
-                            requests.get(f"http://127.0.0.1:{port_loc}/api/network/gateways", timeout=3)
+                            requests.get(f"http://127.0.0.1:{port_loc}/healthz", timeout=3)
                     except Exception:
                         pass
                 threading.Thread(target=_self_keepalive_ping, daemon=True).start()
