@@ -6,6 +6,7 @@ jobs:
     env:
       DISABLE_TELEGRAM_BOT: '1'
       DISABLE_BACKGROUND_WORKERS: '1'
+      TELEGRAM_BOT_TOKEN: ci-test-token
       SECRET_KEY: ci-test-only
     steps:
       - uses: actions/checkout@v4
