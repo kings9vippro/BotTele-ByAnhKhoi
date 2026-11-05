@@ -4,7 +4,7 @@
  const $=id=>document.getElementById(id), reduced=matchMedia('(prefers-reduced-motion: reduce)');
  const launch=new URLSearchParams(location.hash.slice(1)).get('tgWebAppData')||'';
  let tg, active='home', data={}, accounts=[], identities=[], eventRows=[], cursor=0, stream, refreshing, toastTimer, streamGeneration=0, legacyTelemetry;
- const names={home:'Tổng quan',accounts:'Tài khoản',discord:'Discord',zalo:'Zalo',tasks:'Task',activity:'Nhật ký',settings:'Cài đặt'};
+ const names={home:'Tổng quan',accounts:'Tài khoản',discord:'Discord',zalo:'Zalo',tasks:'Task',activity:'Nhật ký',music:'Âm nhạc',settings:'Cài đặt'};
  const keys=Object.keys(names), pages=$('pages');
  const element=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  function toast(text){$('toasts').replaceChildren(element('div',text,'toast'));clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toasts').replaceChildren(),4500);}
@@ -21,10 +21,40 @@
   const apply=()=>{document.documentElement.setAttribute('data-'+id,input.value);try{localStorage.setItem(key,input.value);}catch{}};
   input.addEventListener('change',apply);apply();
  }
- function select(name){active=name;document.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===name;b.setAttribute('aria-selected',on);b.tabIndex=on?0:-1;});document.querySelectorAll('[data-bottom]').forEach(b=>b.setAttribute('aria-current',b.dataset.bottom===name?'page':'false'));$('tab-'+name)?.scrollIntoView({block:'nearest',inline:'nearest',behavior:reduced.matches?'instant':'smooth'});if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();}
+ function select(name){active=name;document.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===name;b.setAttribute('aria-selected',on);b.tabIndex=on?0:-1;});document.querySelectorAll('[data-bottom]').forEach(b=>b.setAttribute('aria-current',b.dataset.bottom===name?'page':'false'));$('tab-'+name)?.scrollIntoView({block:'nearest',inline:'nearest',behavior:reduced.matches?'instant':'smooth'});if(name==='music')loadMusic();if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();}
  function go(name){select(name);pages.scrollTo({left:keys.indexOf(name)*pages.clientWidth,behavior:reduced.matches?'instant':'smooth'});tg?.HapticFeedback?.selectionChanged();}
  keys.forEach((key,i)=>{const b=button(names[key],()=>go(key));b.id='tab-'+key;b.dataset.tab=key;b.role='tab';b.setAttribute('aria-controls',key);$(key).setAttribute('aria-labelledby',b.id);b.onkeydown=e=>{const d=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0;if(d){e.preventDefault();const next=keys[(i+d+keys.length)%keys.length];go(next);$('tab-'+next).focus();}};$('tabs').append(b);});
- for(const [key,icon]of [['home','⌂'],['accounts','◎'],['tasks','◷'],['activity','≋'],['settings','⚙']]){const b=button('',()=>go(key));b.append(element('span',icon),document.createTextNode(names[key]));b.dataset.bottom=key;$('bottom').append(b);}
+ for(const [key,icon]of [['home','⌂'],['accounts','◎'],['tasks','◷'],['activity','≋'],['music','♫'],['settings','⚙']]){const b=button('',()=>go(key));b.append(element('span',icon),document.createTextNode(names[key]));b.dataset.bottom=key;$('bottom').append(b);}
+ let musicData,musicLoading;
+ async function loadMusic(){
+  if(musicData||musicLoading)return musicLoading;
+  musicLoading=(async()=>{
+   const response=await fetch('/static/viet_hits.json',{cache:'force-cache'});
+   if(!response.ok)throw Error('Không tải được danh sách nhạc.');
+   const payload=await response.json();
+   if(!/^[A-Za-z0-9]{22}$/.test(payload.playlist_id)||!Array.isArray(payload.tracks))throw Error('Danh sách nhạc không hợp lệ.');
+   musicData=payload;
+   $('music-source').textContent=`${payload.source} · kiểm tra ${payload.checked_at}. Danh sách có thể thay đổi trên Spotify.`;
+   const playlist=new URL(payload.playlist_url);
+   if(playlist.origin==='https://open.spotify.com'){$('music-playlist').href=playlist.href;$('music-playlist').hidden=false;}
+   $('music-tracks').replaceChildren(...payload.tracks.slice(0,10).map((track,index)=>{
+    const card=element('article',undefined,'card');const link=element('a',`${index+1}. ${track.name}`);
+    const url=new URL(track.url);
+    if(url.origin==='https://open.spotify.com'&&url.pathname.startsWith('/track/')){link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';}
+    card.append(link,element('p',track.artist));return card;
+   }));
+   $('music-tracks').setAttribute('aria-busy','false');
+  })().catch(error=>{$('music-tracks').replaceChildren(element('p',error.message));$('music-tracks').setAttribute('aria-busy','false');}).finally(()=>musicLoading=null);
+  return musicLoading;
+ }
+ $('music-play').onclick=async()=>{
+  await loadMusic();if(!musicData)return;
+  const frame=element('iframe');frame.title='Spotify · Hot Hits Vietnam';frame.loading='lazy';
+  frame.src='https://open.spotify.com/embed/playlist/'+musicData.playlist_id+'?utm_source=generator';
+  frame.allow='autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture';
+  frame.referrerPolicy='strict-origin-when-cross-origin';
+  $('music-player').replaceChildren(frame);$('music-play').hidden=true;
+ };
  let scrollFrame;pages.onscroll=()=>{if(scrollFrame)return;scrollFrame=requestAnimationFrame(()=>{scrollFrame=null;select(keys[Math.round(pages.scrollLeft/pages.clientWidth)]||'home');});};window.addEventListener('resize',()=>pages.scrollTo({left:keys.indexOf(active)*pages.clientWidth}));select('home');
  function sheet(title,content,actions=[]){$('sheet-title').textContent=title;$('sheet-content').replaceChildren(typeof content==='string'?element('p',content):content);$('sheet-actions').replaceChildren(...actions);$('sheet').showModal();}
  $('sheet-close').onclick=()=>$('sheet').close();let dragY;

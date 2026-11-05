@@ -4,6 +4,8 @@ Telegram bot quản lý tài khoản Zalo, liên kết hồ sơ Discord qua OAut
 thông báo tới webhook Discord được cấp quyền. Mini App là giao diện quản lý
 trên cùng nguồn dữ liệu SQLite. Discord OAuth2 không cấp quyền gửi tin dưới
 danh tính tài khoản cá nhân.
+Tab Âm nhạc lấy 10 liên kết từ playlist Hot Hits Vietnam trên Spotify và chỉ
+tải trình phát Spotify sau khi người dùng bấm mở.
 
 ## Chạy trên Render
 

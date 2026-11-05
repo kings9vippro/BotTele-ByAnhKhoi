@@ -134,6 +134,25 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(response.status_code,400)
         launch.assert_not_called()
 
+    def test_parallel_zalo_reconciliation_does_not_overlap(self):
+        active=0
+        maximum=0
+        guard=threading.Lock()
+        def reconcile():
+            nonlocal active,maximum
+            with guard:
+                active+=1
+                maximum=max(maximum,active)
+            time.sleep(0.02)
+            with guard:
+                active-=1
+        with patch.object(app,'_sync_all_zalo_listeners_locked',side_effect=reconcile):
+            workers=[threading.Thread(target=app.sync_all_zalo_listeners) for _ in range(5)]
+            for worker in workers:worker.start()
+            for worker in workers:worker.join(2)
+        self.assertEqual(maximum,1)
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+
     def test_global_stop_no_longer_needs_retired_discord_engine(self):
         event=threading.Event()
         active={'fixture':{'stop':event,'targets':['group-fixture']}}

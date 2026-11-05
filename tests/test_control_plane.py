@@ -2,6 +2,7 @@ import json
 import tempfile
 import sqlite3
 import os
+import threading
 import unittest
 from unittest.mock import patch,MagicMock
 from flask import Flask
@@ -52,6 +53,24 @@ class ControlPlaneTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/miniapp/control?cursor='+str(data['cursor'])).json['events'],[])
         self.owner='bob'
         self.assertEqual(self.client.post('/api/miniapp/notification_control',json={'id':task,'action':'stop'}).status_code,409)
+
+    def test_five_devices_can_observe_without_exhausting_sse_slots(self):
+        barrier=threading.Barrier(6,timeout=5)
+        results=[]
+        def observe():
+            with self.app.test_client() as client:
+                response=client.get('/api/miniapp/events',buffered=False)
+                results.append((response.status_code,next(response.response)))
+                barrier.wait()
+                barrier.wait()
+                response.close()
+        workers=[threading.Thread(target=observe) for _ in range(5)]
+        for worker in workers:worker.start()
+        barrier.wait()
+        barrier.wait()
+        for worker in workers:worker.join(5)
+        self.assertEqual(len(results),5)
+        self.assertTrue(all(status==200 and b'data:' in body for status,body in results))
 
     def test_invalid_urls_never_trigger_network(self):
         with patch.object(control_plane.requests,'get') as get:

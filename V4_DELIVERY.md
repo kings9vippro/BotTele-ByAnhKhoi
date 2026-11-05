@@ -13,7 +13,8 @@ Runtime/entry: `app.py`, `glaze_app.py`, `bot_settings.py`, `get_ck_im_zalo.py`,
 `durable_tasks.py`, `control_plane.py`. Deployment/configuration:
 `gunicorn.conf.py`, `render.yaml`, `requirements.txt`, `runtime.txt`,
 `Procfile`, `.gitignore`, `scripts/verify_startup.py`. Frontend:
-`templates/miniapp.html`, `static/control.css`, `static/control.js`, legacy
+`templates/miniapp.html`, `static/control.css`, `static/control.js`,
+`static/viet_hits.json`, legacy
 Mini App assets and browser tests. Tests: every `tests/test_*.py` plus
 `tests/control-browser.cjs`. This was syntax and focused behavior/source review,
 not a credible claim that every line of the legacy 17k-line runtime was
@@ -31,11 +32,12 @@ manually audited. Binary Zalo core and real production data were not audited.
 | Cleanup removed all old image assets | Only owned temporary filename prefixes with known image extensions are candidates. |
 | Legacy web command reported success without dispatch | Rejects missing Zalo account and failed/unsupported dispatch. |
 | Legacy Zalo verification called a cookie-shaped string “alive” | Requires actual live probe success before claiming verification. |
-| Mini App polling/recreated view caused stale data and resets | New seven-panel Mini App with signed data requests, SSE state updates, bounded event history, native touch scroll snapping, real task actions, upload/selection of text files and task detail sheet. |
+| Mini App polling/recreated view caused stale data and resets | Eight-panel Mini App with signed data requests, SSE state updates, bounded event history, native touch scroll snapping, real task actions, upload/selection of text files and task detail sheet. |
 | Unbounded/untracked cross-channel notifications | SQLite queue with atomic 1–5 channel submission, five bounded workers, owner/channel constraints, persistent state, Retry-After and UNKNOWN outcome on ambiguous delivery. It is only for finite authorized webhook notifications, not a replacement of legacy Zalo tasks. |
 | Telegram transport exceptions can include bot tokens in URLs | Transport, polling, update and status errors now expose only a generic failure and exception type, rather than raw exception text. Old tokens in Git history still require revocation. |
 | Stop and status commands shared a saturated ordinary update pool | Telegram stop and task controls now use the reserved interactive pool. This does not interrupt a network request already in flight or guarantee response time. |
 | Mini App task launch silently chose every Zalo account and lost box names | The Zalo screen now selects one enabled account and up to five cached groups; the server checks that each group belongs to that account before launching, then records the selected account and group names in the task. The legacy launch form remains available for existing clients. |
+| Zalo account updates could reconcile listeners concurrently | Account/listener reconciliation now uses one lock; failures report an error type without exposing session details. |
 
 ## Architecture
 
@@ -70,7 +72,8 @@ in-chat aliases; a complete single-registry migration is still open.
 Overview (real counts, workers, channel count, API latency, throughput and
 event chart), Accounts (Zalo + linked Discord), Discord (official sign-in,
 webhooks, finite send), Zalo (QR, cookie/IMEI, text files), Tasks (live cards,
-pause/resume/stop/retry/details), Activity (bounded event history), Settings
+pause/resume/stop/retry/details), Activity (bounded event history), Music
+(Spotify's official Hot Hits Vietnam catalog and on-demand embed), Settings
 (theme, OAuth app config, command list, storage status). Native scroll-snap
 follows horizontal finger motion; each panel retains its own vertical scroll
 and form state. Buttons have press/focus/loading/disabled states. The bottom
@@ -82,6 +85,12 @@ focus trap, Telegram Main/Secondary buttons and real-device frame rate are
 not verified/complete; do not advertise them as shipped.
 The settings panel also offers locally persisted larger, heavier text and
 three accent colors; these controls affect only the current browser/device.
+The music tab shows ten verified Spotify links from the editorial Hot Hits
+Vietnam playlist, checked on 2026-11-05. Spotify did not provide engagement
+counts, so their order is not a numerical popularity ranking. The official
+player loads only after a tap; actual playback depends on Spotify's account,
+licensing, region and embedded player behavior. SSE permits eight concurrent
+streams while Gunicorn retains request threads for bot controls.
 
 An authorized Telegram user can now access only their own Discord identity,
 webhook channels and notification tasks in the signed Mini App. Zalo accounts,
@@ -95,18 +104,19 @@ window, allowing the client to replace stale events.
 ## Local verification (test-only credentials and no external API calls)
 
 - `python scripts/verify_startup.py`: Python 3.11 syntax and entry checks pass.
-- `python -m unittest discover -s tests -p 'test_*.py' -q`: 106 tests passed
+- `python -m unittest discover -s tests -p 'test_*.py' -q`: 108 tests passed
   after scoped Mini App authorization, PKCE and SSE resync work, with
   `DISABLE_TELEGRAM_BOT=1`, `DISABLE_BACKGROUND_WORKERS=1`, test-only token
   and key. Re-run on final commit before deployment.
 - `node --check static/control.js`: passed.
 - `node tests/control-browser.cjs` against local Gunicorn/Chromium: passed
-  seven tabs, persistent form, light theme, dialog/Escape, saved text file,
+  eight tabs, Spotify catalog and embed shell, persistent form, light theme,
+  dialog/Escape, saved text file,
   horizontal touch gesture, vertical gesture isolation, responsive widths,
   authenticated API and retired routes. No real Telegram device was used.
 - `PYTHONPATH=. python scripts/benchmark_notifications.py`: local 25-job,
-  five-channel, 40 ms mock API, three runs each: one worker median 1.074 s
-  (range 1.055–1.104); five workers median 0.262 s (0.254–0.264).
+  five-channel, 40 ms mock API, three runs each: one worker median 1.049 s
+  (range 1.044–1.054); five workers median 0.240 s (0.229–0.246).
   This compares local worker counts, not before/after production throughput.
 
 ## Deployment configuration and limits
@@ -138,7 +148,8 @@ active use. Historical records were not erased.
 ## Open release criteria
 
 Live Discord OAuth consent, webhook sends, Zalo QR/listener behavior, Render
-deploy, Telegram mobile gestures/haptics, persistent disk migration, and
+deploy, Spotify playback in Telegram's mobile webview, Telegram mobile
+gestures/haptics, persistent disk migration, and
 cross-account production load have **not** been tested. Legacy Zalo workers
 are not migrated to the new persistent scheduler. Legacy dashboard CSRF still
 relies on SameSite/Origin/Sec-Fetch rather than a full per-request token; the

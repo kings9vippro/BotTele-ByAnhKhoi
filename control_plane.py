@@ -206,7 +206,8 @@ def register(app, db, owner):
             c.close()
         return jsonify(ok=True)
 
-    streams = threading.BoundedSemaphore(3)
+    # Gunicorn runs 16 request threads; reserve half for commands and mutations.
+    streams = threading.BoundedSemaphore(8)
     @app.get('/api/miniapp/events')
     def events():
         if not streams.acquire(blocking=False):

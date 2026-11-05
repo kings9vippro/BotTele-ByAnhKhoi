@@ -828,6 +828,7 @@ def set_setting(key, val):
 # TRẠNG THÁI RUNTIME TOÀN CỤC & CHỐNG TỰ KÍCH HOẠT LỆNH (.MENU FIX)
 ACTIVE_TASKS = {}
 ACTIVE_LISTENERS = {}
+SYNC_LISTENERS_LOCK = threading.RLock()
 
 # BỘ NHỚ RAM TỐC ĐỘ ÁNH SÁNG (0MS LOCK-FREE IN-MEMORY ENGINE CHO 100+ LUỒNG TREO)
 ACCOUNTS_RAM_CACHE = {}
@@ -14977,7 +14978,7 @@ class DiscordRealtimeListener:
     def __init__(self, *args, **kwargs):
         raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
-def sync_all_zalo_listeners():
+def _sync_all_zalo_listeners_locked():
     refresh_accounts_ram_cache()
     refresh_owner_uids()
     try:
@@ -15021,8 +15022,14 @@ def sync_all_zalo_listeners():
             if aid not in active_ids:
                 ACTIVE_LISTENERS[aid].stop()
                 ACTIVE_LISTENERS.pop(aid, None)
-    except Exception:
-        pass
+    except Exception as error:
+        app.logger.error('Zalo listener reconciliation failed: %s', type(error).__name__)
+
+
+def sync_all_zalo_listeners():
+    """Serialize account reconciliation so simultaneous updates cannot start duplicate listeners."""
+    with SYNC_LISTENERS_LOCK:
+        return _sync_all_zalo_listeners_locked()
 
 
 # Các hàm bí danh tương thích hoàn toàn với get_ck_im_zalo.py
