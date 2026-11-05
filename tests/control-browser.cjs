@@ -30,6 +30,8 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.getByRole('button',{name:'Mở trình phát Spotify'}).click();
  assert.match(await page.locator('#music-player iframe').getAttribute('src'),/^https:\/\/open\.spotify\.com\/embed\/playlist\//);
  await page.getByRole('tab',{name:'Cài đặt',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#settings').getAttribute('aria-hidden')==='false');
+ await page.waitForTimeout(350);
  await page.getByLabel('Application ID',{exact:true}).fill('12345');
  await page.locator('#theme').selectOption('light');
  assert.equal(await page.locator('html').getAttribute('data-theme'),'light');
