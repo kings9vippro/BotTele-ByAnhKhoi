@@ -31,6 +31,11 @@ class TaskQueue:
         self.shutdown_event = threading.Event()
         self.threads = []
         self.last_owner = ''
+        # SQLite serializes the claim transaction, but ``last_owner`` is a
+        # Python attribute shared by all worker threads.  Keep the fairness
+        # cursor in lock-step with the transaction so two workers cannot read
+        # the same cursor and select the same owner's burst.
+        self.claim_lock = threading.Lock()
         self.delay = 0.0
         self.worker_cleanup = worker_cleanup
         c = db()
@@ -140,32 +145,33 @@ class TaskQueue:
         return status
 
     def claim(self):
-        c = self.db()
-        try:
-            c.execute('BEGIN IMMEDIATE')
-            limit = c.execute("SELECT until FROM notification_limits WHERE name='discord-global'").fetchone()
-            if limit and limit[0] > time.time():
-                return None
-            row = c.execute('''SELECT t.* FROM notification_tasks t
-              WHERE t.status IN ('QUEUED','RETRYING') AND t.due<=?
-              AND NOT EXISTS (SELECT 1 FROM notification_limits l WHERE l.name='channel:' || t.channel AND l.until>?)
-              AND NOT EXISTS (SELECT 1 FROM notification_tasks r WHERE r.channel=t.channel AND r.status='RETRYING' AND r.due>?)
-              AND NOT EXISTS (SELECT 1 FROM notification_tasks r WHERE r.channel=t.channel AND r.status IN ('RUNNING','CANCELLING'))
-              AND (SELECT COUNT(*) FROM notification_tasks r WHERE r.owner=t.owner AND r.status IN ('RUNNING','CANCELLING')) < 5
-              -- Prefer a different owner after each claim, then fall back to the
-              -- oldest task. This keeps one owner's burst from monopolizing the
-              -- workers when several owners are waiting.
-              ORDER BY (t.owner=?) ASC, t.updated, t.created LIMIT 1''', (time.time(), time.time(), time.time(), self.last_owner)).fetchone()
-            if not row:
-                return None
-            self.last_owner = row['owner']
-            c.execute("UPDATE notification_tasks SET status='RUNNING', started=COALESCE(started,?), updated=?, attempts=attempts+1 WHERE id=?", (time.time(), time.time(), row['id']))
-            self._event(c, row, 'RUNNING')
-            c.commit()
-            return dict(row)
-        finally:
-            c.rollback()
-            c.close()
+        with self.claim_lock:
+            c = self.db()
+            try:
+                c.execute('BEGIN IMMEDIATE')
+                limit = c.execute("SELECT until FROM notification_limits WHERE name='discord-global'").fetchone()
+                if limit and limit[0] > time.time():
+                    return None
+                row = c.execute('''SELECT t.* FROM notification_tasks t
+                  WHERE t.status IN ('QUEUED','RETRYING') AND t.due<=?
+                  AND NOT EXISTS (SELECT 1 FROM notification_limits l WHERE l.name='channel:' || t.channel AND l.until>?)
+                  AND NOT EXISTS (SELECT 1 FROM notification_tasks r WHERE r.channel=t.channel AND r.status='RETRYING' AND r.due>?)
+                  AND NOT EXISTS (SELECT 1 FROM notification_tasks r WHERE r.channel=t.channel AND r.status IN ('RUNNING','CANCELLING'))
+                  AND (SELECT COUNT(*) FROM notification_tasks r WHERE r.owner=t.owner AND r.status IN ('RUNNING','CANCELLING')) < 5
+                  -- Prefer a different owner after each claim, then fall back to the
+                  -- oldest task. This keeps one owner's burst from monopolizing the
+                  -- workers when several owners are waiting.
+                  ORDER BY (t.owner=?) ASC, t.updated, t.created LIMIT 1''', (time.time(), time.time(), time.time(), self.last_owner)).fetchone()
+                if not row:
+                    return None
+                self.last_owner = row['owner']
+                c.execute("UPDATE notification_tasks SET status='RUNNING', started=COALESCE(started,?), updated=?, attempts=attempts+1 WHERE id=?", (time.time(), time.time(), row['id']))
+                self._event(c, row, 'RUNNING')
+                c.commit()
+                return dict(row)
+            finally:
+                c.rollback()
+                c.close()
 
     def run_one(self):
         row = self.claim()
@@ -188,7 +194,13 @@ class TaskQueue:
             status, error = 'FAILED', 'API từ chối hoặc cấu hình kênh không còn hợp lệ'
         # Retain the result in this worker until SQLite accepts the final state.
         # Retrying the database write must never repeat the external send.
-        while not self.shutdown_event.is_set():
+        # Always make one final persistence attempt.  A shutdown signal can be
+        # raised by the sender (or arrive between the API response and this
+        # write); skipping the write leaves a delivered task stuck in RUNNING
+        # until the next process restart.
+        write_attempted = False
+        while not write_attempted or not self.shutdown_event.is_set():
+            write_attempted = True
             c = None
             try:
                 c = self.db()
@@ -197,8 +209,19 @@ class TaskQueue:
                     c.execute("INSERT INTO notification_limits VALUES('discord-global',?) ON CONFLICT(name) DO UPDATE SET until=MAX(until,excluded.until)", (global_until,))
                 if channel_until:
                     c.execute('INSERT INTO notification_limits VALUES(?,?) ON CONFLICT(name) DO UPDATE SET until=MAX(until,excluded.until)', ('channel:'+row['channel'],channel_until))
-                current = c.execute('SELECT status FROM notification_tasks WHERE id=?', (row['id'],)).fetchone()[0]
-                final_status = 'CANCELLED' if current == 'CANCELLING' and status == 'RETRYING' else status
+                current_row = c.execute('SELECT status FROM notification_tasks WHERE id=?', (row['id'],)).fetchone()
+                # A task may have been pruned by an operator while its request
+                # was in flight.  Preserve rate-limit state but do not let a
+                # missing row crash the worker thread.
+                if current_row is None:
+                    c.commit()
+                    break
+                current = current_row[0]
+                # Stop is cooperative: an already accepted request remains
+                # COMPLETED; an unknown network outcome remains UNKNOWN so it
+                # cannot be retried blindly.  Definitive failures/retries,
+                # however, are cancellation results once stop won the race.
+                final_status = 'CANCELLED' if current == 'CANCELLING' and status in ('RETRYING', 'FAILED') else status
                 # An accepted request remains COMPLETED even if stop raced it.
                 c.execute('UPDATE notification_tasks SET status=?,error=?,due=?,updated=?,completed=?,latency=? WHERE id=?', (final_status,error,due,time.time(),time.time() if final_status != 'RETRYING' else None,time.monotonic()-started,row['id']))
                 self._event(c, row, final_status)

@@ -13,6 +13,15 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.goto('http://127.0.0.1:5873/miniapp#tgWebAppData='+encodeURIComponent(auth));
  await page.waitForFunction(()=>document.querySelector('#metrics').getAttribute('aria-busy')==='false');
  assert.equal(await page.getByRole('tab').count(),8);
+ assert.equal(await page.locator('#bottom .bottom-nav-button').count(),6);
+ assert.deepEqual(await page.locator('#bottom .bottom-nav-button').evaluateAll(buttons=>buttons.map(button=>({label:button.getAttribute('aria-label'),visibleText:button.innerText.trim(),icon:button.querySelector('.bottom-icon')?.textContent,iconHidden:button.querySelector('.bottom-icon')?.getAttribute('aria-hidden')}))),[
+  {label:'Tổng quan',visibleText:'⌂',icon:'⌂',iconHidden:'true'},
+  {label:'Tài khoản',visibleText:'◎',icon:'◎',iconHidden:'true'},
+  {label:'Task',visibleText:'◷',icon:'◷',iconHidden:'true'},
+  {label:'Nhật ký',visibleText:'≋',icon:'≋',iconHidden:'true'},
+  {label:'Âm nhạc',visibleText:'♫',icon:'♫',iconHidden:'true'},
+  {label:'Cài đặt',visibleText:'⚙',icon:'⚙',iconHidden:'true'}
+ ]);
  await page.getByRole('tab',{name:'Âm nhạc',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('#music-tracks').getAttribute('aria-busy')==='false');
  assert.equal(await page.locator('#music-tracks article').count(),10);
@@ -21,6 +30,8 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.getByRole('button',{name:'Mở trình phát Spotify'}).click();
  assert.match(await page.locator('#music-player iframe').getAttribute('src'),/^https:\/\/open\.spotify\.com\/embed\/playlist\//);
  await page.getByRole('tab',{name:'Cài đặt',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#settings').getAttribute('aria-hidden')==='false');
+ await page.waitForTimeout(350);
  await page.getByLabel('Application ID',{exact:true}).fill('12345');
  await page.locator('#theme').selectOption('light');
  assert.equal(await page.locator('html').getAttribute('data-theme'),'light');

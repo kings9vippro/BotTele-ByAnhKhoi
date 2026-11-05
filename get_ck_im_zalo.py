@@ -971,6 +971,10 @@ class DirectTelegramBotRunner:
         self.poll_session = self._create_isolated_session()
         self.session = self._create_isolated_session()
         self.user_states = {}
+        # Sticker requests are scoped to both the sender and the chat.  A
+        # user can have an unrelated conversation open at the same time; a
+        # pending request in one chat must never consume media from another.
+        self._sticker_states = {}
         self.wizard_selections = {}
         self.active_qr_locks = set()
         self.active_qr_stop_events = {}
@@ -989,6 +993,31 @@ class DirectTelegramBotRunner:
         self._cached_welcome_kind = _get_db_setting("tg_welcome_kind", "animation")
         self._cached_boxes_by_user = {}
         self._boxes_refreshing_users = set()
+
+    @staticmethod
+    def _sticker_key(user_id, chat_id):
+        return (str(user_id), str(chat_id))
+
+    def _arm_sticker_request(self, user_id, chat_id, menu_msg_id=None):
+        """Arm a short-lived sticker request for exactly one Telegram chat."""
+        self._sticker_states[self._sticker_key(user_id, chat_id)] = {
+            "mode": "make_sticker",
+            "created_at": time.time(),
+            "menu_msg_id": menu_msg_id,
+        }
+
+    def _get_sticker_request(self, user_id, chat_id):
+        key = self._sticker_key(user_id, chat_id)
+        state = self._sticker_states.get(key)
+        if not state:
+            return None
+        if time.time() - float(state.get("created_at") or 0) > 120:
+            self._sticker_states.pop(key, None)
+            return None
+        return state
+
+    def _clear_sticker_request(self, user_id, chat_id):
+        self._sticker_states.pop(self._sticker_key(user_id, chat_id), None)
 
     def _get_worker_session(self):
         sess = getattr(self._tls, "session", None)
@@ -3007,7 +3036,7 @@ class DirectTelegramBotRunner:
             return
 
         if data == "prompt_sticker_maker":
-            self.user_states[user_id] = {"mode": "make_sticker", "menu_msg_id": msg_id}
+            self._arm_sticker_request(user_id, chat_id, msg_id)
             self.answer_callback(cb_id, "Chế độ Tạo Sticker Ảnh / Video ≤3s")
             self.send_text(
                 chat_id,
@@ -3662,18 +3691,26 @@ class DirectTelegramBotRunner:
             return
 
         st_cur = self.user_states.get(user_id) or {}
-        if st_cur.get("mode") == "make_sticker" or "video" in msg or "animation" in msg or "photo" in msg:
+        sticker_state = self._get_sticker_request(user_id, chat_id)
+        if sticker_state and sticker_state.get("mode") == "make_sticker":
             if self._handle_sticker_media_message(chat_id, user_id, msg, msg_id):
-                self.user_states.pop(user_id, None)
+                self._clear_sticker_request(user_id, chat_id)
                 return
 
         if "document" in msg:
             doc_mime = str((msg["document"].get("mime_type") or "")).lower()
             if doc_mime.startswith(("image/", "video/")):
-                if self._handle_sticker_media_message(chat_id, user_id, msg, msg_id):
-                    self.user_states.pop(user_id, None)
+                if sticker_state and sticker_state.get("mode") == "make_sticker":
+                    if self._handle_sticker_media_message(chat_id, user_id, msg, msg_id):
+                        self._clear_sticker_request(user_id, chat_id)
                     return
+                self.send_text(chat_id, "Hãy gõ /sticker trong chính cuộc trò chuyện này trước khi gửi ảnh hoặc video.", reply_to=msg_id)
+                return
             self._handle_uploaded_document(chat_id, user_id, msg["document"], msg_id)
+            return
+
+        if any(kind in msg for kind in ("photo", "video", "animation")) and not sticker_state:
+            self.send_text(chat_id, "Hãy gõ /sticker trong chính cuộc trò chuyện này trước khi gửi ảnh hoặc video.", reply_to=msg_id)
             return
 
         if not text:
@@ -3736,7 +3773,7 @@ class DirectTelegramBotRunner:
             return
 
         if cmd_raw in ("/sticker", "/nhandan"):
-            self.user_states[user_id] = {"mode": "make_sticker"}
+            self._arm_sticker_request(user_id, chat_id, msg_id)
             self.send_text(
                 chat_id,
                 f"{tg_anim('magic', '')} <b>CHẾ ĐỘ TẠO STICKER ẢNH SẮC NÉT &amp; VIDEO NGẮN ≤ 3 GIÂY</b>\n"

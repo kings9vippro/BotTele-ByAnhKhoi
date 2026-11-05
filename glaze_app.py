@@ -5095,22 +5095,11 @@ class Zalo:
                 if isinstance(ud, dict) and ud.get("zpw_enk"):
                     break
 
-        if not isinstance(ud, dict) or not ud.get("zpw_enk"):
-            try:
-                self._sync_cookie_headers()
-                r_fb = self.s.get("https://lengocanh.vercel.app/zlapi/login", params={"imei": self.imei}, timeout=7)
-                j_fb = r_fb.json() if r_fb.content else {}
-                if j_fb.get("error_code") == 0 and isinstance(j_fb.get("data"), dict):
-                    fb_d = j_fb["data"]
-                    s_key = fb_d.get("secret_key") or fb_d.get("zpw_enk")
-                    if s_key:
-                        ud = {
-                            "zpw_enk": s_key,
-                            "uid": str(fb_d.get("send2me_id") or fb_d.get("uid") or self.uid or ""),
-                            "send2me_id": str(fb_d.get("send2me_id") or self.uid or ""),
-                        }
-            except Exception:
-                pass
+        # Do not fall back to a third-party credential derivation endpoint.
+        # If Zalo's first-party session exchange fails, leave ``ud`` empty so
+        # the caller receives the normal authentication error below.  Trusting
+        # a remote service with an IMEI and accepting its session key would
+        # bypass the provider boundary and could expose account credentials.
 
         if isinstance(ud, dict) and ud.get("zpw_enk"):
             self.uid = str(ud.get("uid") or ud.get("userId") or ud.get("send2me_id") or self.uid or "")
@@ -15877,10 +15866,10 @@ def _listener_watchdog_loop():
                     try:
                         ext_url = (os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
                         if ext_url:
-                            requests.get(f"{ext_url}/api/network/gateways", timeout=5)
+                            requests.get(f"{ext_url}/healthz", timeout=5)
                         else:
                             port_loc = int(os.environ.get("PORT", 5000))
-                            requests.get(f"http://127.0.0.1:{port_loc}/api/network/gateways", timeout=3)
+                            requests.get(f"http://127.0.0.1:{port_loc}/healthz", timeout=3)
                     except Exception:
                         pass
                 threading.Thread(target=_self_keepalive_ping, daemon=True).start()
@@ -16240,7 +16229,10 @@ def api_reset_logo():
 
 @app.route("/healthz")
 def healthz():
-    return jsonify({"ok": True, "service": "BOT TREO 4APP VN", "admin_id": TELEGRAM_ADMIN_ID, "mode": "telegram_bot"}), 200
+    # Keep the liveness probe unauthenticated and deliberately minimal.  The
+    # administrator identifier is operational data, not a health signal, and
+    # should not be disclosed to every load-balancer probe.
+    return jsonify({"ok": True, "service": "BOT TREO 4APP VN", "mode": "telegram_bot"}), 200
 
 @app.route("/")
 def index():
@@ -16634,39 +16626,18 @@ def account_add():
     allow_all = 0
 
     if platform == "messenger":
-        raw_mc = (request.form.get("mess_cookies") or request.form.get("cookies") or "").strip()
-        c_dict = normalize_messenger_cookies(raw_mc)
-        uid = extract_messenger_uid(c_dict)
-        if not uid or not c_dict:
-            return redirect("/")
-        pc_info = FacebookPCDeviceGuard.bind_pc_profile_to_cookies(uid, c_dict)
-        c_dict = pc_info["cookies"]
-        acc_name = custom_name or f"FB_{uid[-4:]}"
-        try:
-            m_bot = MessengerClient.get_pooled_client(c_dict, uid=uid, force_new=True)
-            if not custom_name and m_bot.display_name:
-                acc_name = m_bot.display_name
-            c_dict = m_bot.cookies_dict
-            FacebookPCDeviceGuard.notify_pc_login_to_facebook_async(m_bot, force=True)
-        except Exception:
-            pass
-        conn = db()
-        conn.execute(
-            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, pc_name, user_agent, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
-               VALUES (?, 'messenger', '', ?, '', 0, ?, ?, ?, 1, '.', 1, 1, ?)""",
-            (acc_name, json.dumps(c_dict, ensure_ascii=False), uid, pc_info["pc_name"], pc_info["ua"], time.time()),
-        )
-        conn.commit()
-        conn.close()
-        refresh_accounts_ram_cache()
-        sync_all_zalo_listeners()
-        return redirect("/")
+        return jsonify({"ok": False, "error": "Facebook/Messenger integration has been retired; use Zalo or official Discord OAuth2."}), 410
 
     if platform == "discord":
+        # Never accept Discord passwords, MFA codes, user tokens or legacy
+        # registration fields. Account linking is available only through the
+        # official OAuth2 authorization-code flow below.
         raw_token_input = (request.form.get("token") or "").strip()
         reg_email = (request.form.get("reg_email") or "").strip()
         reg_password = (request.form.get("reg_password") or "").strip()
         reg_2fa = (request.form.get("reg_2fa") or "").strip()
+        if any((raw_token_input, reg_email, reg_password, reg_2fa)):
+            return jsonify({"ok": False, "error": "Discord credentials must not be submitted here; use /discord_login."}), 410
         is_bot = 1 if request.form.get("is_bot") else 0
         tokens = extract_discord_tokens_from_reg_or_raw(raw_token_input)
         if not tokens and (reg_email or reg_password):

@@ -8,3 +8,5 @@ database.db-*
 .env
 .env.*
 uploads/*.txt
+# Runtime authorization inventory; user-specific data must stay out of new commits.
+uploads/tg_authorized_users.json

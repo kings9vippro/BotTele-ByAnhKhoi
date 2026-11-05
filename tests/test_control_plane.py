@@ -72,6 +72,24 @@ class ControlPlaneTests(unittest.TestCase):
         self.assertEqual(len(results),5)
         self.assertTrue(all(status==200 and b'data:' in body for status,body in results))
 
+    def test_sse_exposes_resumable_cursor_and_safe_connection_headers(self):
+        response=self.client.get('/api/miniapp/events',headers={'X-Request-ID':'fixture-stream-1'},buffered=False)
+        self.addCleanup(response.close)
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.headers.get('X-Request-ID'),'fixture-stream-1')
+        self.assertEqual(response.headers.get('X-Accel-Buffering'),'no')
+        self.assertEqual(response.headers.get('Connection'),'keep-alive')
+        first=next(response.response).decode()
+        self.assertIn('id: 0\n',first)
+        self.assertIn('event: snapshot\n',first)
+        self.assertIn('data: ',first)
+
+    def test_sse_rejects_untrusted_correlation_header(self):
+        response=self.client.get('/api/miniapp/events',headers={'X-Request-ID':'fixture stream!'},buffered=False)
+        self.addCleanup(response.close)
+        self.assertEqual(response.status_code,200)
+        self.assertIsNone(response.headers.get('X-Request-ID'))
+
     def test_invalid_urls_never_trigger_network(self):
         with patch.object(control_plane.requests,'get') as get:
             for url in ['http://localhost','https://discord.com.evil.test/api/webhooks/1/token','https://discord.com/api/webhooks/1/token?redirect=evil','https://discord.com/api/webhooks/1/token/../../other']:

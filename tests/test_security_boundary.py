@@ -20,10 +20,27 @@ class SecurityBoundaryTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(getattr(self.client,method)(path).status_code,(401,403))
 
+    def test_health_probe_is_public_and_minimal(self):
+        response = self.client.get('/healthz')
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body.get('ok'), True)
+        self.assertNotIn('admin_id', body)
+
+    def test_watchdog_uses_public_health_probe(self):
+        source = (Path(__file__).resolve().parents[1] / 'glaze_app.py').read_text()
+        self.assertIn('requests.get(f"{ext_url}/healthz", timeout=5)', source)
+        self.assertNotIn('requests.get(f"{ext_url}/api/network/gateways", timeout=5)', source)
+
     def test_retired_integrations_are_inaccessible_even_with_session(self):
         with self.client.session_transaction() as s:s['logged_in']=True
         for path in ['/api/discord/reg_login','/api/messenger/login_credentials','/integrations/facebook','/oauth/callback/facebook']:
             self.assertEqual(self.client.post(path,json={}).status_code,410)
+
+    def test_legacy_account_credentials_are_rejected(self):
+        with self.client.session_transaction() as s:s['logged_in']=True
+        self.assertEqual(self.client.post('/account/add', data={'platform':'messenger','cookies':'legacy'}).status_code,410)
+        self.assertEqual(self.client.post('/account/add', data={'platform':'discord','reg_email':'a@example.test','reg_password':'not-a-password'}).status_code,410)
 
     def test_cross_origin_cannot_mutate(self):
         with self.client.session_transaction() as s:s['logged_in']=True
@@ -92,3 +109,8 @@ class SecurityBoundaryTests(unittest.TestCase):
         source = (Path(__file__).resolve().parents[1] / 'zalo_login.py').read_text()
         self.assertNotIn('lengocanh.vercel.app', source)
         self.assertNotIn('3app_vip/bot.py', source)
+
+    def test_telegram_bot_token_is_environment_only(self):
+        source = (Path(__file__).resolve().parents[1] / 'bot_settings.py').read_text()
+        self.assertIn('os.environ.get("TELEGRAM_BOT_TOKEN", "")', source)
+        self.assertNotRegex(source, r'TELEGRAM_BOT_TOKEN\s*=\s*[^\n]*:[A-Za-z0-9_-]{20,}')

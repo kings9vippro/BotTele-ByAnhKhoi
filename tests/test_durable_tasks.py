@@ -151,3 +151,29 @@ class DurableTaskTests(unittest.TestCase):
         self.queue.run_one()
         self.assertEqual(calls.count('sent'),1)
         self.assertEqual(self.queue.list('a')[0]['status'],'COMPLETED')
+
+    def test_stop_race_converts_definitive_failure_to_cancelled(self):
+        task = None
+
+        def send(*args):
+            # Simulate a stop request arriving while the provider is in flight.
+            self.queue.control('a', task, 'stop')
+            raise ValueError('provider rejected')
+
+        self.queue.sender = send
+        task = self.queue.submit('a', 'c', 'one')
+        self.queue.run_one()
+        row = self.queue.list('a')[0]
+        self.assertEqual(row['status'], 'CANCELLED')
+        self.assertEqual(row['completed'] is not None, True)
+
+    def test_shutdown_still_persists_completed_send(self):
+        def send(*args):
+            # A graceful shutdown may be requested by the sender's owner after
+            # the provider has accepted the request.
+            self.queue.shutdown_event.set()
+
+        self.queue.sender = send
+        self.queue.submit('a', 'c', 'one')
+        self.assertTrue(self.queue.run_one())
+        self.assertEqual(self.queue.list('a')[0]['status'], 'COMPLETED')

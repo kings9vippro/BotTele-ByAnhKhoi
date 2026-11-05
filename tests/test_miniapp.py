@@ -132,6 +132,17 @@ class MiniAppTests(unittest.TestCase):
         self.assertNotIn(runner.token, response['description'])
         self.assertNotIn(runner.token, runner.last_error)
 
+    def test_telegram_sticker_request_is_scoped_to_user_and_chat(self):
+        import get_ck_im_zalo as telegram
+        runner = telegram.DirectTelegramBotRunner.__new__(telegram.DirectTelegramBotRunner)
+        runner._sticker_states = {}
+        runner._arm_sticker_request(7, "group-a")
+        self.assertIsNotNone(runner._get_sticker_request(7, "group-a"))
+        self.assertIsNone(runner._get_sticker_request(7, "group-b"))
+        self.assertIsNone(runner._get_sticker_request(8, "group-a"))
+        runner._clear_sticker_request(7, "group-a")
+        self.assertIsNone(runner._get_sticker_request(7, "group-a"))
+
     def test_telegram_import_reports_save_failure_and_hides_session_key(self):
         import get_ck_im_zalo as telegram
         runner = telegram.DirectTelegramBotRunner.__new__(telegram.DirectTelegramBotRunner)
