@@ -13,6 +13,15 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.goto('http://127.0.0.1:5873/miniapp#tgWebAppData='+encodeURIComponent(auth));
  await page.waitForFunction(()=>document.querySelector('#metrics').getAttribute('aria-busy')==='false');
  assert.equal(await page.getByRole('tab').count(),8);
+ assert.equal(await page.locator('#bottom .bottom-nav-button').count(),6);
+ assert.deepEqual(await page.locator('#bottom .bottom-nav-button').evaluateAll(buttons=>buttons.map(button=>({label:button.getAttribute('aria-label'),visibleText:button.innerText.trim(),iconHidden:button.querySelector('.bottom-icon')?.getAttribute('aria-hidden')}))),[
+  {label:'Tổng quan',visibleText:'',iconHidden:'true'},
+  {label:'Tài khoản',visibleText:'',iconHidden:'true'},
+  {label:'Task',visibleText:'',iconHidden:'true'},
+  {label:'Nhật ký',visibleText:'',iconHidden:'true'},
+  {label:'Âm nhạc',visibleText:'',iconHidden:'true'},
+  {label:'Cài đặt',visibleText:'',iconHidden:'true'}
+ ]);
  await page.getByRole('tab',{name:'Âm nhạc',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('#music-tracks').getAttribute('aria-busy')==='false');
  assert.equal(await page.locator('#music-tracks article').count(),10);
