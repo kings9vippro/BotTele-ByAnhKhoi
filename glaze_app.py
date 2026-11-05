@@ -15465,13 +15465,14 @@ def api_miniapp_delete_acc():
     return jsonify({"ok": True, "message": f"Đã xoá tài khoản #{aid}"})
 
 
-@app.route("/api/miniapp/boxes")
-def api_miniapp_boxes():
+def _cached_miniapp_boxes(requested_acc=''):
     boxes = []
     seen = set()
     try:
         accs = [a for a in get_all_accounts_from_ram(enabled_only=True) if (a.get('platform') or 'zalo') == 'zalo']
         for a in accs:
+            if requested_acc and str(a['id']) != requested_acc:
+                continue
             plat = (a.get("platform") or "zalo").lower()
             uid_s = str(a.get("uid") or "").strip()
             if plat == "zalo":
@@ -15479,17 +15480,24 @@ def api_miniapp_boxes():
                 g_data = g_c.get("data") if isinstance(g_c, dict) else (g_c[1] if isinstance(g_c, (list, tuple)) and len(g_c) > 1 else [])
                 for g in (g_data or []):
                     gid = str(g.get("id") or "").strip()
-                    if gid and gid not in seen:
-                        seen.add(gid)
-                        boxes.append({"id": gid, "name": g.get("name") or f"Nhóm {gid[-6:]}", "platform": "zalo"})
-                for gid_k in (KNOWN_GROUPS_BY_ACC.get(uid_s, set()) | ALL_KNOWN_ZALO_GROUP_IDS):
+                    key = (str(a['id']), gid)
+                    if gid and key not in seen:
+                        seen.add(key)
+                        boxes.append({"id": gid, "name": g.get("name") or f"Nhóm {gid[-6:]}", "platform": "zalo", "account_id": a['id']})
+                for gid_k in KNOWN_GROUPS_BY_ACC.get(uid_s, set()):
                     gid_s = str(gid_k).strip()
-                    if gid_s and gid_s not in seen and gid_s != uid_s:
-                        seen.add(gid_s)
-                        boxes.append({"id": gid_s, "name": f"Box Zalo {gid_s[-6:]}", "platform": "zalo"})
+                    key = (str(a['id']), gid_s)
+                    if gid_s and key not in seen and gid_s != uid_s:
+                        seen.add(key)
+                        boxes.append({"id": gid_s, "name": f"Box Zalo {gid_s[-6:]}", "platform": "zalo", "account_id": a['id']})
     except Exception:
         pass
-    return jsonify({"ok": True, "boxes": boxes[:80]})
+    return boxes[:80]
+
+
+@app.route("/api/miniapp/boxes")
+def api_miniapp_boxes():
+    return jsonify({"ok": True, "boxes": _cached_miniapp_boxes(str(request.args.get('account_id') or '').strip())})
 
 
 @app.route("/api/miniapp/launch", methods=["POST"])
@@ -15497,19 +15505,41 @@ def api_miniapp_launch():
     data = request.get_json(silent=True) or {}
     mode = str(data.get("mode") or "treo_nhay").strip()
     box_id = str(data.get("box_id") or "ALL").strip()
-    delay = max(0.0, float(data.get("delay", 0.4) or 0.0))
+    try:
+        delay = float(data.get("delay", 0) or 0)
+        if not math.isfinite(delay) or not 0 <= delay <= 300:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Delay phải từ 0 đến 300 giây"}), 400
     color_raw = str(data.get("color") or "word_rainbow").strip()
     custom_text = str(data.get("custom_text") or "").strip()
 
     accs = [a for a in get_all_accounts_from_ram(enabled_only=True) if (a.get('platform') or 'zalo') == 'zalo']
+    requested_acc = str(data.get('account_id') or '').strip()
+    if requested_acc:
+        accs = [a for a in accs if str(a['id']) == requested_acc]
     if not accs:
-        return jsonify({"ok": False, "error": "⚠️ Chưa có tài khoản nào đang bật! Hãy thêm Cookie/QR trước."})
+        return jsonify({"ok": False, "error": "Không tìm thấy tài khoản Zalo đang bật đã chọn."}), 400
+
+    requested_boxes = data.get('box_ids')
+    if requested_boxes is not None:
+        if not requested_acc or not isinstance(requested_boxes, list) or not 1 <= len(requested_boxes) <= 5:
+            return jsonify({"ok": False, "error": "Chọn một tài khoản và từ 1 đến 5 box."}), 400
+        box_ids = [str(x).strip() for x in requested_boxes]
+        if len(set(box_ids)) != len(box_ids) or any(not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', x) for x in box_ids):
+            return jsonify({"ok": False, "error": "Danh sách box không hợp lệ."}), 400
+        cached = _cached_miniapp_boxes(requested_acc)
+        lookup = {str(b['id']): b for b in cached if str(b['account_id']) == requested_acc}
+        if any(x not in lookup for x in box_ids):
+            return jsonify({"ok": False, "error": "Box chưa được xác nhận thuộc tài khoản đã chọn. Hãy làm mới danh sách."}), 409
+        target_boxes = [{"id": x, "thread_id": x, "name": lookup[x]['name'], "type": "group", "platform": "zalo"} for x in box_ids]
+    else:
+        target_boxes = []
 
     # Thu thập danh sách Box mục tiêu
-    target_boxes = []
-    if box_id != "ALL":
+    if requested_boxes is None and box_id != "ALL":
         target_boxes = [{"id": box_id, "thread_id": box_id, "name": f"Box {box_id[-6:]}", "type": "group", "platform": accs[0].get("platform") or "zalo"}]
-    else:
+    elif requested_boxes is None:
         seen_b = set()
         for a in accs:
             plat = (a.get("platform") or "zalo").lower()

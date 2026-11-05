@@ -33,6 +33,44 @@
  function row(title,detail){const r=element('article',undefined,'card');r.append(element('strong',title),element('p',detail));return r;}
  function renderAccounts(){const target=$('account-list'),q=$('account-search').value.toLowerCase();target.replaceChildren();for(const a of [...accounts.map(a=>({...a,kind:'Zalo',label:a.name,state:a.listener_started?'Luồng đã khởi chạy':'Đã lưu'})),...identities.map(a=>({...a,kind:'Discord',label:a.display_name,state:a.status}))]){if(!`${a.label} ${a.id} ${a.uid||a.provider_uid}`.toLowerCase().includes(q))continue;const r=row(a.label,`${a.kind} · #${a.id} · ${a.state}`);if(a.kind==='Zalo')r.append(button(a.chat_cmd_enabled?'Tắt lệnh':'Bật lệnh',async()=>{await api('toggle_acc_cmd',{acc_id:a.id});await refresh();}));r.append(button(a.kind==='Discord'?'Ngắt liên kết':'Xóa',()=>confirmAction('Xác nhận '+a.label,()=>api(a.kind==='Discord'?'oauth/disconnect':'delete_acc',a.kind==='Discord'?{id:a.id}:{acc_id:a.id})),'danger'));target.append(r);}if(!target.children.length)target.append(element('p','Chưa có tài khoản phù hợp.'));}
  $('account-search').oninput=renderAccounts;
+ let boxRequest=0;
+ function renderLaunchAccounts(){
+  const select=$('launch-account'),previous=select.value;
+  select.replaceChildren(element('option','Chọn tài khoản'));
+  select.firstChild.value='';
+  for(const account of accounts.filter(a=>a.enabled)){
+   const option=element('option',`${account.name} · #${account.id}`);
+   option.value=String(account.id);select.append(option);
+  }
+  select.value=[...select.options].some(o=>o.value===previous)?previous:'';
+  if(select.value!==previous)loadLaunchBoxes();
+ }
+ async function loadLaunchBoxes(){
+  const accountId=$('launch-account').value,field=$('launch-boxes'),requestId=++boxRequest;
+  field.replaceChildren(element('legend','Chọn tối đa 5 box'));
+  if(!accountId){field.append(element('p','Chọn tài khoản để tải tên box.'));return;}
+  const result=await api('boxes?account_id='+encodeURIComponent(accountId));
+  if(requestId!==boxRequest)return;
+  const boxes=result.boxes||[];
+  for(const box of boxes){
+   const label=element('label');const input=element('input');input.type='checkbox';input.value=box.id;
+   label.append(input,document.createTextNode(`${box.name} · ${box.id}`));field.append(label);
+  }
+  if(!boxes.length)field.append(element('p','Chưa có tên box trong bộ nhớ. Mở nhóm trên tài khoản Zalo rồi làm mới.'));
+ }
+ $('launch-account').onchange=()=>loadLaunchBoxes().catch(failed);
+ $('refresh-boxes').onclick=()=>loadLaunchBoxes().catch(failed);
+ $('launch-form').onsubmit=async e=>{
+  e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button[type=submit],button.primary');
+  const boxIds=[...$('launch-boxes').querySelectorAll('input:checked')].map(input=>input.value);
+  if(!boxIds.length||boxIds.length>5){toast('Chọn từ 1 đến 5 box.');return;}
+  submit.disabled=true;
+  try{
+   const body={...Object.fromEntries(new FormData(form)),box_ids:boxIds};
+   const launched=await api('launch',body);
+   toast(launched.message||'Đã tạo task');await refresh();go('tasks');
+  }catch(error){failed(error);toast(error.message);}finally{submit.disabled=false;}
+ };
  let tasksSignature='';
  function renderTasks(){
   const f=$('task-filter').value,target=$('task-list');
@@ -73,7 +111,7 @@
    identities=o.connections;
    if(viewer.role==='admin'){
     const [t,a,f,c]=await Promise.all([api('telemetry'),api('accounts'),api('files'),api('commands')]);
-    accounts=a.accounts;legacyTelemetry=t;
+    accounts=a.accounts;legacyTelemetry=t;renderLaunchAccounts();
     $('storage').textContent='Kho: '+t.storage_id;
     $('selected-files').textContent=`Nhây: ${f.selected_nhay||'—'} · Ngôn: ${f.selected_ngon||'—'}`;
     $('file-list').replaceChildren(...f.files.map(file=>{const r=element('div',undefined,'row');r.append(element('strong',file.filename));for(const target of ['nhay','ngon'])r.append(button(target,async()=>{await api('select_file',{filename:file.filename,target});await refresh();}));return r;}));

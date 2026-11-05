@@ -35,6 +35,7 @@ manually audited. Binary Zalo core and real production data were not audited.
 | Unbounded/untracked cross-channel notifications | SQLite queue with atomic 1–5 channel submission, five bounded workers, owner/channel constraints, persistent state, Retry-After and UNKNOWN outcome on ambiguous delivery. It is only for finite authorized webhook notifications, not a replacement of legacy Zalo tasks. |
 | Telegram transport exceptions can include bot tokens in URLs | Transport, polling, update and status errors now expose only a generic failure and exception type, rather than raw exception text. Old tokens in Git history still require revocation. |
 | Stop and status commands shared a saturated ordinary update pool | Telegram stop and task controls now use the reserved interactive pool. This does not interrupt a network request already in flight or guarantee response time. |
+| Mini App task launch silently chose every Zalo account and lost box names | The Zalo screen now selects one enabled account and up to five cached groups; the server checks that each group belongs to that account before launching, then records the selected account and group names in the task. The legacy launch form remains available for existing clients. |
 
 ## Architecture
 
@@ -94,7 +95,7 @@ window, allowing the client to replace stale events.
 ## Local verification (test-only credentials and no external API calls)
 
 - `python scripts/verify_startup.py`: Python 3.11 syntax and entry checks pass.
-- `python -m unittest discover -s tests -p 'test_*.py' -q`: 104 tests passed
+- `python -m unittest discover -s tests -p 'test_*.py' -q`: 106 tests passed
   after scoped Mini App authorization, PKCE and SSE resync work, with
   `DISABLE_TELEGRAM_BOT=1`, `DISABLE_BACKGROUND_WORKERS=1`, test-only token
   and key. Re-run on final commit before deployment.

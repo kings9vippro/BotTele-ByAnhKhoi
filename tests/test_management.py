@@ -108,6 +108,32 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(client.get('/api/miniapp/accounts',headers=headers).status_code,401)
         self.assertEqual(client.post('/api/miniapp/oauth/configure',headers=headers,json={}).status_code,401)
 
+    def test_miniapp_launch_uses_selected_account_and_named_boxes(self):
+        accounts=[{'id':1,'name':'First','platform':'zalo','uid':'uid-first','enabled':1},
+                  {'id':2,'name':'Second','platform':'zalo','uid':'uid-second','enabled':1}]
+        groups={'uid-first':{'data':[{'id':'box-one','name':'Box One'}]},
+                'uid-second':{'data':[{'id':'box-two','name':'Box Two'}]}}
+        with patch.object(app,'get_all_accounts_from_ram',return_value=accounts), \
+             patch.dict(app.Zalo._GROUPS_CACHE,groups,clear=True), \
+             patch.dict(app.KNOWN_GROUPS_BY_ACC,{},clear=True), \
+             patch.object(app,'start_task_programmatic',return_value='task-fixture') as launch:
+            listing=self.client.get('/api/miniapp/boxes?account_id=2')
+            self.assertEqual([(box['id'],box['name']) for box in listing.json['boxes']],[('box-two','Box Two')])
+            bad=self.client.post('/api/miniapp/launch',json={'account_id':2,'box_ids':['box-one'],'mode':'treo_ngon','custom_text':'Hello'})
+            self.assertEqual(bad.status_code,409)
+            self.assertFalse(launch.called)
+            good=self.client.post('/api/miniapp/launch',json={'account_id':2,'box_ids':['box-two'],'mode':'treo_ngon','custom_text':'Hello','delay':0})
+            self.assertTrue(good.json['ok'])
+            self.assertEqual(launch.call_args.kwargs['account_ids'],[2])
+            self.assertEqual(launch.call_args.kwargs['targets'][0]['name'],'Box Two')
+            self.assertEqual(launch.call_args.kwargs['delay'],0)
+
+    def test_miniapp_launch_rejects_bad_delay_before_starting_task(self):
+        with patch.object(app,'start_task_programmatic') as launch:
+            response=self.client.post('/api/miniapp/launch',json={'delay':'NaN'})
+        self.assertEqual(response.status_code,400)
+        launch.assert_not_called()
+
     def test_global_stop_no_longer_needs_retired_discord_engine(self):
         event=threading.Event()
         active={'fixture':{'stop':event,'targets':['group-fixture']}}
