@@ -13,7 +13,13 @@
 - Rotate any Zalo session material that was previously exported by an older deployment.
 - Keep `TELEGRAM_BOT_TOKEN`, OAuth secrets, `SECRET_KEY`, and database paths in the deployment secret store; never commit them.
 - Use HTTPS for OAuth callbacks and Mini App hosting.
+- The previously tracked Telegram token pattern still exists in Git history;
+  rotate it with BotFather and configure only the replacement via the deployment
+  secret store. `scripts/check_secrets.py` passes on the current tree.
+- `/account/add` returns HTTP 410 for Facebook/Messenger and for Discord token,
+  password, MFA or registration fields. Users must use the official Discord
+  OAuth2 authorization-code flow.
 
 ## Remaining review items
 
-The repository still contains legacy compatibility code and plaintext-at-rest Zalo fields required by the current schema.  A production migration to encrypted columns needs a key-management decision and a rollback plan; it is not silently applied in this patch.  Legacy Facebook/Messenger compatibility symbols are guarded and not exposed through the V4 menu, but a separate migration is needed before deleting their shared storage.
+The repository still contains legacy compatibility code and plaintext-at-rest Zalo fields required by the current schema. A production migration to encrypted columns needs a key-management decision and a rollback plan; it is not silently applied in this patch. Legacy Facebook/Messenger compatibility symbols are guarded and not exposed through the menu, but a separate migration is needed before deleting their shared storage. Render live logs/metrics were not inspected because no Render workspace was selected in the execution environment; local `/healthz` and deployment config checks passed.
