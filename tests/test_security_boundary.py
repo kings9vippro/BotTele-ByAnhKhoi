@@ -1,5 +1,6 @@
 """Regression coverage for the runtime's HTTP authorization boundary."""
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -40,3 +41,49 @@ class SecurityBoundaryTests(unittest.TestCase):
             with app.SECURITY_LOCK:app.API_RATE_BUCKETS.pop('rate-test-only',None)
             for _ in range(320):self.assertNotEqual(self.client.get('/api/logo').status_code,429)
             self.assertEqual(self.client.get('/api/logo').status_code,429)
+
+    def test_zalo_credentials_never_export_or_leave_process_for_totp(self):
+        root = Path(__file__).resolve().parents[1]
+        bot_source = (root / 'get_ck_im_zalo.py').read_text()
+        web_source = (root / 'glaze_app.py').read_text()
+        self.assertNotIn('API_2FA', bot_source)
+        self.assertNotIn('API_2FA', web_source)
+        self.assertNotIn('export_acc_token:', bot_source)
+        self.assertIn('show_acc_details:', bot_source)
+        self.assertNotIn('TRỌN BỘ TOKEN & COOKIE', bot_source)
+        self.assertIn('browser-safe inventory', web_source)
+        self.assertIn('public_keys =', web_source)
+
+    def test_zalo_vault_and_qr_endpoints_redact_session_material(self):
+        class FakeConn:
+            def execute(self, *_args, **_kwargs):
+                return self
+            def fetchall(self):
+                return [{
+                    'uid': 'uid-1', 'display_name': 'Zalo Test',
+                    'imei': 'imei-secret', 'cookies_json': '{"zpw_sek":"cookie-secret"}',
+                    'zpw_enk': 'enk-secret', 'updated_at': 1,
+                }]
+            def close(self):
+                return None
+
+        with patch.object(app, 'db', return_value=FakeConn()):
+            inventory = app.ZaloCookieVaultEngine.list_vault_records()
+        self.assertEqual(inventory[0]['uid'], 'uid-1')
+        self.assertNotIn('cookies', inventory[0])
+        self.assertNotIn('cookies_str', inventory[0])
+        self.assertNotIn('imei', inventory[0])
+
+        with self.client.session_transaction() as s:
+            s['logged_in'] = True
+        with patch.object(app.ZaloQRLoginManager, 'start_qr_session', return_value={
+            'ok': True, 'session_id': 's1', 'status': 'waiting_scan',
+            'message': 'ready', 'qr_base64': 'qr', 'cookies': {'zpw_sek': 'secret'},
+            'file_content': 'Cookie: secret', 'zpw_enk': 'secret',
+        }):
+            response = self.client.post('/api/zalo/qr_start', json={})
+        body = response.get_json()
+        self.assertEqual(body['session_id'], 's1')
+        self.assertNotIn('cookies', body)
+        self.assertNotIn('file_content', body)
+        self.assertNotIn('zpw_enk', body)

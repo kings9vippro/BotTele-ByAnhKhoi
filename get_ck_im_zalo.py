@@ -56,11 +56,14 @@ DB_PATH = DATABASE_PATH
 WELCOME_VIDEO_PATH = os.path.join(BASE_DIR, "welcome.mp4")
 MENU_BANNER_PATH = os.path.join(BASE_DIR, "menu_banner.png")
 
-API_2FA = "https://keyherlyswar.x10.mx/Apidocs/tien_ich/2fa.php?secret={}"
-
 DISCORD_TOKEN_RE = re.compile(
     r"((?:mfa\.[A-Za-z0-9_\-]{50,160})|(?:[A-Za-z0-9_\-]{18,44}\.[A-Za-z0-9_\-]{5,14}\.[A-Za-z0-9_\-]{20,140}))"
 )
+
+
+def _public_error(prefix):
+    """Return a stable user-facing error without exposing credentials or URLs."""
+    return f"{prefix} Vui lòng thử lại; chi tiết đã được ghi nhận ở máy chủ."
 
 import sys
 
@@ -250,12 +253,6 @@ def generate_totp_local(secret_key, time_step=30, digits=6):
             return str(code_int).zfill(digits), rem_sec
         except Exception:
             pass
-    try:
-        r = requests.get(API_2FA.format(str(secret_key).replace(" ", "")), timeout=6).json()
-        if r.get("token"):
-            return str(r["token"]), rem_sec
-    except Exception:
-        pass
     return None, 0
 
 
@@ -2144,8 +2141,8 @@ class DirectTelegramBotRunner:
                 ),
             )
             self.edit_menu_message(chat_id, message_id, cap, reply_markup=self.build_tabbed_keyboard("func", 1, user_id=user_id))
-        except Exception as e:
-            self.send_text(chat_id, f"Lỗi khởi chạy chiến dịch: <code>{str(e)[:200]}</code>")
+        except Exception:
+            self.send_text(chat_id, _public_error("Lỗi khởi chạy chiến dịch:"))
 
     # NẠP TRỰC TIẾP COOKIE + IMEI ZALO, GẮN CHỦ SỞ HỮU OWNER_TG_ID & BẬT TRỌN BỘ 32 LỆNH TRÊN ACC (.menu, .treodo, .damau, .nhaypoll, .n, .g, .t...)
     def handle_import_zalo_cookie_imei(self, chat_id, user_id, imei_str, ck_dict, meta=None, reply_to=None):
@@ -2429,12 +2426,12 @@ class DirectTelegramBotRunner:
                     reply_to=msg_id,
                 )
 
-            except Exception as e:
+            except Exception:
                 if wait_msg_id:
                     self.delete_msg(chat_id, wait_msg_id)
                 self.send_text(
                     chat_id,
-                    f"<b>Lỗi khi tạo phiên QR Zalo:</b> <code>{str(e)[:300]}</code>",
+                    _public_error("<b>Lỗi khi tạo phiên QR Zalo:</b>"),
                     reply_to=msg_id,
                 )
             finally:
@@ -2803,8 +2800,8 @@ class DirectTelegramBotRunner:
                         f"<b>Không thể lấy Link Box ({bid_lk}):</b> {res_lk.get('error') or 'Tài khoản không có quyền tạo link trong nhóm này.'}",
                         reply_to=msg_id,
                     )
-            except Exception as ex_lk:
-                self.send_text(chat_id, f"Lỗi lấy Link Box: <code>{ex_lk}</code>", reply_to=msg_id)
+            except Exception:
+                self.send_text(chat_id, _public_error("Lỗi lấy Link Box:"), reply_to=msg_id)
             return
 
         if data.startswith("setcolor:"):
@@ -3054,7 +3051,7 @@ class DirectTelegramBotRunner:
             self._render_accounts_and_files_menu(chat_id, msg_id, user_id=user_id, notice=f"Đã chỉnh Acc <b>#{acc_id}</b>: <b>{lbl}</b>!")
             return
 
-        if data.startswith("export_acc_token:"):
+        if data.startswith("show_acc_details:"):
             if str(chat_id) != str(user_id):
                 self.answer_callback(cb_id, 'Chỉ xuất phiên trong tin nhắn riêng với bot.', show_alert=True)
                 return
@@ -3067,35 +3064,22 @@ class DirectTelegramBotRunner:
             if (target_a.get('platform') or 'zalo') != 'zalo':
                 self.answer_callback(cb_id, 'Discord chỉ dùng OAuth2; không xuất user token.', show_alert=True)
                 return
-            self.answer_callback(cb_id, f"Đang trích xuất Token/Cookie Acc #{acc_id}...")
+            self.answer_callback(cb_id, f"Đang tải trạng thái Acc #{acc_id}...")
             aid = target_a["id"]
             aname = target_a["name"]
             aplat = target_a["platform"]
             auid = target_a["uid"]
-            aimei = target_a["imei"]
-            ack = target_a["cookies"]
-            aenk = target_a["zpw_enk"]
-            atok = target_a["token"]
-            if str(aplat).lower() == "discord":
-                self.send_text(
-                    chat_id,
-                    f"<b>TOKEN DISCORD ACC #{aid} ({aname}):</b>\n<pre>{atok}</pre>",
-                    reply_to=msg_id,
-                )
-            else:
-                self.send_text(
-                    chat_id,
-                    f"{tg_anim('key', '')} <b>TRỌN BỘ TOKEN & COOKIE + IMEI ZALO ACC #{aid} ({aname})</b>\n\n"
-                    f"<blockquote>"
-                    f"🆔 UID: <code>{auid}</code>\n"
-                    f"Chủ sở hữu ID: <code>{target_a.get('owner_tg_id') or ROOT_ADMIN_ID}</code>"
-                    f"</blockquote>\n\n"
-                    f"<b>Token (zpw_enk):</b>\n<pre>{aenk or 'Đang đồng bộ'}</pre>\n"
-                    f"<b>IMEI (z_uuid):</b>\n<pre>{aimei}</pre>\n"
-                    f"<b>Cookies:</b>\n<pre>{str(ack or '')[:2600]}</pre>\n\n"
-                    f"<b>Cú pháp nạp nhanh 1 dòng:</b>\n<pre>{aimei}|{str(ack or '')[:1200]}</pre>",
-                    reply_to=msg_id,
-                )
+            self.send_text(chat_id,
+                f"{tg_anim('key', '')} <b>CHI TIẾT TRẠNG THÁI ACC #{aid} ({aname})</b>\n\n"
+                f"<blockquote>"
+                f"Nền tảng: <code>{aplat}</code>\n"
+                f"UID: <code>{auid or 'đang đồng bộ'}</code>\n"
+                f"Chủ sở hữu ID: <code>{target_a.get('owner_tg_id') or ROOT_ADMIN_ID}</code>\n"
+                f"Nhận lệnh: <code>{'BẬT' if target_a.get('chat_cmd_enabled', 1) else 'TẮT'}</code>\n"
+                f"Phiên: <code>được giữ kín trên máy chủ</code>"
+                f"</blockquote>\n\n"
+                f"Credential không được xuất vào Telegram. Nếu phiên lỗi, hãy ngắt/xóa Acc rồi đăng nhập lại.",
+                reply_to=msg_id)
             return
 
         if data.startswith("del_acc_now:"):
@@ -3314,8 +3298,8 @@ class DirectTelegramBotRunner:
                 self.send_sticker_bytes(chat_id, webp_b, filename="sticker_512x512.webp", reply_to=msg_id)
                 self.send_doc_bytes(chat_id, png_b, "sticker_512x512_sharp.png", caption="Nhãn Dán Sticker 512×512 Chuẩn Zalo & Telegram (Nền trong suốt Die-Cut)", reply_to=msg_id)
                 return True
-        except Exception as e:
-            self.send_text(chat_id, f"Lỗi tạo Sticker: <code>{e}</code>", reply_to=msg_id)
+        except Exception:
+            self.send_text(chat_id, _public_error("Lỗi tạo Sticker:"), reply_to=msg_id)
             return True
         return False
 
@@ -3347,7 +3331,7 @@ class DirectTelegramBotRunner:
                 f"• <b>#{aid} [{str(aplat).upper()}] {aname}</b> (<code>{auid or '-'}</code> | {cmd_badge}{owner_tag})"
             )
             rows.append([
-                tg_btn(f"Cookie #{aid} ({aname[:8]})", f"export_acc_token:{aid}", emoji_key="key"),
+                tg_btn(f"Chi tiết #{aid} ({aname[:8]})", f"show_acc_details:{aid}", emoji_key="key"),
                 tg_btn(f"{'Bật' if cmd_flag else 'Tắt'} Lệnh #{aid}", f"toggle_acc_cmd:{aid}", emoji_key="chat"),
                 tg_btn(f"Xoá #{aid}", f"del_acc_now:{aid}", emoji_key="trash"),
             ])
@@ -3520,8 +3504,8 @@ class DirectTelegramBotRunner:
                 import app as _main_app
                 added, total = _main_app.ProxyPoolEngine.add_proxies_incremental(text, auto_start=True)
                 self.send_text(chat_id, f"Đã nạp thêm <b>{added} Proxy</b> (Tổng: <b>{total} Proxy</b>) và tự động đo tốc độ Ping!", reply_to=msg_id)
-            except Exception as e:
-                self.send_text(chat_id, f"Lỗi nạp Proxy: <code>{e}</code>", reply_to=msg_id)
+            except Exception:
+                self.send_text(chat_id, _public_error("Lỗi nạp Proxy:"), reply_to=msg_id)
             return True
 
         if mode == "2fa":

@@ -385,6 +385,11 @@ def sanitize_log_text(txt):
     s = re.sub(r"(https?://[^\s]+)", "[STEALTH_ROUTE]", s)
     return s[:220]
 
+
+def public_error_message(prefix):
+    """Stable API/UI error text; never reflect exception contents to clients."""
+    return f"{prefix} Vui lòng thử lại; chi tiết đã được ghi nhận ở máy chủ."
+
 # KHỞI TẠO & ĐỒNG BỘ CƠ SỞ DỮ LIỆU SQLITE TỐC ĐỘ CAO
 _ACTIVE_DB_PATH = DB_PATH
 _DB_TLS = threading.local()
@@ -4272,8 +4277,8 @@ class ZaloStickerMakerEngine:
             try:
                 _, b64_p = src_s.split(",", 1)
                 return base64.b64decode(b64_p), "inline_media.png"
-            except Exception as e:
-                return None, f"Data URI không hợp lệ: {e}"
+            except Exception:
+                return None, "Data URI không hợp lệ"
         if src_s.startswith(("http://", "https://")):
             # Preserve signed CDN query parameters. Never strip or guess another URL.
             src_s = src_s.replace("\\/", "/")
@@ -4582,10 +4587,10 @@ class ZaloStickerMakerEngine:
                 "height": 512,
                 "message": "✅ Đã tạo Nhãn Dán Sticker 512×512 Chuẩn Zalo thành công!",
             }
-        except Exception as e:
+        except Exception:
             return {
                 "ok": False,
-                "error": f"❌ Không thể tạo Sticker từ ảnh: {e}",
+                "error": public_error_message("❌ Không thể tạo Sticker từ ảnh."),
             }
 
     @classmethod
@@ -4835,8 +4840,8 @@ class ZaloStickerMakerEngine:
                 "height": 512,
                 "message": f"✅ Đã tạo Nhãn Dán Động 512×512 từ Video ngắn ({round(min(3.0, eff_dur or 2.0), 2)}s ≤ 3.0s) thành công!",
             }
-        except Exception as e:
-            return {"ok": False, "error": f"❌ Lỗi xử lý Video Sticker: {e}"}
+        except Exception:
+            return {"ok": False, "error": public_error_message("❌ Lỗi xử lý Video Sticker.")}
         finally:
             if tmp_in and os.path.exists(tmp_in):
                 try:
@@ -8418,7 +8423,6 @@ API_TIKTOK_VIDEO = "https://keyherlyswar.x10.mx/Apidocs/tien_ich/infovideott.php
 API_FB_GETID     = "https://scanfb.id.vn/getID.php?linkFB={}"
 API_FB_INFO      = "https://scanfb.id.vn/getInfo.php?id={}"
 API_FB_AVT       = "https://keyherlyswar.x10.mx/Apidocs/tien_ich/avtfb.php?uid={}"
-API_2FA          = "https://keyherlyswar.x10.mx/Apidocs/tien_ich/2fa.php?secret={}"
 
 def add_border_to_qr(image_data: bytes) -> bytes:
     try:
@@ -8507,27 +8511,40 @@ class ZaloCookieVaultEngine:
 
     @classmethod
     def list_vault_records(cls):
+        """Return a browser-safe inventory; credential material stays server-side."""
         out = []
         try:
             conn = db()
             rows = conn.execute("SELECT * FROM zalo_cookie_vault ORDER BY updated_at DESC").fetchall()
             conn.close()
             for r in rows:
-                c_dict = normalize_zalo_cookies(r["cookies_json"])
                 out.append({
                     "uid": r["uid"],
                     "display_name": r["display_name"] or f"Zalo_{str(r['uid'])[-4:]}",
                     "masked_name": mask_account_name(r["display_name"] or "Zalo VIP"),
-                    "imei": r["imei"],
+                    "imei_present": bool(r["imei"]),
                     "masked_imei": mask_sensitive_id(r["imei"], 6),
-                    "cookies": c_dict,
-                    "cookies_str": json.dumps(c_dict, ensure_ascii=False),
+                    "cookies_present": bool(r["cookies_json"]),
                     "zpw_enk_ready": bool(r["zpw_enk"]),
                     "updated_at": r["updated_at"],
                 })
         except Exception:
             pass
         return out
+
+    @classmethod
+    def get_vault_record(cls, uid):
+        """Load one credential record for an internal server-side activation only."""
+        uid_s = str(uid or "").strip()
+        if not uid_s:
+            return None
+        try:
+            conn = db()
+            row = conn.execute("SELECT * FROM zalo_cookie_vault WHERE uid=?", (uid_s,)).fetchone()
+            conn.close()
+            return dict(row) if row else None
+        except Exception:
+            return None
 
     @classmethod
     def delete_vault_record(cls, uid):
@@ -9565,9 +9582,9 @@ class ZaloQRLoginManager:
                 user_info_dict=user_info_got,
                 session_obj=s
             )
-        except Exception as e:
+        except Exception:
             st["status"] = "error"
-            st["message"] = f"Lỗi khởi tạo phiên QR Zalo: {e}"
+            st["message"] = public_error_message("Lỗi khởi tạo phiên QR Zalo:")
             cls._persist_qr_state_to_db(st, async_write=False)
 
 
@@ -15416,8 +15433,8 @@ def api_miniapp_add_cookie():
             return jsonify({"ok": False, "error": "Không lưu được tài khoản vào cơ sở dữ liệu. Vui lòng kiểm tra nhật ký máy chủ."}), 500
         sync_all_zalo_listeners()
         return jsonify({"ok": True, "acc_id": acc_id, "message": f"Đã nạp {name} (#{acc_id}) thành công"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+    except Exception:
+        return jsonify({"ok": False, "error": public_error_message("Không thể nạp tài khoản Zalo.")})
 
 
 @app.route("/api/miniapp/start_qr", methods=["POST"])
@@ -15425,8 +15442,8 @@ def api_miniapp_start_qr():
     try:
         status = ZaloQRLoginManager.start_qr_session()
         return jsonify({key: status.get(key) for key in ("ok", "session_id", "status", "message")})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+    except Exception:
+        return jsonify({"ok": False, "error": public_error_message("Không thể khởi tạo phiên QR.")})
 
 
 @app.route("/api/miniapp/toggle_acc_cmd", methods=["POST"])
@@ -15990,8 +16007,8 @@ def api_zalo_geo_status():
             "isp": "Singtel / Viettel Fiber",
             "is_vn_or_sg": True,
         })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+    except Exception:
+        return jsonify({"ok": False, "error": public_error_message("Không thể kiểm tra đường truyền.")})
 
 
 @app.route("/api/zalo/auto_scan_vn_sg_proxy", methods=["POST"])
@@ -16014,8 +16031,8 @@ def api_zalo_auto_scan_vn_sg_proxy():
                 f"Máy chủ hiện tại đang ở {route.get('country') or cc} ({route.get('ip')}). Hãy nhập Proxy VN/SG hoặc dùng cấu hình render.yaml (region: singapore)!"
             ),
         })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+    except Exception:
+        return jsonify({"ok": False, "error": public_error_message("Không thể quét đường truyền VN/SG.")})
 
 
 @app.route("/api/network/gateways")
@@ -16332,13 +16349,10 @@ def api_zalo_create_sticker():
 
 
 
-@app.route("/api/tools/2fa", methods=["POST", "GET"])
+@app.route("/api/tools/2fa", methods=["POST"])
 def api_tools_2fa():
-    if request.method == "POST":
-        data = request.json or {}
-        secret = (data.get("secret") or "").strip()
-    else:
-        secret = (request.args.get("secret") or "").strip()
+    data = request.get_json(silent=True) or {}
+    secret = (data.get("secret") or "").strip()
     token, rem_sec = generate_totp_rfc6238(secret)
     if token:
         return jsonify({"ok": True, "token": token, "rem_sec": rem_sec})
@@ -16361,7 +16375,13 @@ def api_zalo_qr_start():
         custom_pc_name=custom_pc_name,
         vn_proxy=vn_proxy,
     )
-    return jsonify(res)
+    public_keys = (
+        "ok", "session_id", "status", "message", "qr_base64", "qr_image_url",
+        "remaining_sec", "qr_code_id", "pc_name", "computer_name", "vn_location",
+        "vn_isp", "route_mode", "real_country_code", "is_vn_or_sg", "step_num",
+        "device_model",
+    )
+    return jsonify({key: res.get(key) for key in public_keys if key in res})
 
 @app.route("/api/zalo/pc_devices")
 def api_zalo_pc_devices():
@@ -16390,8 +16410,8 @@ def api_telegram_restart():
         time.sleep(0.6)
         st = get_telegram_bot_status()
         return jsonify({"ok": True, "message": "🤖 Đã khởi động lại Bot Telegram & gỡ bỏ Webhook xung đột thành công!", **st})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 200
+    except Exception:
+        return jsonify({"ok": False, "error": public_error_message("Không thể khởi động lại Bot Telegram.")}), 200
 
 @app.route("/api/zalo/qr_status/<session_id>")
 def api_zalo_qr_status(session_id):
@@ -16509,22 +16529,24 @@ def api_zalo_verify_cookie_imei():
 def api_zalo_vault_activate():
     data = request.json or {}
     uid = str(data.get("uid") or "").strip()
-    records = ZaloCookieVaultEngine.list_vault_records()
-    rec = next((r for r in records if str(r["uid"]) == uid), None)
+    rec = ZaloCookieVaultEngine.get_vault_record(uid)
     if not rec:
         return jsonify({"ok": False, "error": "Không tìm thấy bản ghi trong Kho lưu trữ"}), 404
+    cookies = normalize_zalo_cookies(rec.get("cookies_json") or "")
+    if not cookies:
+        return jsonify({"ok": False, "error": "Bản ghi không còn credential hợp lệ trên máy chủ"}), 409
     conn = db()
     existing = conn.execute("SELECT id FROM accounts WHERE platform='zalo' AND (uid=? OR imei=?)", (rec["uid"], rec["imei"])).fetchone()
     if existing:
         conn.execute(
-            "UPDATE accounts SET name=?, imei=?, cookies=?, uid=?, enabled=1 WHERE id=?",
-            (rec["display_name"], rec["imei"], json.dumps(rec["cookies"], ensure_ascii=False), rec["uid"], existing["id"])
+            "UPDATE accounts SET name=?, imei=?, cookies=?, uid=?, zpw_enk=?, enabled=1 WHERE id=?",
+            (rec["display_name"], rec["imei"], json.dumps(cookies, ensure_ascii=False), rec["uid"], rec.get("zpw_enk") or "", existing["id"])
         )
     else:
         conn.execute(
-            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
-               VALUES (?, 'zalo', ?, ?, '', 0, ?, 1, '.', 0, 1, ?)""",
-            (rec["display_name"], rec["imei"], json.dumps(rec["cookies"], ensure_ascii=False), rec["uid"], time.time())
+            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, zpw_enk, user_agent, created_at)
+               VALUES (?, 'zalo', ?, ?, '', 0, ?, 1, '.', 0, 1, ?, ?, ?)""",
+            (rec["display_name"], rec["imei"], json.dumps(cookies, ensure_ascii=False), rec["uid"], rec.get("zpw_enk") or "", rec.get("user_agent") or "", time.time())
         )
     conn.commit()
     conn.close()
@@ -17224,8 +17246,8 @@ def api_account_test_session():
             mc = MessengerClient.get_pooled_client(acc["cookies"], uid=acc.get("uid") or "")
             sync_all_zalo_listeners()
             return jsonify({"ok": True, "alive": True, "message": f"🟢 SỐNG — Tài khoản Messenger '{mc.display_name}' đang hoạt động tốt!"})
-    except Exception as e:
-        return jsonify({"ok": False, "alive": False, "error": f"🔴 DIE — Lỗi kiểm tra phiên: {e}"}), 200
+    except Exception:
+        return jsonify({"ok": False, "alive": False, "error": "🔴 DIE — Không thể kiểm tra phiên lúc này."}), 200
 
 @app.route("/api/account/reconnect_all", methods=["POST"])
 def api_account_reconnect_all():
