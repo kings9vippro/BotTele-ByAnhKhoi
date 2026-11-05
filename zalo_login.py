@@ -1879,28 +1879,6 @@ def exchange_cookies_for_zpw_enk(session_obj, imei, cookie_jar_dict, ua, sec_ch_
             except Exception:
                 pass
 
-    # Fallback dự phòng từ 3app_vip/bot.py (lengocanh.vercel.app/zlapi/login)
-    if not user_info_got.get("zpw_enk"):
-        try:
-            r_fb = session_obj.get(
-                "https://lengocanh.vercel.app/zlapi/login",
-                params={"imei": imei},
-                headers=_build_wpa_hdrs(),
-                timeout=8,
-            )
-            j_fb = r_fb.json() if r_fb.content else {}
-            if j_fb.get("error_code") == 0 and isinstance(j_fb.get("data"), dict):
-                fb_d = j_fb["data"]
-                s_key = fb_d.get("secret_key") or fb_d.get("zpw_enk")
-                if s_key:
-                    user_info_got = {
-                        "zpw_enk": s_key,
-                        "uid": str(fb_d.get("send2me_id") or fb_d.get("uid") or ""),
-                        "send2me_id": str(fb_d.get("send2me_id") or ""),
-                    }
-        except Exception:
-            pass
-
     if isinstance(user_info_got, dict) and user_info_got.get("zpw_enk"):
         user_info_got["_bound_computer_name"] = used_comp_name
         live_enk = str(user_info_got["zpw_enk"])

@@ -87,3 +87,8 @@ class SecurityBoundaryTests(unittest.TestCase):
         self.assertNotIn('cookies', body)
         self.assertNotIn('file_content', body)
         self.assertNotIn('zpw_enk', body)
+
+    def test_zalo_login_uses_first_party_endpoints_only(self):
+        source = (Path(__file__).resolve().parents[1] / 'zalo_login.py').read_text()
+        self.assertNotIn('lengocanh.vercel.app', source)
+        self.assertNotIn('3app_vip/bot.py', source)
