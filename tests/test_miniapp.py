@@ -131,7 +131,7 @@ class MiniAppTests(unittest.TestCase):
         accounts = [{"id": 1, "platform": "zalo", "enabled": 1, "token": "private"}, {"id": 2, "platform": "discord", "enabled": 0}, {"id": 3, "platform": "custom"}, {"id": 4, "platform": None}]
         with patch.object(app, "refresh_accounts_ram_cache", return_value=accounts):
             response = self.client.get("/api/miniapp/telemetry")
-        self.assertEqual(response.json["account_platforms"], {"zalo": 2, "discord": 1, "messenger": 0, "other": 1})
+        self.assertEqual(response.json["account_platforms"], {"zalo": 2, "discord": 0})
         self.assertNotIn("private", response.get_data(as_text=True))
 
     def test_sticker_wait_is_scoped_and_expires(self):
@@ -220,7 +220,7 @@ class MiniAppTests(unittest.TestCase):
 
     def test_miniapp_has_fresh_build_header(self):
         response = self.client.get("/miniapp")
-        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-1.3.0")
+        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-2.0.0")
         self.assertIn("no-store", response.headers["Cache-Control"])
 
     def test_custom_sticker_upload_plain_response_reaches_send(self):

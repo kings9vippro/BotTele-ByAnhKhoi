@@ -23,6 +23,7 @@ class OAuthTests(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
         self.app = Flask(__name__)
+        self.owner = 'owner'
         self.app.secret_key = "test-only-signing-key"
         self.app.config["SESSION_COOKIE_HTTPONLY"] = True
         self.app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -36,7 +37,7 @@ class OAuthTests(unittest.TestCase):
         oauth.init_oauth_tables(conn)
         conn.commit()
         conn.close()
-        oauth.register_oauth_routes(self.app, self.db, lambda: "owner")
+        oauth.register_oauth_routes(self.app, self.db, lambda: self.owner)
         self.admin = self.app.test_client()
         with self.admin.session_transaction() as admin_session:
             admin_session["logged_in"] = True
@@ -97,10 +98,41 @@ class OAuthTests(unittest.TestCase):
             self.assertEqual(browser.get(path, query_string=query).status_code, 400)
             exchange.assert_called_once()
 
+    def test_same_discord_identity_is_isolated_per_telegram_owner_and_relink_deduplicates(self):
+        with patch.object(oauth,'_exchange_profile',return_value=self.profile()):
+            for owner in ('alice','bob','alice'):
+                self.owner=owner
+                browser,state=self.begin()
+                self.assertEqual(browser.get('/oauth/callback/discord',query_string={'state':state,'code':'fixture'}).status_code,200)
+        self.assertEqual(len(self.admin.get('/api/miniapp/oauth/connections').json['connections']),1)
+        self.owner='bob'
+        self.assertEqual(len(self.admin.get('/api/miniapp/oauth/connections').json['connections']),1)
+        conn=self.db()
+        self.assertEqual(conn.execute('SELECT COUNT(*) FROM oauth_connections').fetchone()[0],2)
+        conn.close()
+
+    def test_disconnect_revokes_only_owners_connection(self):
+        with patch.object(oauth,'_exchange_profile',return_value=self.profile()):
+            for owner in ('alice','bob'):
+                self.owner=owner
+                browser,state=self.begin()
+                browser.get('/oauth/callback/discord',query_string={'state':state,'code':'fixture'})
+        self.owner='alice'
+        target=self.admin.get('/api/miniapp/oauth/connections').json['connections'][0]['id']
+        response=Mock(status_code=200)
+        response.__enter__=Mock(return_value=response)
+        response.__exit__=Mock()
+        with patch.object(oauth.requests,'post',return_value=response) as revoke:
+            self.assertEqual(self.admin.post('/api/miniapp/oauth/disconnect',json={'id':target}).status_code,200)
+            revoke.assert_called_once()
+        self.assertEqual(self.admin.get('/api/miniapp/oauth/connections').json['connections'],[])
+        self.owner='bob'
+        self.assertEqual(len(self.admin.get('/api/miniapp/oauth/connections').json['connections']),1)
+
     def test_provider_cancellation_creates_no_connection(self):
-        browser, state = self.begin("facebook")
+        browser, state = self.begin("discord")
         with patch.object(oauth, "_exchange_profile") as exchange:
-            result = browser.get("/oauth/callback/facebook", query_string={"state": state, "error": "access_denied"})
+            result = browser.get("/oauth/callback/discord", query_string={"state": state, "error": "access_denied"})
         self.assertEqual(result.status_code, 400)
         exchange.assert_not_called()
         self.assertEqual(self.admin.get("/api/miniapp/oauth/connections").json["connections"], [])
@@ -138,11 +170,11 @@ class OAuthTests(unittest.TestCase):
         http.get.return_value.__exit__ = Mock()
         with patch.object(oauth.requests, "Session") as factory:
             factory.return_value.__enter__.return_value = http
-            for provider in ("discord", "facebook"):
+            for provider in ("discord",):
                 result = oauth._exchange_profile(provider, oauth._config(provider), "example")
                 self.assertEqual(result["uid"], "123456")
         self.assertEqual(http.get.call_args.kwargs["headers"]["Authorization"], "Bearer private-access")
-        self.assertIn("appsecret_proof", http.get.call_args.kwargs["params"])
+        self.assertEqual(http.get.call_args.kwargs["params"], {})
         self.assertFalse(http.post.call_args.kwargs["allow_redirects"])
         http.get.return_value.__exit__.assert_called()
 

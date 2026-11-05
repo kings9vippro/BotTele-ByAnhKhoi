@@ -35,7 +35,6 @@ def register(app, db, snapshot, stop_all):
             return conn.execute("SELECT provider, credentials FROM official_integrations WHERE provider=? OR provider LIKE ? ORDER BY provider", (provider, provider + ':%')).fetchall()
         finally:
             conn.close()
-
     def decode(row):
         settings = json.loads(cipher().decrypt(row[1].encode()))
         settings['_storage_key'] = row[0]
@@ -69,7 +68,7 @@ def register(app, db, snapshot, stop_all):
     @app.get("/api/miniapp/integrations")
     def integration_status():
         result = []
-        for provider in ("discord", "facebook"):
+        for provider in ("discord",):
             rows = integration_rows(provider)
             if not rows:
                 result.append({"provider": provider, "configured": False, "id": "", "name": ""})
@@ -86,7 +85,7 @@ def register(app, db, snapshot, stop_all):
     def configure():
         data = request.get_json(silent=True) or {}
         provider = data.get("provider")
-        if provider not in ("discord", "facebook"):
+        if provider != "discord":
             return jsonify({"ok": False, "error": "Nền tảng không hợp lệ"}), 400
         import os
         if not os.environ.get("SECRET_KEY"):
@@ -96,28 +95,19 @@ def register(app, db, snapshot, stop_all):
         if not token or not owners or not all(value.isdigit() for value in owners):
             return jsonify({"ok": False, "error": "Cần token ứng dụng và ID người quản lý dạng số, phân cách dấu phẩy"}), 400
         settings = {"token": token, "owners": owners}
-        if provider == "discord":
-            public_key = str(data.get("public_key") or "").strip()
-            if not re.fullmatch(r"[0-9a-fA-F]{64}", public_key):
-                return jsonify({"ok": False, "error": "Public Key Discord phải gồm 64 ký tự hex"}), 400
-            settings["public_key"] = public_key
-            url, headers = "https://discord.com/api/v10/users/@me", {"Authorization": "Bot " + token}
-        else:
-            version = str(data.get("graph_version") or "").strip()
-            if not re.fullmatch(r"v\d+\.\d+", version) or not data.get("app_secret") or not data.get("verify_token") or not str(data.get("page_id") or "").isdigit():
-                return jsonify({"ok": False, "error": "Cần Page ID, App Secret, Verify Token và phiên bản Graph API"}), 400
-            settings.update(version=version, app_secret=str(data["app_secret"]), verify_token=str(data["verify_token"]))
-            url, headers = f"https://graph.facebook.com/{version}/me", {"Authorization": "Bearer " + token}
+        public_key = str(data.get("public_key") or "").strip()
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", public_key):
+            return jsonify({"ok": False, "error": "Public Key Discord phải gồm 64 ký tự hex"}), 400
+        settings["public_key"] = public_key
+        url, headers = "https://discord.com/api/v10/users/@me", {"Authorization": "Bot " + token}
         try:
-            with requests.get(url, headers=headers, params={"fields": "id,name,category"} if provider == "facebook" else {}, timeout=(5, 10), allow_redirects=False) as upstream:
+            with requests.get(url, headers=headers, params={}, timeout=(5, 10), allow_redirects=False) as upstream:
                 if upstream.status_code != 200:
                     raise ValueError()
                 profile = upstream.json()
             if not str(profile.get("id") or "").isdigit():
                 raise ValueError()
             if provider == "discord" and not profile.get("bot"):
-                raise ValueError()
-            if provider == "facebook" and (str(profile["id"]) != str(data["page_id"]) or not profile.get("category")):
                 raise ValueError()
         except (requests.RequestException, ValueError, TypeError):
             return jsonify({"ok": False, "error": "Không xác minh được Bot/Page token chính thức"}), 422
@@ -151,7 +141,7 @@ def register(app, db, snapshot, stop_all):
     @app.post("/api/miniapp/integrations/disconnect")
     def disconnect():
         provider = (request.get_json(silent=True) or {}).get("provider")
-        if provider not in ("discord", "facebook"):
+        if provider != "discord":
             return jsonify({"ok": False, "error": "Nền tảng không hợp lệ"}), 400
         connection_id = (request.get_json(silent=True) or {}).get('id')
         if connection_id is not None and not str(connection_id).isdigit():
@@ -212,83 +202,3 @@ def register(app, db, snapshot, stop_all):
             return changed == 1
         finally:
             conn.close()
-
-    @app.get("/integrations/facebook")
-    @app.get("/integrations/facebook/<connection_id>")
-    def facebook_verify(connection_id=None):
-        candidates = [config("facebook", connection_id)] if connection_id else [decode(row) for row in integration_rows("facebook")]
-        if request.args.get("hub.mode") == "subscribe":
-            for settings in candidates:
-                if settings and hmac.compare_digest(request.args.get("hub.verify_token", ""), settings["verify_token"]):
-                    return Response(request.args.get("hub.challenge", ""), mimetype="text/plain")
-        return Response(status=403)
-
-    @app.post("/integrations/facebook")
-    @app.post("/integrations/facebook/<connection_id>")
-    def facebook_message(connection_id=None):
-        raw = request.stream.read(256 * 1024 + 1)
-        if len(raw) > 256 * 1024:
-            return Response(status=413)
-        try:
-            entries = json.loads(raw).get("entry") or []
-        except (ValueError, AttributeError):
-            return Response(status=400)
-        if not isinstance(entries, list) or len(entries) > 100:
-            return Response(status=413)
-        received_signature = request.headers.get("X-Hub-Signature-256", "")
-        authenticated = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                return Response(status=400)
-            settings = config("facebook", connection_id or str(entry.get("id") or ""))
-            if not settings or str(entry.get("id")) != settings["id"]:
-                continue
-            signature = "sha256=" + hmac.new(settings["app_secret"].encode(), raw, hashlib.sha256).hexdigest()
-            if not hmac.compare_digest(signature, received_signature):
-                return Response(status=403)
-            authenticated.append((settings, entry))
-        if not authenticated:
-            return Response(status=403)
-        event_count = sum(len(entry.get("messaging") or []) for _, entry in authenticated)
-        if event_count > 100:
-            return Response(status=413)
-        for settings, entry in authenticated:
-            for event in entry.get("messaging", []):
-                if not isinstance(event, dict):
-                    continue
-                message = event.get("message") or {}
-                sender = str((event.get("sender") or {}).get("id") or "")
-                command = str(message.get("text") or "").strip().lstrip("./").lower()
-                mid = str(message.get("mid") or "")
-                if sender not in settings["owners"] or message.get("is_echo") or command not in COMMANDS or not mid or len(mid) > 256:
-                    continue
-                if not slots.acquire(blocking=False):
-                    return Response(status=503)
-                event_key = "facebook:" + settings['id'] + ':' + mid
-                if not claim_event(event_key):
-                    slots.release()
-                    continue
-                try:
-                    text = response_text(command)
-                except Exception:
-                    slots.release()
-                    conn = db()
-                    conn.execute("DELETE FROM official_events WHERE event_id=?", (event_key,))
-                    conn.commit()
-                    conn.close()
-                    raise
-
-                def deliver(recipient=sender, reply=text, credentials=settings):
-                    try:
-                        current = config("facebook", credentials['id'])
-                        if not current or current["token"] != credentials["token"]:
-                            return
-                        with requests.post(f"https://graph.facebook.com/{credentials['version']}/{credentials['id']}/messages", headers={"Authorization": "Bearer " + credentials["token"]}, json={"recipient": {"id": recipient}, "message": {"text": reply[:1900]}, "messaging_type": "RESPONSE"}, timeout=(5, 10), allow_redirects=False) as result:
-                            if result.status_code != 200:
-                                app.logger.error("Facebook Page command reply rejected (%s)", result.status_code)
-                    except requests.RequestException:
-                        app.logger.error("Facebook Page command reply failed")
-                    finally:
-                        slots.release()
-                pool.submit(deliver)
-        return jsonify({"ok": True})

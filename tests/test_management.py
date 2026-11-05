@@ -25,7 +25,7 @@ class ManagementTests(unittest.TestCase):
         self.assertIs(app, importlib.import_module('glaze_app'))
         self.assertTrue(callable(app.ensure_telegram_bot_started))
         routes = {rule.rule for rule in app.app.url_map.iter_rules()}
-        for route in ('/login', '/miniapp', '/api/miniapp/accounts', '/file/create', '/integrations/discord', '/integrations/facebook'):
+        for route in ('/login', '/miniapp', '/api/miniapp/accounts', '/file/create', '/integrations/discord', '/api/miniapp/control'):
             self.assertIn(route, routes)
 
     def test_errors_do_not_return_empty_dashboard_or_success(self):
@@ -68,6 +68,28 @@ class ManagementTests(unittest.TestCase):
         self.assertFalse(receipt['commands_enabled'])
         self.assertEqual(receipt['storage_id'], listing['storage_id'])
         self.assertEqual(receipt['storage_id'], telemetry['storage_id'])
+
+    def test_zalo_owner_cannot_be_taken_by_matching_uid(self):
+        import get_ck_im_zalo as telegram
+        self.assertTrue(telegram.can_user_access_account(telegram.ROOT_ADMIN_ID, ''))
+        self.assertFalse(telegram.can_user_access_account('other-user', ''))
+        with patch.object(telegram.ZaloPCSessionKeeper, 'register_and_keep_alive'), patch.object(app.ZaloCookieVaultEngine, 'save_zalo_vault_record'), patch.object(app.Zalo, 'get_pooled_client', return_value=SimpleNamespace(uid='owner-test-uid', secret_key='fixture-key')), patch.object(app, 'add_authorized_user'), patch.object(app, 'refresh_owner_uids'), patch.object(app, 'sync_all_zalo_listeners'), patch.object(telegram.threading, 'Thread'):
+            saved=telegram.sync_zalo_account_to_web_db('owner-test-uid','Owner','owner-imei',{'zpsid':'valid-fixture'},zpw_enk='fixture-key',owner_tg_id='alice')
+            self.assertIsNotNone(saved)
+            stolen=telegram.sync_zalo_account_to_web_db('owner-test-uid','Intruder','owner-imei',{'zpsid':'different-fixture'},zpw_enk='fixture-key',owner_tg_id='bob')
+        self.assertIsNone(stolen)
+        record=app.db().execute('SELECT owner_tg_id,name,cookies FROM accounts WHERE id=?',(saved,)).fetchone()
+        self.assertEqual(record['owner_tg_id'],'alice')
+        self.assertEqual(record['name'],'Owner')
+        self.assertNotIn('different-fixture',record['cookies'])
+
+    def test_global_stop_no_longer_needs_retired_discord_engine(self):
+        event=threading.Event()
+        active={'fixture':{'stop':event,'targets':['group-fixture']}}
+        saved={'fixture':{'status':'running','meta':{'targets':['group-fixture']}}}
+        with patch.object(app,'ACTIVE_TASKS',active),patch.object(app,'TASKS_RAM_STORE',saved):
+            self.assertGreaterEqual(app.stop_tasks_for_thread(None),1)
+        self.assertTrue(event.is_set())
 
     def test_stop_retains_inflight_task_until_worker_finishes(self):
         stopped, release = threading.Event(), threading.Event()
@@ -213,63 +235,7 @@ class ManagementTests(unittest.TestCase):
         self.assertTrue(self.client.post('/api/miniapp/integrations/disconnect', json={'provider': 'discord', 'id': '9876'}).json['ok'])
         self.assertEqual(self.discord_post({'type': 1, 'application_id': '9877'}).status_code, 200)
 
-    def test_multiple_pages_route_batched_messages_using_their_own_tokens(self):
-        values = self.configure('facebook', {'token': 'page-one-token'})
-        self.configure('facebook', {'page_id': '9877', 'token': 'page-two-token', 'owner_ids': '456'})
-        payload = {'entry': [
-            {'id': '9876', 'messaging': [{'sender': {'id': '123'}, 'message': {'mid': 'same-mid', 'text': '.menu'}}]},
-            {'id': '9877', 'messaging': [{'sender': {'id': '456'}, 'message': {'mid': 'same-mid', 'text': '.menu'}}]}
-        ]}
-        raw = json.dumps(payload).encode()
-        sig = 'sha256=' + hmac.new(values['app_secret'].encode(), raw, hashlib.sha256).hexdigest()
-        sent, done, lock = [], threading.Event(), threading.Lock()
-        reply = MagicMock(status_code=200)
-        reply.__enter__.return_value = reply
 
-        def send(url, **kwargs):
-            with lock:
-                sent.append((url, kwargs['headers']['Authorization'], kwargs['json']['recipient']['id']))
-                if len(sent) == 2:
-                    done.set()
-            return reply
-
-        with patch.object(official.requests, 'post', side_effect=send):
-            result = self.client.post('/integrations/facebook', data=raw, content_type='application/json', headers={'X-Hub-Signature-256': sig})
-            self.assertEqual(result.status_code, 200)
-            self.assertTrue(done.wait(3))
-            self.assertEqual(self.client.post('/integrations/facebook', data=raw, content_type='application/json', headers={'X-Hub-Signature-256': sig}).status_code, 200)
-        self.assertEqual(len(sent), 2)
-        self.assertIn(('https://graph.facebook.com/v23.0/9876/messages', 'Bearer page-one-token', '123'), sent)
-        self.assertIn(('https://graph.facebook.com/v23.0/9877/messages', 'Bearer page-two-token', '456'), sent)
-
-    def test_facebook_verify_signature_owner_and_duplicate_stop(self):
-        values = self.configure('facebook')
-        challenge = self.client.get('/integrations/facebook', query_string={'hub.mode': 'subscribe', 'hub.verify_token': 'verification', 'hub.challenge': '1234'})
-        self.assertEqual(challenge.text, '1234')
-        self.assertEqual(self.client.post('/integrations/facebook', json={}).status_code, 403)
-        event = {'entry': [{'id': '9876', 'messaging': [{'sender': {'id': '123'}, 'message': {'mid': 'message-one', 'text': 'stopall'}}]}]}
-        raw = json.dumps(event).encode()
-        sig = 'sha256=' + hmac.new(values['app_secret'].encode(), raw, hashlib.sha256).hexdigest()
-        delivered = threading.Event()
-        reply = MagicMock(status_code=200)
-        reply.__enter__.return_value = reply
-
-        def send(*args, **kwargs):
-            delivered.set()
-            return reply
-
-        with patch.object(app, 'stop_tasks_for_thread', return_value=1) as stop, patch.object(official.requests, 'post', side_effect=send):
-            for _ in range(2):
-                result = self.client.post('/integrations/facebook', data=raw, content_type='application/json', headers={'X-Hub-Signature-256': sig})
-                self.assertEqual(result.status_code, 200)
-            self.assertTrue(delivered.wait(2))
-            stop.assert_called_once_with(None)
-            event['entry'][0]['messaging'][0]['sender']['id'] = '999'
-            event['entry'][0]['messaging'][0]['message']['mid'] = 'not-an-owner'
-            denied_raw = json.dumps(event).encode()
-            denied_sig = 'sha256=' + hmac.new(values['app_secret'].encode(), denied_raw, hashlib.sha256).hexdigest()
-            self.client.post('/integrations/facebook', data=denied_raw, content_type='application/json', headers={'X-Hub-Signature-256': denied_sig})
-            stop.assert_called_once_with(None)
 
     def test_oauth_configuration_form_is_encrypted_and_secret_free(self):
         result = self.client.post('/api/miniapp/oauth/configure', json={'provider': 'discord', 'client_id': '1234', 'client_secret': 'private-new-secret', 'public_base_url': 'https://bot.example'})
@@ -293,12 +259,11 @@ class ManagementTests(unittest.TestCase):
 
     def test_disconnect_removes_only_the_selected_integration(self):
         self.configure('discord')
-        self.configure('facebook')
         response = self.client.post('/api/miniapp/integrations/disconnect', json={'provider': 'discord'})
         self.assertTrue(response.json['ok'])
         providers = self.client.get('/api/miniapp/integrations').json['integrations']
         status = {item['provider']: item['configured'] for item in providers}
-        self.assertEqual(status, {'discord': False, 'facebook': True})
+        self.assertEqual(status, {'discord': False})
 
 
 if __name__ == '__main__':

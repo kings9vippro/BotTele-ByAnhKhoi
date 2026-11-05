@@ -1,6 +1,6 @@
 """Supported command documentation. Author: Dev Anh Khôi. Version: 1.2.0."""
 
-_ALL = ("zalo", "discord", "messenger")
+_ALL = ("zalo",)
 COMMANDS = (
     (".menu", "Mở bảng lệnh", "Hiện các lệnh được hỗ trợ trên nền tảng hiện tại.", _ALL, False),
     (".ping", "Kiểm tra phản hồi", "Đo phản hồi của bộ xử lý; không phải tốc độ mạng tới mọi nền tảng.", _ALL, False),
