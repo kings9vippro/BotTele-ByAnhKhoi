@@ -1067,13 +1067,13 @@ class DirectTelegramBotRunner:
                         return res2
             return res
         except Exception as e:
-            self.last_error = str(e)
+            self.last_error = f"Telegram request failed ({type(e).__name__})"
             if not use_poll_session:
                 try:
                     self._tls.session = self._create_isolated_session()
                 except Exception:
                     pass
-            return {"ok": False, "description": str(e)}
+            return {"ok": False, "description": self.last_error}
 
     def clear_webhook_and_init(self):
         from control_plane import COMMANDS
@@ -1103,7 +1103,7 @@ class DirectTelegramBotRunner:
                 )
                 return True
         except Exception as e:
-            self.last_error = str(e)
+            self.last_error = f"Telegram initialization failed ({type(e).__name__})"
         return False
 
     def send_text(self, chat_id, text, reply_to=None, parse_mode="HTML", reply_markup=None):
@@ -3880,13 +3880,16 @@ class DirectTelegramBotRunner:
         try:
             self.process_update(upd)
         except Exception as e:
-            self.last_error = str(e)
+            self.last_error = f"Telegram update failed ({type(e).__name__})"
 
     def _submit_update(self, upd):
         msg = upd.get("message") or upd.get("edited_message") or {}
         parts = str(msg.get("text") or "").split(None, 1)
         command = parts[0].lower().split("@")[0] if parts else ""
-        interactive = "callback_query" in upd or command in ("/start", "/menu", "/help", "/bot", "/ping")
+        interactive = "callback_query" in upd or command in (
+            "/start", "/menu", "/help", "/bot", "/ping", "/tasks", "/task_status",
+            "/task_stop", "/task_pause", "/task_resume", "/stopall", "/ta", "/stop",
+        )
         executor = self.interactive_executor if interactive else self.executor
         slots = self._interactive_update_slots if interactive else self._update_slots
         if not slots.acquire(blocking=False):
@@ -3945,7 +3948,7 @@ class DirectTelegramBotRunner:
                         fail_streak = 0
                     time.sleep(0.5)
             except Exception as e:
-                self.last_error = str(e)
+                self.last_error = f"Telegram polling failed ({type(e).__name__})"
                 fail_streak += 1
                 try:
                     self.poll_session.close()

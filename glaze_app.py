@@ -16341,7 +16341,7 @@ def api_telegram_status():
         from get_ck_im_zalo import get_telegram_bot_status
         st = get_telegram_bot_status()
     except Exception as e:
-        st = {"running": False, "last_error": str(e)}
+        st = {"running": False, "last_error": f"Telegram status unavailable ({type(e).__name__})"}
     return jsonify({"ok": True, **st})
 
 @app.route("/api/telegram/restart", methods=["POST"])

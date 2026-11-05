@@ -33,6 +33,8 @@ manually audited. Binary Zalo core and real production data were not audited.
 | Legacy Zalo verification called a cookie-shaped string “alive” | Requires actual live probe success before claiming verification. |
 | Mini App polling/recreated view caused stale data and resets | New seven-panel Mini App with signed data requests, SSE state updates, bounded event history, native touch scroll snapping, real task actions, upload/selection of text files and task detail sheet. |
 | Unbounded/untracked cross-channel notifications | SQLite queue with atomic 1–5 channel submission, five bounded workers, owner/channel constraints, persistent state, Retry-After and UNKNOWN outcome on ambiguous delivery. It is only for finite authorized webhook notifications, not a replacement of legacy Zalo tasks. |
+| Telegram transport exceptions can include bot tokens in URLs | Transport, polling, update and status errors now expose only a generic failure and exception type, rather than raw exception text. Old tokens in Git history still require revocation. |
+| Stop and status commands shared a saturated ordinary update pool | Telegram stop and task controls now use the reserved interactive pool. This does not interrupt a network request already in flight or guarantee response time. |
 
 ## Architecture
 
@@ -77,6 +79,8 @@ task state without a full page reload. UI is responsive at 320, 390, 768 and
 1280 px in Chromium. Spring constants, pull-to-refresh, all long-press menus,
 focus trap, Telegram Main/Secondary buttons and real-device frame rate are
 not verified/complete; do not advertise them as shipped.
+The settings panel also offers locally persisted larger, heavier text and
+three accent colors; these controls affect only the current browser/device.
 
 An authorized Telegram user can now access only their own Discord identity,
 webhook channels and notification tasks in the signed Mini App. Zalo accounts,
@@ -90,7 +94,7 @@ window, allowing the client to replace stale events.
 ## Local verification (test-only credentials and no external API calls)
 
 - `python scripts/verify_startup.py`: Python 3.11 syntax and entry checks pass.
-- `python -m unittest discover -s tests -p 'test_*.py' -q`: 102 tests passed
+- `python -m unittest discover -s tests -p 'test_*.py' -q`: 104 tests passed
   after scoped Mini App authorization, PKCE and SSE resync work, with
   `DISABLE_TELEGRAM_BOT=1`, `DISABLE_BACKGROUND_WORKERS=1`, test-only token
   and key. Re-run on final commit before deployment.

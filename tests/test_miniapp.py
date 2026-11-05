@@ -104,6 +104,34 @@ class MiniAppTests(unittest.TestCase):
         runner.executor.submit.return_value = Future()
         self.assertTrue(runner._submit_update(update))
 
+    def test_telegram_stop_command_uses_reserved_interactive_capacity(self):
+        import get_ck_im_zalo as telegram
+        runner = telegram.DirectTelegramBotRunner.__new__(telegram.DirectTelegramBotRunner)
+        runner._update_slots = threading.BoundedSemaphore(1)
+        runner._interactive_update_slots = threading.BoundedSemaphore(1)
+        runner.executor = Mock()
+        runner.interactive_executor = Mock()
+        runner.executor.submit.return_value = Future()
+        runner.interactive_executor.submit.return_value = Future()
+        self.assertTrue(runner._submit_update({'message': {'text': 'long job'}}))
+        self.assertTrue(runner._submit_update({'message': {'text': '/stopall'}}))
+        runner.interactive_executor.submit.assert_called_once()
+
+    def test_telegram_transport_exception_does_not_expose_bot_token(self):
+        import get_ck_im_zalo as telegram
+        runner = telegram.DirectTelegramBotRunner.__new__(telegram.DirectTelegramBotRunner)
+        runner.token = 'test-sensitive-token'
+        runner.api_base = 'https://api.telegram.org/bot' + runner.token
+        runner._tls = threading.local()
+        runner._create_isolated_session = Mock(return_value=Mock())
+        session = Mock()
+        session.post.side_effect = RuntimeError('failed at ' + runner.api_base + '/getMe')
+        runner._get_worker_session = Mock(return_value=session)
+        response = runner.api_call('getMe')
+        self.assertFalse(response['ok'])
+        self.assertNotIn(runner.token, response['description'])
+        self.assertNotIn(runner.token, runner.last_error)
+
     def test_telegram_import_reports_save_failure_and_hides_session_key(self):
         import get_ck_im_zalo as telegram
         runner = telegram.DirectTelegramBotRunner.__new__(telegram.DirectTelegramBotRunner)
