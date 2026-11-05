@@ -83,6 +83,31 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(record['name'],'Owner')
         self.assertNotIn('different-fixture',record['cookies'])
 
+    def test_signed_delegate_sees_only_scoped_miniapp_services(self):
+        import os
+        import hmac
+        uid='123456789'
+        conn=app.db()
+        conn.execute('CREATE TABLE IF NOT EXISTS tg_authorized_users(uid TEXT PRIMARY KEY,name TEXT,role TEXT,added_at INTEGER)')
+        conn.execute("INSERT OR REPLACE INTO tg_authorized_users VALUES(?, 'Fixture', 'VIP', 1)",(uid,))
+        conn.commit()
+        from durable_tasks import TaskQueue
+        TaskQueue(lambda: app.db(), lambda *_args: None).close()
+        conn.execute('CREATE TABLE IF NOT EXISTS webhook_channels(id TEXT PRIMARY KEY,owner TEXT NOT NULL,name TEXT NOT NULL,secret TEXT NOT NULL,created REAL NOT NULL)')
+        conn.commit()
+        values={'auth_date':str(int(time.time())),'user':json.dumps({'id':int(uid)},separators=(',',':'))}
+        key=hmac.new(b'WebAppData',os.environ['TELEGRAM_BOT_TOKEN'].encode(),hashlib.sha256).digest()
+        check='\n'.join(f'{k}={values[k]}' for k in sorted(values))
+        values['hash']=hmac.new(key,check.encode(),hashlib.sha256).hexdigest()
+        from urllib.parse import urlencode
+        client=app.app.test_client()
+        headers={'X-Telegram-Init-Data':urlencode(values)}
+        self.assertEqual(client.get('/api/miniapp/session',headers=headers).json['owner'],uid)
+        self.assertEqual(client.get('/api/miniapp/control',headers=headers).status_code,200)
+        self.assertEqual(client.get('/api/miniapp/oauth/connections',headers=headers).status_code,200)
+        self.assertEqual(client.get('/api/miniapp/accounts',headers=headers).status_code,401)
+        self.assertEqual(client.post('/api/miniapp/oauth/configure',headers=headers,json={}).status_code,401)
+
     def test_global_stop_no_longer_needs_retired_discord_engine(self):
         event=threading.Event()
         active={'fixture':{'stop':event,'targets':['group-fixture']}}

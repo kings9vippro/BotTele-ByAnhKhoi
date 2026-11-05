@@ -106,7 +106,7 @@ except ImportError:
 
 try:
     from flask import (
-        Flask, request, jsonify, session, redirect, Response, send_from_directory, render_template_string
+        Flask, request, jsonify, session, redirect, Response, send_from_directory, render_template_string, g
     )
 except ImportError:
     class Flask:
@@ -245,6 +245,7 @@ def get_or_create_csrf_token():
 def is_miniapp_request_authorized():
     """Accept an authenticated dashboard session or a signed Telegram Web App request."""
     if session.get("logged_in"):
+        g.miniapp_owner = str(TELEGRAM_ADMIN_ID)
         return True
     init_data = (request.headers.get("X-Telegram-Init-Data") or "").strip()
     # A token baked into tracked source is public; it cannot authenticate a Mini App.
@@ -263,9 +264,40 @@ def is_miniapp_request_authorized():
         if not hmac.compare_digest(received_hash, expected_hash):
             return False
         user = json.loads(values.get("user") or "{}")
-        return str(user.get("id") or "") == TELEGRAM_ADMIN_ID
+        owner = str(user.get("id") or "")
+        if owner == str(TELEGRAM_ADMIN_ID):
+            g.miniapp_owner = owner
+            return True
+        # Delegates can manage only their OAuth identities and webhook queue.
+        scoped = request.path.startswith('/api/miniapp/oauth/') and request.path != '/api/miniapp/oauth/configure'
+        scoped = scoped or request.path in {'/api/miniapp/session', '/api/miniapp/control', '/api/miniapp/events',
+            '/api/miniapp/channels', '/api/miniapp/channels/delete', '/api/miniapp/notifications',
+            '/api/miniapp/notifications/stop_all', '/api/miniapp/notification_control'}
+        if not scoped or not owner.isdigit():
+            return False
+        c = db()
+        try:
+            authorized = c.execute('SELECT 1 FROM tg_authorized_users WHERE uid=?', (owner,)).fetchone()
+        except sqlite3.Error:
+            authorized = None
+        finally:
+            c.close()
+        if authorized:
+            g.miniapp_owner = owner
+            return True
+        return False
     except (TypeError, ValueError, json.JSONDecodeError):
         return False
+
+
+def miniapp_request_owner():
+    return str(getattr(g, 'miniapp_owner', TELEGRAM_ADMIN_ID))
+
+
+@app.get('/api/miniapp/session')
+def api_miniapp_session():
+    owner = miniapp_request_owner()
+    return jsonify(ok=True, owner=owner, role='admin' if owner == str(TELEGRAM_ADMIN_ID) else 'member')
 
 @app.before_request
 def security_middleware():
@@ -770,10 +802,10 @@ def init_db():
     conn.close()
 
 init_db()
-register_oauth_routes(app, lambda: db(), lambda: TELEGRAM_ADMIN_ID)
+register_oauth_routes(app, lambda: db(), miniapp_request_owner)
 register_official_integrations(app, lambda: db(), lambda: api_miniapp_telemetry().get_json(), lambda: stop_tasks_for_thread(None))
 from control_plane import register as register_control_plane
-register_control_plane(app, lambda: db(), lambda: TELEGRAM_ADMIN_ID)
+register_control_plane(app, lambda: db(), miniapp_request_owner)
 
 def get_setting(key, default_val=""):
     try:
@@ -15438,7 +15470,7 @@ def api_miniapp_boxes():
     boxes = []
     seen = set()
     try:
-        accs = get_all_accounts_from_ram(enabled_only=True)
+        accs = [a for a in get_all_accounts_from_ram(enabled_only=True) if (a.get('platform') or 'zalo') == 'zalo']
         for a in accs:
             plat = (a.get("platform") or "zalo").lower()
             uid_s = str(a.get("uid") or "").strip()
@@ -15455,16 +15487,6 @@ def api_miniapp_boxes():
                     if gid_s and gid_s not in seen and gid_s != uid_s:
                         seen.add(gid_s)
                         boxes.append({"id": gid_s, "name": f"Box Zalo {gid_s[-6:]}", "platform": "zalo"})
-            elif plat == "discord":
-                for cid in DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS.get(a["id"], set()):
-                    if cid and str(cid) not in seen:
-                        seen.add(str(cid))
-                        boxes.append({"id": str(cid), "name": f"Discord {str(cid)[-5:]}", "platform": "discord"})
-            elif plat == "messenger":
-                for tid_m in MessengerStealthAntiBanEngine.ACTIVE_MESSENGER_POLL_THREADS.get(a["id"], set()):
-                    if tid_m and str(tid_m) not in seen:
-                        seen.add(str(tid_m))
-                        boxes.append({"id": str(tid_m), "name": f"Mess {str(tid_m)[-5:]}", "platform": "messenger"})
     except Exception:
         pass
     return jsonify({"ok": True, "boxes": boxes[:80]})
@@ -15479,7 +15501,7 @@ def api_miniapp_launch():
     color_raw = str(data.get("color") or "word_rainbow").strip()
     custom_text = str(data.get("custom_text") or "").strip()
 
-    accs = get_all_accounts_from_ram(enabled_only=True)
+    accs = [a for a in get_all_accounts_from_ram(enabled_only=True) if (a.get('platform') or 'zalo') == 'zalo']
     if not accs:
         return jsonify({"ok": False, "error": "⚠️ Chưa có tài khoản nào đang bật! Hãy thêm Cookie/QR trước."})
 
@@ -15498,16 +15520,6 @@ def api_miniapp_launch():
                     if gs and gs not in seen_b and gs != uid_s:
                         seen_b.add(gs)
                         target_boxes.append({"id": gs, "thread_id": gs, "name": f"Box {gs[-6:]}", "type": "group", "platform": "zalo"})
-            elif plat == "discord":
-                for cid in DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS.get(a["id"], set()):
-                    if cid and str(cid) not in seen_b:
-                        seen_b.add(str(cid))
-                        target_boxes.append({"id": str(cid), "thread_id": str(cid), "name": f"Discord {str(cid)[-5:]}", "type": "discord_channel", "platform": "discord"})
-            elif plat == "messenger":
-                for mid in MessengerStealthAntiBanEngine.ACTIVE_MESSENGER_POLL_THREADS.get(a["id"], set()):
-                    if mid and str(mid) not in seen_b:
-                        seen_b.add(str(mid))
-                        target_boxes.append({"id": str(mid), "thread_id": str(mid), "name": f"Mess {str(mid)[-5:]}", "type": "messenger_thread", "platform": "messenger"})
 
     if not target_boxes:
         return jsonify({"ok": False, "error": "⚠️ Chưa tìm thấy Box mục tiêu! Hãy nhập ID Box vào ô bên trên."})

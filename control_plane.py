@@ -105,12 +105,14 @@ def register(app, db, owner):
             counts[t['status']] = counts.get(t['status'],0)+1
         c = db()
         try:
-            events = [dict(r) for r in c.execute('SELECT * FROM notification_events WHERE owner=? AND seq>? ORDER BY seq LIMIT 200', (str(user),cursor))]
+            oldest = c.execute('SELECT MIN(seq) FROM notification_events WHERE owner=?', (str(user),)).fetchone()[0]
+            reset = bool(cursor and oldest and cursor < oldest - 1)
+            events = [dict(r) for r in c.execute('SELECT * FROM notification_events WHERE owner=? AND seq>? ORDER BY seq LIMIT 200', (str(user), 0 if reset else cursor))]
         finally:
             c.close()
         durations = [t['latency'] for t in tasks if t['attempts'] > 0 and t['latency'] > 0]
         completed = [t for t in tasks if t['status'] == 'COMPLETED']
-        return {'ok': True,'tasks':tasks,'counts':counts,'events':events,'cursor':events[-1]['seq'] if events else cursor,
+        return {'ok': True,'tasks':tasks,'counts':counts,'events':events,'reset':reset,'cursor':events[-1]['seq'] if events else cursor,
                 'channels':channels(user),'workers':sum(t.is_alive() for t in queue.threads),
                 'artificial_delay_seconds':0,'api_latency_seconds':sum(durations)/len(durations) if durations else None,
                 'snapshot_at':time.time(),'metrics_window':'200 tác vụ gần nhất',

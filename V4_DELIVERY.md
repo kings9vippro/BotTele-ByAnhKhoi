@@ -41,7 +41,9 @@ Telegram commands and Mini App → server authorization → shared service
 workers → official Discord webhooks. Telegram's `/discord_login` starts the
 same owner-scoped OAuth service as Mini App. OAuth uses Discord's authorization
 code grant with state, one-use launch link, browser binding, issuer check,
-encrypted tokens, owner-scoped upsert and revocation. The `identify` grant
+encrypted tokens, owner-scoped upsert and revocation. Optional
+`DISCORD_OAUTH_PKCE=1` adds an encrypted, per-attempt S256 verifier without
+changing the existing confidential-client grant by default. The `identify` grant
 only proves identity. Webhook messages appear as a webhook, never as the
 linked personal Discord account. Existing Zalo authentication and listener
 paths remain, with active startup limited to Zalo rows. Optional official
@@ -76,13 +78,22 @@ task state without a full page reload. UI is responsive at 320, 390, 768 and
 focus trap, Telegram Main/Secondary buttons and real-device frame rate are
 not verified/complete; do not advertise them as shipped.
 
+An authorized Telegram user can now access only their own Discord identity,
+webhook channels and notification tasks in the signed Mini App. Zalo accounts,
+files and global settings remain root-only. The server verifies the signed
+Telegram user against the authorization table; hiding controls in JavaScript
+alone is not treated as authorization. Task cards retain focus across changed
+snapshots and show IDs, status, attempts and the latest error. Bounded event
+history reports a reset when a reconnect cursor falls behind the retained
+window, allowing the client to replace stale events.
+
 ## Local verification (test-only credentials and no external API calls)
 
 - `python scripts/verify_startup.py`: Python 3.11 syntax and entry checks pass.
-- `python -m unittest discover -s tests -p 'test_*.py' -q`: 98 tests passed
-  after the queue/security work, with `DISABLE_TELEGRAM_BOT=1`,
-  `DISABLE_BACKGROUND_WORKERS=1`, test-only token and key. Re-run on final
-  commit before deployment.
+- `python -m unittest discover -s tests -p 'test_*.py' -q`: 102 tests passed
+  after scoped Mini App authorization, PKCE and SSE resync work, with
+  `DISABLE_TELEGRAM_BOT=1`, `DISABLE_BACKGROUND_WORKERS=1`, test-only token
+  and key. Re-run on final commit before deployment.
 - `node --check static/control.js`: passed.
 - `node tests/control-browser.cjs` against local Gunicorn/Chromium: passed
   seven tabs, persistent form, light theme, dialog/Escape, saved text file,
@@ -103,9 +114,11 @@ Use Python 3.11 and `gunicorn app:app --config gunicorn.conf.py`. Set
 `https://<your-host>/oauth/callback/discord` in Discord Developer Portal.
 The Mini App can also save the Discord app configuration encrypted with a
 stable `SECRET_KEY`; changing either encryption key invalidates stored
-connections. The tracked token fallback is already public: code cannot
-revoke it; rotate via BotFather before production. Mini App HMAC auth is
-disabled unless `TELEGRAM_BOT_TOKEN` is explicitly set in the environment.
+connections. The tracked token fallback has been removed from current source,
+but remains public in Git history: code cannot revoke it; rotate via BotFather
+before production. The bot and Mini App now require `TELEGRAM_BOT_TOKEN`
+explicitly in the environment. `DISCORD_OAUTH_PKCE=1` enables S256; verify
+the confidential-client/PKCE combination in a live Discord consent test.
 
 Provide durable `DATABASE_PATH` and `APP_DATA_DIR` storage; Render Free's
 ephemeral disk can lose account/task data on redeploy. Keep Gunicorn at one
@@ -124,8 +137,9 @@ deploy, Telegram mobile gestures/haptics, persistent disk migration, and
 cross-account production load have **not** been tested. Legacy Zalo workers
 are not migrated to the new persistent scheduler. Legacy dashboard CSRF still
 relies on SameSite/Origin/Sec-Fetch rather than a full per-request token; the
-public tracked bot token must be rotated. Dependencies have lower bounds but
-no checked lockfile. No claim of zero lag, exactly-once delivery, 60 FPS or
+public tracked bot token must be rotated. Delegated Mini App Zalo management
+is intentionally unavailable until a separately scoped backend is built.
+Dependencies have lower bounds but no checked lockfile. No claim of zero lag, exactly-once delivery, 60 FPS or
 complete V4 release is made without those checks.
 
 Official references checked: [Discord OAuth2](https://docs.discord.com/developers/topics/oauth2)

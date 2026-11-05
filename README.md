@@ -12,6 +12,8 @@ biến môi trường `TELEGRAM_BOT_TOKEN` (token **mới** đã xoay),
 `TELEGRAM_ADMIN_ID`, `SECRET_KEY` cố định, `OAUTH_PUBLIC_BASE_URL` HTTPS,
 `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `OAUTH_ENCRYPTION_KEY` Fernet.
 Đăng ký callback `/oauth/callback/discord` trong Discord Developer Portal.
+Có thể bật `DISCORD_OAUTH_PKCE=1` để thêm S256; cần kiểm thử đăng nhập thật
+với ứng dụng Discord của bạn trước khi bật trong production.
 Nếu muốn giữ tài khoản và hàng đợi qua redeploy, cấu hình `DATABASE_PATH` và
 `APP_DATA_DIR` trên ổ lưu bền vững. Render Free mặc định không bảo đảm điều đó.
 

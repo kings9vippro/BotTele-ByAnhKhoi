@@ -30,8 +30,10 @@ def init_oauth_tables(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS oauth_attempts (
         state_hash TEXT PRIMARY KEY, provider TEXT NOT NULL, launch_hash TEXT UNIQUE,
         owner_id TEXT NOT NULL, created_at REAL NOT NULL, browser_hash TEXT,
-        used INTEGER NOT NULL DEFAULT 0
+        used INTEGER NOT NULL DEFAULT 0, verifier_encrypted TEXT NOT NULL DEFAULT ''
     )""")
+    if 'verifier_encrypted' not in {row[1] for row in connection.execute('PRAGMA table_info(oauth_attempts)')}:
+        connection.execute("ALTER TABLE oauth_attempts ADD COLUMN verifier_encrypted TEXT NOT NULL DEFAULT ''")
     connection.execute("""CREATE TABLE IF NOT EXISTS oauth_connections (
         id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL,
         provider_uid TEXT NOT NULL, owner_id TEXT NOT NULL, display_name TEXT NOT NULL,
@@ -92,6 +94,8 @@ def _exchange_profile(provider, config, code):
     token_url = "https://discord.com/api/v10/oauth2/token"
     token_form = {"client_id": config["client_id"], "client_secret": config["client_secret"],
                   "grant_type": "authorization_code", "code": code, "redirect_uri": config["redirect_uri"]}
+    if config.get('code_verifier'):
+        token_form['code_verifier'] = config['code_verifier']
     try:
         with requests.Session() as http:
             with http.post(token_url, data=token_form, timeout=(5, 15), allow_redirects=False) as response:
@@ -191,7 +195,7 @@ def register_oauth_routes(app, db, owner_id):
             config = configuration(provider)
             providers.append({"id": provider, "label": label, "configured": not config["missing"],
                               "missing": config["missing"], "redirect_uri": config["redirect_uri"] if config["base"] else None,
-                              "scope": "identify" if provider == "discord" else "public_profile"})
+                              "scope": "identify"})
         return jsonify({"ok": True, "providers": providers})
 
     @app.get("/api/miniapp/oauth/connections")
@@ -217,11 +221,13 @@ def register_oauth_routes(app, db, owner_id):
         # OAuth to that browser's HttpOnly session, not the Telegram webview.
         launch = secrets.token_urlsafe(32)
         state = secrets.token_urlsafe(32)
+        verifier = secrets.token_urlsafe(48) if os.environ.get('DISCORD_OAUTH_PKCE') == '1' else ''
+        encrypted_verifier = config['cipher'].encrypt(verifier.encode()).decode() if verifier else ''
         conn = db()
         try:
             conn.execute("DELETE FROM oauth_attempts WHERE created_at < ?", (time.time() - ATTEMPT_TTL,))
-            conn.execute("INSERT INTO oauth_attempts(state_hash, provider, launch_hash, owner_id, created_at) VALUES (?, ?, ?, ?, ?)",
-                         (_digest(state), provider, _digest(launch), str(user), time.time()))
+            conn.execute("INSERT INTO oauth_attempts(state_hash, provider, launch_hash, owner_id, created_at, verifier_encrypted) VALUES (?, ?, ?, ?, ?, ?)",
+                         (_digest(state), provider, _digest(launch), str(user), time.time(), encrypted_verifier))
             conn.commit()
         except Exception:
             conn.rollback()
@@ -262,6 +268,13 @@ def register_oauth_routes(app, db, owner_id):
             endpoint = "https://discord.com/oauth2/authorize"
             params = {"client_id": config["client_id"], "redirect_uri": config["redirect_uri"], "response_type": "code",
                       "scope": "identify", "state": values["state"], "prompt": "consent"}
+            if row['verifier_encrypted']:
+                try:
+                    verifier = config['cipher'].decrypt(row['verifier_encrypted'].encode())
+                except InvalidToken:
+                    return result_page('Khóa mã hóa OAuth đã thay đổi. Hãy đăng nhập lại.', 503)
+                params['code_challenge'] = base64.urlsafe_b64encode(hashlib.sha256(verifier).digest()).rstrip(b'=').decode()
+                params['code_challenge_method'] = 'S256'
             return Response(status=302, headers={"Location": endpoint + "?" + urlencode(params), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
         finally:
             conn.close()
@@ -291,6 +304,11 @@ def register_oauth_routes(app, db, owner_id):
             config = configuration(provider)
             if config["missing"]:
                 return result_page("Cấu hình OAuth đã thay đổi. Hãy kiểm tra cấu hình máy chủ.", 503)
+            if row['verifier_encrypted']:
+                try:
+                    config['code_verifier'] = config['cipher'].decrypt(row['verifier_encrypted'].encode()).decode()
+                except InvalidToken:
+                    return result_page('Khóa mã hóa OAuth đã thay đổi. Hãy đăng nhập lại.', 503)
             try:
                 profile = _exchange_profile(provider, config, request.args["code"])
             except OAuthError as error:

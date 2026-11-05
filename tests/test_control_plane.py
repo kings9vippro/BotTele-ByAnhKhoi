@@ -66,3 +66,15 @@ class ControlPlaneTests(unittest.TestCase):
         self.queue.limit=1
         with self.assertRaises(ValueError):self.queue.submit_many('a',['1','2'],'hello')
         self.assertEqual(self.queue.list('a'),[])
+
+    def test_lost_event_window_signals_resync(self):
+        self.queue.submit('alice','one','fixture')
+        self.queue.submit('alice','two','fixture')
+        c=self.db();c.execute('DELETE FROM notification_events WHERE seq=(SELECT MIN(seq) FROM notification_events)');c.commit();c.close()
+        snapshot=self.client.get('/api/miniapp/control?cursor=0').json
+        self.assertFalse(snapshot['reset'])
+        # A returning client at a deleted cursor must rebuild its timeline.
+        c=self.db();c.execute('UPDATE notification_events SET seq=seq+10');c.commit();c.close()
+        gap=self.client.get('/api/miniapp/control?cursor=1').json
+        self.assertTrue(gap['reset'])
+        self.assertEqual(len(gap['events']),1)
