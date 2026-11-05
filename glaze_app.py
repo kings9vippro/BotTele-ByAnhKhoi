@@ -16626,39 +16626,18 @@ def account_add():
     allow_all = 0
 
     if platform == "messenger":
-        raw_mc = (request.form.get("mess_cookies") or request.form.get("cookies") or "").strip()
-        c_dict = normalize_messenger_cookies(raw_mc)
-        uid = extract_messenger_uid(c_dict)
-        if not uid or not c_dict:
-            return redirect("/")
-        pc_info = FacebookPCDeviceGuard.bind_pc_profile_to_cookies(uid, c_dict)
-        c_dict = pc_info["cookies"]
-        acc_name = custom_name or f"FB_{uid[-4:]}"
-        try:
-            m_bot = MessengerClient.get_pooled_client(c_dict, uid=uid, force_new=True)
-            if not custom_name and m_bot.display_name:
-                acc_name = m_bot.display_name
-            c_dict = m_bot.cookies_dict
-            FacebookPCDeviceGuard.notify_pc_login_to_facebook_async(m_bot, force=True)
-        except Exception:
-            pass
-        conn = db()
-        conn.execute(
-            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, pc_name, user_agent, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
-               VALUES (?, 'messenger', '', ?, '', 0, ?, ?, ?, 1, '.', 1, 1, ?)""",
-            (acc_name, json.dumps(c_dict, ensure_ascii=False), uid, pc_info["pc_name"], pc_info["ua"], time.time()),
-        )
-        conn.commit()
-        conn.close()
-        refresh_accounts_ram_cache()
-        sync_all_zalo_listeners()
-        return redirect("/")
+        return jsonify({"ok": False, "error": "Facebook/Messenger integration has been retired; use Zalo or official Discord OAuth2."}), 410
 
     if platform == "discord":
+        # Never accept Discord passwords, MFA codes, user tokens or legacy
+        # registration fields. Account linking is available only through the
+        # official OAuth2 authorization-code flow below.
         raw_token_input = (request.form.get("token") or "").strip()
         reg_email = (request.form.get("reg_email") or "").strip()
         reg_password = (request.form.get("reg_password") or "").strip()
         reg_2fa = (request.form.get("reg_2fa") or "").strip()
+        if any((raw_token_input, reg_email, reg_password, reg_2fa)):
+            return jsonify({"ok": False, "error": "Discord credentials must not be submitted here; use /discord_login."}), 410
         is_bot = 1 if request.form.get("is_bot") else 0
         tokens = extract_discord_tokens_from_reg_or_raw(raw_token_input)
         if not tokens and (reg_email or reg_password):

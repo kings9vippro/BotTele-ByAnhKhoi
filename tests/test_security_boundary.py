@@ -37,6 +37,11 @@ class SecurityBoundaryTests(unittest.TestCase):
         for path in ['/api/discord/reg_login','/api/messenger/login_credentials','/integrations/facebook','/oauth/callback/facebook']:
             self.assertEqual(self.client.post(path,json={}).status_code,410)
 
+    def test_legacy_account_credentials_are_rejected(self):
+        with self.client.session_transaction() as s:s['logged_in']=True
+        self.assertEqual(self.client.post('/account/add', data={'platform':'messenger','cookies':'legacy'}).status_code,410)
+        self.assertEqual(self.client.post('/account/add', data={'platform':'discord','reg_email':'a@example.test','reg_password':'not-a-password'}).status_code,410)
+
     def test_cross_origin_cannot_mutate(self):
         with self.client.session_transaction() as s:s['logged_in']=True
         response=self.client.post('/api/miniapp/notifications/stop_all',headers={'Origin':'https://evil.example'})
