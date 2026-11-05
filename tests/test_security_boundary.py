@@ -92,3 +92,8 @@ class SecurityBoundaryTests(unittest.TestCase):
         source = (Path(__file__).resolve().parents[1] / 'zalo_login.py').read_text()
         self.assertNotIn('lengocanh.vercel.app', source)
         self.assertNotIn('3app_vip/bot.py', source)
+
+    def test_telegram_bot_token_is_environment_only(self):
+        source = (Path(__file__).resolve().parents[1] / 'bot_settings.py').read_text()
+        self.assertIn('os.environ.get("TELEGRAM_BOT_TOKEN", "")', source)
+        self.assertNotRegex(source, r'TELEGRAM_BOT_TOKEN\s*=\s*[^\n]*:[A-Za-z0-9_-]{20,}')
