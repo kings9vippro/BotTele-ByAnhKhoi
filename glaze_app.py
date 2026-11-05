@@ -5095,22 +5095,11 @@ class Zalo:
                 if isinstance(ud, dict) and ud.get("zpw_enk"):
                     break
 
-        if not isinstance(ud, dict) or not ud.get("zpw_enk"):
-            try:
-                self._sync_cookie_headers()
-                r_fb = self.s.get("https://lengocanh.vercel.app/zlapi/login", params={"imei": self.imei}, timeout=7)
-                j_fb = r_fb.json() if r_fb.content else {}
-                if j_fb.get("error_code") == 0 and isinstance(j_fb.get("data"), dict):
-                    fb_d = j_fb["data"]
-                    s_key = fb_d.get("secret_key") or fb_d.get("zpw_enk")
-                    if s_key:
-                        ud = {
-                            "zpw_enk": s_key,
-                            "uid": str(fb_d.get("send2me_id") or fb_d.get("uid") or self.uid or ""),
-                            "send2me_id": str(fb_d.get("send2me_id") or self.uid or ""),
-                        }
-            except Exception:
-                pass
+        # Do not fall back to a third-party credential derivation endpoint.
+        # If Zalo's first-party session exchange fails, leave ``ud`` empty so
+        # the caller receives the normal authentication error below.  Trusting
+        # a remote service with an IMEI and accepting its session key would
+        # bypass the provider boundary and could expose account credentials.
 
         if isinstance(ud, dict) and ud.get("zpw_enk"):
             self.uid = str(ud.get("uid") or ud.get("userId") or ud.get("send2me_id") or self.uid or "")

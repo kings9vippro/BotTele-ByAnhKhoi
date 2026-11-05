@@ -28,3 +28,20 @@ The existing server-rendered Mini App keeps its stable Flask contract and adds a
 ## Security boundaries
 
 Discord is OAuth2 only.  Discord passwords and user tokens are never accepted.  Zalo session material stays server-side and is not exported through Telegram callbacks or API responses.  Mini App authentication must pass the server-side Telegram `initData` validator before protected state is returned.
+
+## Provider contract status
+
+- Spotify uses the verified playlist `37i9dQZF1E8LGuRBNXhjWF` through the official
+  playlist page and Embed URL.  The catalog snapshot is metadata only; the
+  browser/WebView decides whether full playback is available.  The server never
+  proxies, downloads, decrypts, or redistributes Spotify audio.
+- Discord account linking uses the official OAuth2 authorization-code flow with
+  `identify` scope.  OAuth linking does not grant permission to automate a
+  personal Discord account; messaging remains limited to authorized official
+  integrations such as configured webhooks.
+- Zalo's current adapter calls first-party web-session endpoints used by the
+  existing QR/session flow.  These endpoints are private/undocumented rather
+  than a supported public developer API.  They are therefore marked
+  **unsupported outside authorized staging/operation**, must not be described as
+  a public API guarantee, and must not be supplemented by third-party
+  credential derivation services.
