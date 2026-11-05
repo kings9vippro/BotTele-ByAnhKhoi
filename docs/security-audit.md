@@ -4,6 +4,7 @@
 
 - Removed the external TOTP fallback that transmitted a user-provided 2FA secret to a third-party host.  TOTP is now generated locally or rejected.
 - Removed the Telegram callback that sent Zalo IMEI, cookies, `zpw_enk`, or Discord tokens.  The replacement returns redacted account status only.
+- Removed the unapproved third-party Zalo credential fallback that sent an IMEI to an external endpoint and trusted its returned session key.
 - Replaced raw exception reflection in Telegram and Mini App responses with stable, non-sensitive messages.
 - Discord remains official OAuth2/webhook only; no self-bot or password collection was added.
 
