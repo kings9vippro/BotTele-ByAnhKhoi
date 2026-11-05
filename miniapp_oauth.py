@@ -14,10 +14,10 @@ import time
 from urllib.parse import urlencode, urlsplit
 
 import requests
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from flask import Response, jsonify, render_template_string, request, session
 
-PROVIDERS = {"discord": "Discord", "facebook": "Facebook"}
+PROVIDERS = {"discord": "Discord"}
 ATTEMPT_TTL = 300
 
 
@@ -30,8 +30,10 @@ def init_oauth_tables(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS oauth_attempts (
         state_hash TEXT PRIMARY KEY, provider TEXT NOT NULL, launch_hash TEXT UNIQUE,
         owner_id TEXT NOT NULL, created_at REAL NOT NULL, browser_hash TEXT,
-        used INTEGER NOT NULL DEFAULT 0
+        used INTEGER NOT NULL DEFAULT 0, verifier_encrypted TEXT NOT NULL DEFAULT ''
     )""")
+    if 'verifier_encrypted' not in {row[1] for row in connection.execute('PRAGMA table_info(oauth_attempts)')}:
+        connection.execute("ALTER TABLE oauth_attempts ADD COLUMN verifier_encrypted TEXT NOT NULL DEFAULT ''")
     connection.execute("""CREATE TABLE IF NOT EXISTS oauth_connections (
         id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL,
         provider_uid TEXT NOT NULL, owner_id TEXT NOT NULL, display_name TEXT NOT NULL,
@@ -55,9 +57,8 @@ def _config(provider, overrides=None):
     missing = []
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
         missing.append("OAUTH_PUBLIC_BASE_URL (HTTPS, không có đường dẫn)")
-    prefix = "DISCORD" if provider == "discord" else "FACEBOOK"
-    id_key = prefix + ("_CLIENT_ID" if provider == "discord" else "_APP_ID")
-    secret_key = prefix + ("_CLIENT_SECRET" if provider == "discord" else "_APP_SECRET")
+    id_key = "DISCORD_CLIENT_ID"
+    secret_key = "DISCORD_CLIENT_SECRET"
     client_id, client_secret = setting(id_key), setting(secret_key)
     for key, value in ((id_key, client_id), (secret_key, client_secret)):
         if not value:
@@ -68,19 +69,16 @@ def _config(provider, overrides=None):
     except (ValueError, TypeError, UnicodeError):
         cipher = None
         missing.append("OAUTH_ENCRYPTION_KEY (Fernet)")
-    version = setting("FACEBOOK_GRAPH_VERSION")
-    if provider == "facebook" and not re.fullmatch(r"v\d+\.\d+", version):
-        missing.append("FACEBOOK_GRAPH_VERSION (phiên bản Meta app đang dùng)")
     return {"missing": missing, "client_id": client_id, "client_secret": client_secret,
             "redirect_uri": base + "/oauth/callback/" + provider, "cipher": cipher,
-            "version": version, "base": base}
+            "base": base}
 
 
 def _public_connections(db, owner_id):
     connection = db()
     try:
         rows = connection.execute(
-            "SELECT id, provider, provider_uid, display_name, scope, expires_at, connected_at FROM oauth_connections WHERE owner_id=? ORDER BY connected_at DESC",
+            "SELECT id, provider, provider_uid, display_name, scope, expires_at, connected_at FROM oauth_connections WHERE owner_id=? AND provider='discord' ORDER BY connected_at DESC",
             (owner_id,),
         ).fetchall()
     finally:
@@ -91,9 +89,13 @@ def _public_connections(db, owner_id):
 
 def _exchange_profile(provider, config, code):
     """Short bounded requests; provider response bodies/errors never go to logs/UI."""
-    token_url = "https://discord.com/api/v10/oauth2/token" if provider == "discord" else f"https://graph.facebook.com/{config['version']}/oauth/access_token"
+    if provider != 'discord':
+        raise OAuthError('Nền tảng không được hỗ trợ')
+    token_url = "https://discord.com/api/v10/oauth2/token"
     token_form = {"client_id": config["client_id"], "client_secret": config["client_secret"],
                   "grant_type": "authorization_code", "code": code, "redirect_uri": config["redirect_uri"]}
+    if config.get('code_verifier'):
+        token_form['code_verifier'] = config['code_verifier']
     try:
         with requests.Session() as http:
             with http.post(token_url, data=token_form, timeout=(5, 15), allow_redirects=False) as response:
@@ -104,11 +106,7 @@ def _exchange_profile(provider, config, code):
             if not isinstance(access, str) or not access or not token.get("expires_in"):
                 raise OAuthError("Nhà cung cấp không trả về phiên OAuth hợp lệ")
             params = {}
-            if provider == "discord":
-                profile_url = "https://discord.com/api/v10/users/@me"
-            else:
-                profile_url = f"https://graph.facebook.com/{config['version']}/me"
-                params = {"fields": "id,name", "appsecret_proof": hmac.new(config["client_secret"].encode(), access.encode(), hashlib.sha256).hexdigest()}
+            profile_url = "https://discord.com/api/v10/users/@me"
             with http.get(profile_url, headers={"Authorization": "Bearer " + access}, params=params, timeout=(5, 15), allow_redirects=False) as response:
                 if response.status_code != 200:
                     raise OAuthError("Không xác minh được hồ sơ từ nhà cung cấp")
@@ -120,7 +118,7 @@ def _exchange_profile(provider, config, code):
         expires = max(1, int(token["expires_in"]))
         return {"uid": uid, "name": display_name, "access": access,
                 "refresh": str(token.get("refresh_token") or ""), "expires": expires,
-                "scope": "identify" if provider == "discord" else "public_profile"}
+                "scope": "identify"}
     except (requests.RequestException, TypeError, KeyError, ValueError) as error:
         if isinstance(error, OAuthError):
             raise
@@ -159,11 +157,9 @@ def register_oauth_routes(app, db, owner_id):
         client_id, secret = str(data.get("client_id") or "").strip(), str(data.get("client_secret") or "").strip()
         if not client_id.isdigit() or not secret:
             return jsonify({"ok": False, "error": "Cần App/Client ID dạng số và secret ứng dụng"}), 400
-        prefix = "DISCORD" if provider == "discord" else "FACEBOOK"
         values = {"OAUTH_PUBLIC_BASE_URL": str(data.get("public_base_url") or "").strip().rstrip("/"),
-                  prefix + ("_CLIENT_ID" if provider == "discord" else "_APP_ID"): client_id,
-                  prefix + ("_CLIENT_SECRET" if provider == "discord" else "_APP_SECRET"): secret,
-                  "FACEBOOK_GRAPH_VERSION": str(data.get("graph_version") or "").strip(),
+                  "DISCORD_CLIENT_ID": client_id,
+                  "DISCORD_CLIENT_SECRET": secret,
                   "OAUTH_ENCRYPTION_KEY": base64.urlsafe_b64encode(hashlib.sha256(b"validation-only").digest()).decode()}
         try:
             validated = _config(provider, values)
@@ -199,7 +195,7 @@ def register_oauth_routes(app, db, owner_id):
             config = configuration(provider)
             providers.append({"id": provider, "label": label, "configured": not config["missing"],
                               "missing": config["missing"], "redirect_uri": config["redirect_uri"] if config["base"] else None,
-                              "scope": "identify" if provider == "discord" else "public_profile"})
+                              "scope": "identify"})
         return jsonify({"ok": True, "providers": providers})
 
     @app.get("/api/miniapp/oauth/connections")
@@ -210,20 +206,28 @@ def register_oauth_routes(app, db, owner_id):
     def oauth_start():
         provider = str((request.get_json(silent=True) or {}).get("provider") or "")
         try:
+            return jsonify(start_for_owner(str(owner_id()), provider))
+        except OAuthError as error:
+            return jsonify(ok=False, error=str(error)), 503
+
+    def start_for_owner(user, provider='discord'):
+        try:
             config = configuration(provider)
         except OAuthError as error:
-            return jsonify({"ok": False, "error": str(error)}), 400
+            raise
         if config["missing"]:
-            return jsonify({"ok": False, "error": "Chưa cấu hình: " + ", ".join(config["missing"])}), 503
+            raise OAuthError("Chưa cấu hình: " + ", ".join(config["missing"]))
         # Opening this same-origin one-time link in the external browser binds
         # OAuth to that browser's HttpOnly session, not the Telegram webview.
         launch = secrets.token_urlsafe(32)
         state = secrets.token_urlsafe(32)
+        verifier = secrets.token_urlsafe(48) if os.environ.get('DISCORD_OAUTH_PKCE') == '1' else ''
+        encrypted_verifier = config['cipher'].encrypt(verifier.encode()).decode() if verifier else ''
         conn = db()
         try:
             conn.execute("DELETE FROM oauth_attempts WHERE created_at < ?", (time.time() - ATTEMPT_TTL,))
-            conn.execute("INSERT INTO oauth_attempts(state_hash, provider, launch_hash, owner_id, created_at) VALUES (?, ?, ?, ?, ?)",
-                         (_digest(state), provider, _digest(launch), str(owner_id()), time.time()))
+            conn.execute("INSERT INTO oauth_attempts(state_hash, provider, launch_hash, owner_id, created_at, verifier_encrypted) VALUES (?, ?, ?, ?, ?, ?)",
+                         (_digest(state), provider, _digest(launch), str(user), time.time(), encrypted_verifier))
             conn.commit()
         except Exception:
             conn.rollback()
@@ -233,7 +237,9 @@ def register_oauth_routes(app, db, owner_id):
         # The signed launch payload is short-lived and contains no credentials.
         from itsdangerous import URLSafeTimedSerializer
         payload = URLSafeTimedSerializer(app.secret_key, salt="oauth-launch").dumps({"launch": launch, "state": state})
-        return jsonify({"ok": True, "url": config["base"] + "/oauth/begin/" + payload, "expires_in": ATTEMPT_TTL})
+        return {"ok": True, "url": config["base"] + "/oauth/begin/" + payload, "expires_in": ATTEMPT_TTL}
+
+    app.extensions['discord_oauth_start'] = start_for_owner
 
     @app.get("/oauth/begin/<payload>")
     def oauth_begin(payload):
@@ -259,15 +265,24 @@ def register_oauth_routes(app, db, owner_id):
             bindings[row["state_hash"]] = binding
             session["oauth_bindings"] = dict(list(bindings.items())[-5:])
             provider = row["provider"]
-            endpoint = "https://discord.com/oauth2/authorize" if provider == "discord" else f"https://www.facebook.com/{config['version']}/dialog/oauth"
+            endpoint = "https://discord.com/oauth2/authorize"
             params = {"client_id": config["client_id"], "redirect_uri": config["redirect_uri"], "response_type": "code",
-                      "scope": "identify" if provider == "discord" else "public_profile", "state": values["state"]}
+                      "scope": "identify", "state": values["state"], "prompt": "consent"}
+            if row['verifier_encrypted']:
+                try:
+                    verifier = config['cipher'].decrypt(row['verifier_encrypted'].encode())
+                except InvalidToken:
+                    return result_page('Khóa mã hóa OAuth đã thay đổi. Hãy đăng nhập lại.', 503)
+                params['code_challenge'] = base64.urlsafe_b64encode(hashlib.sha256(verifier).digest()).rstrip(b'=').decode()
+                params['code_challenge_method'] = 'S256'
             return Response(status=302, headers={"Location": endpoint + "?" + urlencode(params), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
         finally:
             conn.close()
 
     @app.get("/oauth/callback/<provider>")
     def oauth_callback(provider):
+        if request.args.get('iss', 'https://discord.com') != 'https://discord.com':
+            return result_page('Nhà phát hành OAuth không hợp lệ.', 400)
         state = request.args.get("state", "")
         state_hash = _digest(state)
         bindings = dict(session.get("oauth_bindings") or {})
@@ -289,6 +304,11 @@ def register_oauth_routes(app, db, owner_id):
             config = configuration(provider)
             if config["missing"]:
                 return result_page("Cấu hình OAuth đã thay đổi. Hãy kiểm tra cấu hình máy chủ.", 503)
+            if row['verifier_encrypted']:
+                try:
+                    config['code_verifier'] = config['cipher'].decrypt(row['verifier_encrypted'].encode()).decode()
+                except InvalidToken:
+                    return result_page('Khóa mã hóa OAuth đã thay đổi. Hãy đăng nhập lại.', 503)
             try:
                 profile = _exchange_profile(provider, config, request.args["code"])
             except OAuthError as error:
@@ -303,6 +323,12 @@ def register_oauth_routes(app, db, owner_id):
                 (provider, profile["uid"], row["owner_id"], profile["name"], cipher.encrypt(profile["access"].encode()).decode(),
                  cipher.encrypt(profile["refresh"].encode()).decode() if profile["refresh"] else "", profile["scope"], time.time() + profile["expires"], time.time()))
             conn.commit()
+            notify = app.extensions.get('oauth_notice')
+            if notify:
+                try:
+                    notify(row['owner_id'], profile['name'])
+                except Exception:
+                    app.logger.warning('OAuth saved; Telegram notification unavailable')
             return result_page(f"Đã xác minh và lưu kết nối {PROVIDERS[provider]}: {profile['name']}. Quyền hồ sơ không phải quyền tự động gửi tin nhắn.")
         except Exception:
             conn.rollback()
@@ -317,10 +343,32 @@ def register_oauth_routes(app, db, owner_id):
             connection_id = int(data.get("id"))
         except (ValueError, TypeError):
             return jsonify({"ok": False, "error": "ID kết nối không hợp lệ"}), 400
+        try:
+            return jsonify(ok=True, message=disconnect_for_owner(str(owner_id()), connection_id))
+        except OAuthError as error:
+            return jsonify(ok=False, error=str(error)), 502
+
+    def disconnect_for_owner(user, connection_id):
         conn = db()
         try:
-            conn.execute("DELETE FROM oauth_connections WHERE id=? AND owner_id=?", (connection_id, str(owner_id())))
+            row = conn.execute("SELECT * FROM oauth_connections WHERE id=? AND owner_id=? AND provider='discord'",(connection_id,user)).fetchone()
+            if row:
+                config = configuration('discord')
+                if config['missing']:
+                    raise OAuthError('Thiếu cấu hình để thu hồi; dữ liệu liên kết chưa bị xóa')
+                try:
+                    token = config['cipher'].decrypt(row['access_encrypted'].encode()).decode()
+                    with requests.post('https://discord.com/api/v10/oauth2/token/revoke', data={'client_id':config['client_id'],'client_secret':config['client_secret'],'token':token},timeout=(4,10),allow_redirects=False) as response:
+                        if response.status_code not in (200,204):
+                            raise OAuthError('Discord chưa xác nhận thu hồi; liên kết vẫn được giữ để thử lại')
+                except requests.RequestException:
+                    raise OAuthError('Không kết nối được Discord để thu hồi quyền') from None
+                except InvalidToken:
+                    raise OAuthError('Khóa mã hóa đã thay đổi; khôi phục khóa cũ hoặc thu hồi trong Discord trước') from None
+            conn.execute("DELETE FROM oauth_connections WHERE id=? AND owner_id=? AND provider='discord'", (connection_id, user))
             conn.commit()
         finally:
             conn.close()
-        return jsonify({"ok": True, "message": "Đã xóa kết nối và khóa OAuth lưu tại bot. Có thể thu hồi quyền tại cài đặt Discord/Facebook."})
+        return 'Đã thu hồi quyền và ngắt liên kết Discord'
+
+    app.extensions['discord_oauth_disconnect'] = disconnect_for_owner

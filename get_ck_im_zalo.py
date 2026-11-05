@@ -5,7 +5,7 @@
 # ==============================================================================
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "1.3.0"
+APP_VERSION = "2.0.0"
 
 import os
 import re
@@ -56,11 +56,14 @@ DB_PATH = DATABASE_PATH
 WELCOME_VIDEO_PATH = os.path.join(BASE_DIR, "welcome.mp4")
 MENU_BANNER_PATH = os.path.join(BASE_DIR, "menu_banner.png")
 
-API_2FA = "https://keyherlyswar.x10.mx/Apidocs/tien_ich/2fa.php?secret={}"
-
 DISCORD_TOKEN_RE = re.compile(
     r"((?:mfa\.[A-Za-z0-9_\-]{50,160})|(?:[A-Za-z0-9_\-]{18,44}\.[A-Za-z0-9_\-]{5,14}\.[A-Za-z0-9_\-]{20,140}))"
 )
+
+
+def _public_error(prefix):
+    """Return a stable user-facing error without exposing credentials or URLs."""
+    return f"{prefix} Vui lòng thử lại; chi tiết đã được ghi nhận ở máy chủ."
 
 import sys
 
@@ -250,12 +253,6 @@ def generate_totp_local(secret_key, time_step=30, digits=6):
             return str(code_int).zfill(digits), rem_sec
         except Exception:
             pass
-    try:
-        r = requests.get(API_2FA.format(str(secret_key).replace(" ", "")), timeout=6).json()
-        if r.get("token"):
-            return str(r["token"]), rem_sec
-    except Exception:
-        pass
     return None, 0
 
 
@@ -379,7 +376,7 @@ def can_user_access_account(user_id, owner_tg_id) -> bool:
     u_s = str(user_id or "").strip()
     o_s = str(owner_tg_id or "").strip()
     if not o_s:
-        return True
+        return False
     return bool(u_s and o_s and u_s == o_s)
 
 
@@ -645,6 +642,7 @@ def save_telegram_text_file(filename, content, target):
 
 
 def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="", user_agent="", pc_name="", owner_tg_id=""):
+    conn = None
     """Lưu tài khoản Zalo (quét QR hoặc nhập Cookie + IMEI) vào SQLite database.db, gắn quyền sở hữu owner_tg_id & kích hoạt luồng lắng nghe 32 lệnh in-chat (.menu, .n, .g, .nhaypoll, .t...) 24/7 trên Đa Acc."""
     try:
         clean_ck = {
@@ -733,6 +731,7 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
                 pass
 
         cur = conn.cursor()
+        conn.execute('BEGIN IMMEDIATE')
         existing = None
         if uid_str:
             existing = cur.execute(
@@ -747,7 +746,9 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
         if existing:
             acc_id = existing[0]
             old_owner = str(existing[1] or "").strip()
-            eff_owner = owner_str if owner_str else (old_owner or ROOT_ADMIN_ID)
+            if not can_user_access_account(owner_str or ROOT_ADMIN_ID, old_owner):
+                raise ValueError('Tài khoản đã thuộc người quản lý khác')
+            eff_owner = old_owner or owner_str or ROOT_ADMIN_ID
             cur.execute(
                 """UPDATE accounts
                    SET name=?, imei=?, cookies=?, uid=CASE WHEN ? != '' THEN ? ELSE uid END,
@@ -847,6 +848,12 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
             pass
         return acc_id
     except Exception:
+        if conn is not None:
+            try:
+                conn.rollback()
+                conn.close()
+            except Exception:
+                pass
         return None
 
 
@@ -873,108 +880,8 @@ def parse_imei_and_cookie_from_text(raw_text, extra_cookies_text=""):
     return imei_clean, cookies_dict, meta
 
 
-def sync_and_keepalive_tokens_to_db(raw_text, owner_tg_id=""):
-    saved_items = []
-    if not raw_text:
-        return saved_items
-    owner_str = str(owner_tg_id or ROOT_ADMIN_ID).strip()
-
-    for m in DISCORD_TOKEN_RE.finditer(raw_text):
-        tok = m.group(1).strip()
-        try:
-            import app as _main_app
-            w_res = _main_app.warmup_discord_stealth_token(tok, verify_network=False)
-            if w_res.get("ok"):
-                uid = str(w_res.get("uid") or "").strip()
-                uname = w_res.get("username") or (f"Discord_{uid[-4:]}" if uid else "Discord_VIP")
-                is_bot = 1 if w_res.get("is_bot") else 0
-                conn = _open_db()
-                try:
-                    conn.execute("ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''")
-                except Exception:
-                    pass
-                cur = conn.cursor()
-                ex = cur.execute(
-                    "SELECT id FROM accounts WHERE platform='discord' AND (token=? OR (uid != '' AND uid=?))",
-                    (tok, uid),
-                ).fetchone()
-                if ex:
-                    acc_id = ex[0]
-                    cur.execute(
-                        "UPDATE accounts SET name=?, token=?, is_bot=?, uid=?, chat_cmd_enabled=1, cmd_prefix='.', allow_all_cmd=0, enabled=1, owner_tg_id=? WHERE id=?",
-                        (uname, tok, is_bot, uid, owner_str, acc_id),
-                    )
-                else:
-                    cur.execute(
-                        "INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, owner_tg_id) VALUES (?, '', '{}', 'discord', ?, ?, ?, 1, '.', 1, 1, ?)",
-                        (uname, tok, is_bot, uid, owner_str),
-                    )
-                    acc_id = cur.lastrowid
-                conn.commit()
-                conn.close()
-                if uid:
-                    _main_app.OWNER_UIDS_CACHE.add(uid)
-                saved_items.append({"platform": "Discord", "name": uname, "uid": uid, "id": acc_id})
-        except Exception:
-            pass
-
-    if ("c_user" in raw_text and "xs" in raw_text):
-        try:
-            import app as _main_app
-            c_dict = _main_app.normalize_messenger_cookies(raw_text)
-            uid = _main_app.extract_messenger_uid(c_dict)
-            if uid and "xs" in c_dict:
-                fb_name = f"FB_{uid[-4:]}"
-                pc_info = _main_app.FacebookPCDeviceGuard.bind_pc_profile_to_cookies(uid, c_dict)
-                c_dict = pc_info["cookies"]
-                try:
-                    mc = _main_app.MessengerClient.get_pooled_client(c_dict, uid=uid, force_new=True)
-                    if mc.display_name and not mc.display_name.startswith("Mess_"):
-                        fb_name = mc.display_name
-                    c_dict = mc.cookies_dict
-                    # Lấy máy tính thông báo thẳng vào Facebook/Messenger để chống quét Checkpoint!
-                    _main_app.FacebookPCDeviceGuard.notify_pc_login_to_facebook_async(mc)
-                except Exception:
-                    pass
-                c_json = json.dumps(c_dict, ensure_ascii=False)
-                conn = _open_db()
-                try:
-                    conn.execute("ALTER TABLE accounts ADD COLUMN owner_tg_id TEXT DEFAULT ''")
-                except Exception:
-                    pass
-                cur = conn.cursor()
-                ex = cur.execute(
-                    "SELECT id FROM accounts WHERE platform='messenger' AND uid=?", (uid,)
-                ).fetchone()
-                if ex:
-                    acc_id = ex[0]
-                    cur.execute(
-                        "UPDATE accounts SET name=?, cookies=?, uid=?, pc_name=?, chat_cmd_enabled=1, cmd_prefix='.', allow_all_cmd=0, enabled=1, owner_tg_id=? WHERE id=?",
-                        (fb_name, c_json, uid, pc_info["pc_name"], owner_str, acc_id)
-                    )
-                else:
-                    cur.execute(
-                        "INSERT INTO accounts (name, imei, cookies, platform, token, is_bot, uid, pc_name, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, owner_tg_id) VALUES (?, '', ?, 'messenger', '', 0, ?, ?, 1, '.', 1, 1, ?)",
-                        (fb_name, c_json, uid, pc_info["pc_name"], owner_str),
-                    )
-                    acc_id = cur.lastrowid
-                conn.commit()
-                conn.close()
-                _main_app.OWNER_UIDS_CACHE.add(uid)
-                saved_items.append({"platform": "Messenger", "name": fb_name, "uid": uid, "id": acc_id, "pc_name": pc_info["pc_name"]})
-        except Exception:
-            pass
-
-    try:
-        import app as _main_app
-        if saved_items:
-            if hasattr(_main_app, "refresh_accounts_ram_cache"):
-                _main_app.refresh_accounts_ram_cache()
-            if hasattr(_main_app, "sync_all_zalo_listeners"):
-                _main_app.sync_all_zalo_listeners()
-    except Exception:
-        pass
-    return saved_items
+def sync_and_keepalive_tokens_to_db(*args, **kwargs):
+    return []
 
 
 class MetaAIAssistant:
@@ -1033,32 +940,13 @@ class MetaAIAssistant:
 
 
 class DiscordTokenGetter:
-    """Bộ Lấy Token & Anti-Reg Acc Discord (Đồng bộ Chrome 131 TLS + X-Super-Properties + X-Fingerprint chống báo hack acc)."""
-    def login_discord(self, email, password, twofa_code="", twofa_type="totp"):
-        try:
-            import app as _main_app
-            res = _main_app.login_discord_reg_session(email, password, two_fa_code=twofa_code, twofa_type=twofa_type)
-            if res.get("ok") and res.get("token"):
-                return {"status": "SUCCESS", "token": res["token"], "profile": res.get("profile") or {}}
-            if res.get("need_2fa"):
-                return {"status": "2FA_REQUIRED", "message": res.get("error") or "Cần mã 2FA 6 số hoặc Secret Key"}
-            return {"status": "ERROR", "message": res.get("error") or "Không thể đăng nhập Discord"}
-        except Exception as e:
-            return {"status": "ERROR", "message": str(e)}
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Use official Discord OAuth2")
 
 
 class FacebookCookieGetter:
-    """Bộ Lấy Cookie & Anti-Reg Acc Facebook Máy Tính (Windows 11 Chrome 131 Desktop — Chống quét Checkpoint & Tự động lấy Máy Tính thông báo vào Facebook)."""
-    def login_facebook(self, email, password, twofa_code=""):
-        try:
-            import app as _main_app
-            getter = _main_app.FacebookCookieGetter()
-            ck_str, uid, msg = getter.login_facebook(email, password, twofa_code=twofa_code)
-            if ck_str and uid:
-                return {"status": "SUCCESS", "cookies": ck_str, "uid": uid, "message": msg}
-            return {"status": "ERROR", "message": msg or "Không lấy được Cookie. Hãy dán trực tiếp Cookie c_user + xs từ máy tính!"}
-        except Exception as e:
-            return {"status": "ERROR", "message": str(e)}
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Use official Discord OAuth2")
 
 
 class DirectTelegramBotRunner:
@@ -1176,15 +1064,16 @@ class DirectTelegramBotRunner:
                         return res2
             return res
         except Exception as e:
-            self.last_error = str(e)
+            self.last_error = f"Telegram request failed ({type(e).__name__})"
             if not use_poll_session:
                 try:
                     self._tls.session = self._create_isolated_session()
                 except Exception:
                     pass
-            return {"ok": False, "description": str(e)}
+            return {"ok": False, "description": self.last_error}
 
     def clear_webhook_and_init(self):
+        from control_plane import COMMANDS
         try:
             self.api_call("deleteWebhook", {"drop_pending_updates": False}, timeout=8)
             me = self.api_call("getMe", timeout=8)
@@ -1194,24 +1083,24 @@ class DirectTelegramBotRunner:
                 self.api_call(
                     "setMyCommands",
                     {
-                        "commands": [
-                            {"command": "start", "description": "Mở bảng điều khiển GLAZE"},
-                            {"command": "menu", "description": "Mở nhanh Menu 32 Chức Năng VIP"},
-                            {"command": "qr", "description": "Quét mã QR Zalo PC lấy Token & Sống Đa Acc"},
-                            {"command": "addck", "description": "Nhập Cookie + IMEI Zalo (Sài 32 lệnh trên Acc)"},
-                            {"command": "addid", "description": "[Admin] Thêm ID người dùng được phép sài Bot"},
-                            {"command": "delid", "description": "[Admin] Xoá quyền sài Bot của ID người dùng"},
-                            {"command": "listid", "description": "[Admin] Xem danh sách ID được phép sài Bot"},
-                            {"command": "checkzalo", "description": "Kiểm tra & Cứu Cookie Zalo Live/Die"},
-                            {"command": "status", "description": "Xem trạng thái Acc & Chiến dịch đang chạy"},
-                            {"command": "stopall", "description": "Dừng khẩn cấp toàn bộ chiến dịch (.ta)"},
-                        ]
+                        "commands": (
+                            [{"command": name, "description": description[:256]}
+                             for name, description in COMMANDS.items()]
+                            + [{"command": name, "description": description}
+                               for name, description in (
+                                   ('files','Kho tệp Zalo'),('sticker','Tạo nhãn dán Zalo'),
+                                   ('qr','Quét QR Zalo'),('addck','Nhập phiên Zalo'),
+                                   ('stopall','Quản trị viên: dừng toàn bộ'),
+                                   ('status','Tình trạng Zalo'),('checkzalo','Kiểm tra phiên Zalo'),
+                                   ('addid','Quản trị viên: cấp quyền'),('delid','Quản trị viên: thu hồi quyền'),
+                                   ('listid','Danh sách quyền'))]
+                        )
                     },
                     timeout=8,
                 )
                 return True
         except Exception as e:
-            self.last_error = str(e)
+            self.last_error = f"Telegram initialization failed ({type(e).__name__})"
         return False
 
     def send_text(self, chat_id, text, reply_to=None, parse_mode="HTML", reply_markup=None):
@@ -2252,8 +2141,8 @@ class DirectTelegramBotRunner:
                 ),
             )
             self.edit_menu_message(chat_id, message_id, cap, reply_markup=self.build_tabbed_keyboard("func", 1, user_id=user_id))
-        except Exception as e:
-            self.send_text(chat_id, f"Lỗi khởi chạy chiến dịch: <code>{str(e)[:200]}</code>")
+        except Exception:
+            self.send_text(chat_id, _public_error("Lỗi khởi chạy chiến dịch:"))
 
     # NẠP TRỰC TIẾP COOKIE + IMEI ZALO, GẮN CHỦ SỞ HỮU OWNER_TG_ID & BẬT TRỌN BỘ 32 LỆNH TRÊN ACC (.menu, .treodo, .damau, .nhaypoll, .n, .g, .t...)
     def handle_import_zalo_cookie_imei(self, chat_id, user_id, imei_str, ck_dict, meta=None, reply_to=None):
@@ -2529,46 +2418,20 @@ class DirectTelegramBotRunner:
                 if qr_msg_id:
                     self.delete_msg(chat_id, qr_msg_id)
 
-                cookies_str = json.dumps(cookies, ensure_ascii=False)
-                my_accs, _, _, _ = self._get_live_runtime_summary(user_id=user_id)
-                msg_success = (
-                    f"{tg_anim('crown', '')} <b>QUÉT QR LẤY TOKEN & NẠP ĐA ACC THÀNH CÔNG!</b>\n\n"
-                    f"<blockquote>"
-                    f"Tài khoản: <b>#{acc_id} — {dname}</b>\n"
-                    f"🆔 UID Zalo: <code>{uid}</code> • Nhóm: <b>{grp_cnt} Box</b>\n"
-                    f"Số Acc của bạn đang chạy: <b>{my_accs} Acc song song</b>\n"
-                    f"Lệnh trên Acc Zalo: <b>ĐÃ BẬT 32 LỆNH (.menu, .treodo, .damau, .nhaypoll, .n, .g, .t, .ta)</b>"
-                    f"</blockquote>\n\n"
-                    f"<b>Token Khóa Phiên (zpw_enk):</b>\n<pre>{zpw_enk or 'Đã đồng bộ tự động'}</pre>\n\n"
-                    f"<b>IMEI (z_uuid):</b>\n<pre>{imei}</pre>\n\n"
-                    f"<b>Cookies JSON:</b>\n<pre>{cookies_str[:2600]}</pre>"
-                )
-                self.send_text(chat_id, msg_success, reply_to=msg_id)
-
-                backup_txt = (
-                    f"=== THONG TIN TOKEN & COOKIE ZALO PC ===\n"
-                    f"Ten_Acc: {dname}\n"
-                    f"UID: {uid}\n"
-                    f"IMEI: {imei}\n"
-                    f"Zpw_Enk: {zpw_enk}\n"
-                    f"User_Agent: {ua}\n"
-                    f"Cookies_JSON: {cookies_str}\n"
-                    f"Nhap_Nhanh_1_Dong: {imei}|{cookies_str}\n"
-                ).encode("utf-8")
-                self.send_doc_bytes(
+                self.send_text(
                     chat_id,
-                    backup_txt,
-                    filename=f"zalo_token_{uid or acc_id}.txt",
-                    caption=f"File sao lưu Token + Cookie + IMEI của <b>{dname}</b> (Chỉ hiển thị cho bạn & Admin chính!)",
+                    f"<b>Đã lưu tài khoản Zalo #{acc_id}</b>\n"
+                    f"UID: <code>{uid}</code> · Nhóm: {grp_cnt}\n"
+                    "Thông tin phiên được giữ trên máy chủ, không gửi token/cookie vào cuộc trò chuyện.",
                     reply_to=msg_id,
                 )
 
-            except Exception as e:
+            except Exception:
                 if wait_msg_id:
                     self.delete_msg(chat_id, wait_msg_id)
                 self.send_text(
                     chat_id,
-                    f"<b>Lỗi khi tạo phiên QR Zalo:</b> <code>{str(e)[:300]}</code>",
+                    _public_error("<b>Lỗi khi tạo phiên QR Zalo:</b>"),
                     reply_to=msg_id,
                 )
             finally:
@@ -2606,6 +2469,16 @@ class DirectTelegramBotRunner:
                 f"🆔 ID của bạn: <code>{user_id}</code>\n"
                 f"Liên hệ Admin chính để cấp quyền: <a href=\"tg://user?id={ROOT_ADMIN_ID}\">Bấm vào đây ↗</a>",
             )
+            return
+
+        if data.startswith('v4:'):
+            import app as runtime
+            try:
+                _, action, task_id = data.split(':', 2)
+                status = runtime.app.extensions['notification_queue'].control(str(user_id), task_id, action)
+                self.answer_callback(cb_id, status)
+            except ValueError:
+                self.answer_callback(cb_id, 'Không có quyền hoặc trạng thái không phù hợp', show_alert=True)
             return
 
         if data == "noop":
@@ -2789,9 +2662,13 @@ class DirectTelegramBotRunner:
             return
 
         if data == "fn_stop_all_quick":
+            if not is_root_admin(user_id):
+                self.answer_callback(cb_id, 'Chỉ quản trị viên chính được dừng toàn hệ thống.', show_alert=True)
+                return
             try:
                 import app as _main_app
                 stopped = _main_app.stop_tasks_for_thread(None)
+                stopped += _main_app.app.extensions['notification_queue'].stop_all(str(user_id))
             except Exception:
                 stopped = 0
             self.answer_callback(cb_id, f"Đã dừng {stopped} chiến dịch!", show_alert=True)
@@ -2923,8 +2800,8 @@ class DirectTelegramBotRunner:
                         f"<b>Không thể lấy Link Box ({bid_lk}):</b> {res_lk.get('error') or 'Tài khoản không có quyền tạo link trong nhóm này.'}",
                         reply_to=msg_id,
                     )
-            except Exception as ex_lk:
-                self.send_text(chat_id, f"Lỗi lấy Link Box: <code>{ex_lk}</code>", reply_to=msg_id)
+            except Exception:
+                self.send_text(chat_id, _public_error("Lỗi lấy Link Box:"), reply_to=msg_id)
             return
 
         if data.startswith("setcolor:"):
@@ -3174,42 +3051,35 @@ class DirectTelegramBotRunner:
             self._render_accounts_and_files_menu(chat_id, msg_id, user_id=user_id, notice=f"Đã chỉnh Acc <b>#{acc_id}</b>: <b>{lbl}</b>!")
             return
 
-        if data.startswith("export_acc_token:"):
+        if data.startswith("show_acc_details:"):
+            if str(chat_id) != str(user_id):
+                self.answer_callback(cb_id, 'Chỉ xuất phiên trong tin nhắn riêng với bot.', show_alert=True)
+                return
             acc_id = int(data.split(":", 1)[1])
             vis_accs = get_user_visible_accounts(user_id, enabled_only=False)
             target_a = next((a for a in vis_accs if int(a["id"]) == acc_id), None)
             if not target_a:
                 self.answer_callback(cb_id, "Bạn chỉ được xem Cookie do chính bạn quét! Chỉ Admin chính mới xem được tất cả Cookie.", show_alert=True)
                 return
-            self.answer_callback(cb_id, f"Đang trích xuất Token/Cookie Acc #{acc_id}...")
+            if (target_a.get('platform') or 'zalo') != 'zalo':
+                self.answer_callback(cb_id, 'Discord chỉ dùng OAuth2; không xuất user token.', show_alert=True)
+                return
+            self.answer_callback(cb_id, f"Đang tải trạng thái Acc #{acc_id}...")
             aid = target_a["id"]
             aname = target_a["name"]
             aplat = target_a["platform"]
             auid = target_a["uid"]
-            aimei = target_a["imei"]
-            ack = target_a["cookies"]
-            aenk = target_a["zpw_enk"]
-            atok = target_a["token"]
-            if str(aplat).lower() == "discord":
-                self.send_text(
-                    chat_id,
-                    f"<b>TOKEN DISCORD ACC #{aid} ({aname}):</b>\n<pre>{atok}</pre>",
-                    reply_to=msg_id,
-                )
-            else:
-                self.send_text(
-                    chat_id,
-                    f"{tg_anim('key', '')} <b>TRỌN BỘ TOKEN & COOKIE + IMEI ZALO ACC #{aid} ({aname})</b>\n\n"
-                    f"<blockquote>"
-                    f"🆔 UID: <code>{auid}</code>\n"
-                    f"Chủ sở hữu ID: <code>{target_a.get('owner_tg_id') or ROOT_ADMIN_ID}</code>"
-                    f"</blockquote>\n\n"
-                    f"<b>Token (zpw_enk):</b>\n<pre>{aenk or 'Đang đồng bộ'}</pre>\n"
-                    f"<b>IMEI (z_uuid):</b>\n<pre>{aimei}</pre>\n"
-                    f"<b>Cookies:</b>\n<pre>{str(ack or '')[:2600]}</pre>\n\n"
-                    f"<b>Cú pháp nạp nhanh 1 dòng:</b>\n<pre>{aimei}|{str(ack or '')[:1200]}</pre>",
-                    reply_to=msg_id,
-                )
+            self.send_text(chat_id,
+                f"{tg_anim('key', '')} <b>CHI TIẾT TRẠNG THÁI ACC #{aid} ({aname})</b>\n\n"
+                f"<blockquote>"
+                f"Nền tảng: <code>{aplat}</code>\n"
+                f"UID: <code>{auid or 'đang đồng bộ'}</code>\n"
+                f"Chủ sở hữu ID: <code>{target_a.get('owner_tg_id') or ROOT_ADMIN_ID}</code>\n"
+                f"Nhận lệnh: <code>{'BẬT' if target_a.get('chat_cmd_enabled', 1) else 'TẮT'}</code>\n"
+                f"Phiên: <code>được giữ kín trên máy chủ</code>"
+                f"</blockquote>\n\n"
+                f"Credential không được xuất vào Telegram. Nếu phiên lỗi, hãy ngắt/xóa Acc rồi đăng nhập lại.",
+                reply_to=msg_id)
             return
 
         if data.startswith("del_acc_now:"):
@@ -3294,23 +3164,14 @@ class DirectTelegramBotRunner:
             return
 
         if data == "prompt_gettoken":
-            self.user_states[user_id] = {"mode": "gettoken"}
             self.answer_callback(cb_id)
-            self.send_text(
-                chat_id,
-                "<b>Gửi tài khoản Discord theo cú pháp:</b>\n<code>email|password</code> hoặc dán trực tiếp Token Discord vào đây:",
-                reply_to=msg_id,
-            )
+            from control_plane import telegram_command
+            telegram_command(self, user_id, chat_id, 'discord_login', '')
             return
 
         if data == "prompt_getcookie":
-            self.user_states[user_id] = {"mode": "getcookie"}
             self.answer_callback(cb_id)
-            self.send_text(
-                chat_id,
-                "<b>Gửi tài khoản Facebook theo cú pháp:</b>\n<code>email|password</code> hoặc dán trực tiếp Cookie <code>c_user=...; xs=...</code> vào đây:",
-                reply_to=msg_id,
-            )
+            self.send_text(chat_id, 'Tích hợp này đã ngừng hoạt động.')
             return
 
     def _render_delete_user_id_menu(self, chat_id, msg_id, notice=""):
@@ -3437,8 +3298,8 @@ class DirectTelegramBotRunner:
                 self.send_sticker_bytes(chat_id, webp_b, filename="sticker_512x512.webp", reply_to=msg_id)
                 self.send_doc_bytes(chat_id, png_b, "sticker_512x512_sharp.png", caption="Nhãn Dán Sticker 512×512 Chuẩn Zalo & Telegram (Nền trong suốt Die-Cut)", reply_to=msg_id)
                 return True
-        except Exception as e:
-            self.send_text(chat_id, f"Lỗi tạo Sticker: <code>{e}</code>", reply_to=msg_id)
+        except Exception:
+            self.send_text(chat_id, _public_error("Lỗi tạo Sticker:"), reply_to=msg_id)
             return True
         return False
 
@@ -3470,7 +3331,7 @@ class DirectTelegramBotRunner:
                 f"• <b>#{aid} [{str(aplat).upper()}] {aname}</b> (<code>{auid or '-'}</code> | {cmd_badge}{owner_tag})"
             )
             rows.append([
-                tg_btn(f"Cookie #{aid} ({aname[:8]})", f"export_acc_token:{aid}", emoji_key="key"),
+                tg_btn(f"Chi tiết #{aid} ({aname[:8]})", f"show_acc_details:{aid}", emoji_key="key"),
                 tg_btn(f"{'Bật' if cmd_flag else 'Tắt'} Lệnh #{aid}", f"toggle_acc_cmd:{aid}", emoji_key="chat"),
                 tg_btn(f"Xoá #{aid}", f"del_acc_now:{aid}", emoji_key="trash"),
             ])
@@ -3558,6 +3419,10 @@ class DirectTelegramBotRunner:
         if not st:
             return False
         mode = st.get("mode")
+        if mode in ('gettoken', 'getcookie') or (mode and any(word in mode.lower() for word in ('discord', 'facebook', 'messenger', 'reg_acc'))):
+            self.user_states.pop(user_id, None)
+            self.send_text(chat_id, 'Luồng cũ đã ngừng. Dùng /discord_login để liên kết chính thức.')
+            return True
 
         if mode in ("add_file_nhay", "add_file_ngon"):
             self.user_states.pop(user_id, None)
@@ -3639,8 +3504,8 @@ class DirectTelegramBotRunner:
                 import app as _main_app
                 added, total = _main_app.ProxyPoolEngine.add_proxies_incremental(text, auto_start=True)
                 self.send_text(chat_id, f"Đã nạp thêm <b>{added} Proxy</b> (Tổng: <b>{total} Proxy</b>) và tự động đo tốc độ Ping!", reply_to=msg_id)
-            except Exception as e:
-                self.send_text(chat_id, f"Lỗi nạp Proxy: <code>{e}</code>", reply_to=msg_id)
+            except Exception:
+                self.send_text(chat_id, _public_error("Lỗi nạp Proxy:"), reply_to=msg_id)
             return True
 
         if mode == "2fa":
@@ -3658,24 +3523,6 @@ class DirectTelegramBotRunner:
             self.send_text(chat_id, f"<b>Meta AI:</b>\n{ans}", reply_to=msg_id)
             return True
 
-        if mode == "gettoken":
-            self.user_states.pop(user_id, None)
-            if "|" in text:
-                parts = [p.strip() for p in text.split("|")]
-                res = DiscordTokenGetter().login_discord(parts[0], parts[1], parts[2] if len(parts) > 2 else "")
-                if res.get("status") == "SUCCESS":
-                    tok = res["token"]
-                    sync_and_keepalive_tokens_to_db(tok, owner_tg_id=str(user_id))
-                    self.send_text(chat_id, f"<b>Lấy Token Discord thành công & đã nạp vào kho riêng của bạn:</b>\n<pre>{tok}</pre>", reply_to=msg_id)
-                else:
-                    self.send_text(chat_id, f"{res.get('message')}", reply_to=msg_id)
-            else:
-                saved = sync_and_keepalive_tokens_to_db(text, owner_tg_id=str(user_id))
-                if saved:
-                    self.send_text(chat_id, f"Đã nạp <b>{len(saved)} Token Discord</b> vào kho riêng của bạn!", reply_to=msg_id)
-                else:
-                    self.send_text(chat_id, "Không tìm thấy Token hợp lệ!", reply_to=msg_id)
-            return True
 
         if mode == "input_zalo_ck_im":
             imei_ex, ck_dict, meta = parse_imei_and_cookie_from_text(text)
@@ -3742,22 +3589,6 @@ class DirectTelegramBotRunner:
                 self.send_text(chat_id, "Cookie Zalo không hợp lệ (thiếu zpw_sek hoặc zpsid)!", reply_to=msg_id)
             return True
 
-        if mode == "getcookie":
-            self.user_states.pop(user_id, None)
-            if "c_user=" in text and "xs=" in text:
-                saved = sync_and_keepalive_tokens_to_db(text, owner_tg_id=str(user_id))
-                self.send_text(chat_id, f"Đã lưu Cookie Messenger/FB ({len(saved)} Acc) vào kho của bạn!", reply_to=msg_id)
-            elif "|" in text:
-                parts = [p.strip() for p in text.split("|")]
-                res = FacebookCookieGetter().login_facebook(parts[0], parts[1], parts[2] if len(parts) > 2 else "")
-                if res.get("status") == "SUCCESS":
-                    sync_and_keepalive_tokens_to_db(res["cookies"], owner_tg_id=str(user_id))
-                    self.send_text(chat_id, f"<b>Lấy Cookie FB thành công:</b>\n<pre>{res['cookies']}</pre>", reply_to=msg_id)
-                else:
-                    self.send_text(chat_id, f"{res.get('message')}", reply_to=msg_id)
-            else:
-                self.send_text(chat_id, "Vui lòng gửi đúng định dạng <code>email|pass</code> hoặc chuỗi Cookie <code>c_user=...; xs=...</code>", reply_to=msg_id)
-            return True
 
         return False
 
@@ -3852,7 +3683,7 @@ class DirectTelegramBotRunner:
             return
 
         # Tự động nhận diện nếu người dùng dán trực tiếp Cookie + IMEI Zalo / Token Discord vào Bot
-        if not text.startswith("/") and ("zpw_sek" in text or "zpsid" in text or DISCORD_TOKEN_RE.search(text)):
+        if not text.startswith("/") and ("zpw_sek" in text or "zpsid" in text):
             imei_extracted, ck_dict, meta = parse_imei_and_cookie_from_text(text)
             if ck_dict and ("zpw_sek" in ck_dict or "zpsid" in ck_dict):
                 if imei_extracted:
@@ -3874,6 +3705,12 @@ class DirectTelegramBotRunner:
         parts = text.split(None, 1)
         cmd_raw = parts[0].lower().split("@")[0]
         arg_str = parts[1].strip() if len(parts) > 1 else ""
+
+        from control_plane import telegram_command
+        if telegram_command(self, user_id, chat_id, cmd_raw.lstrip('/'), arg_str):
+            return
+        if cmd_raw == '/zalo':
+            cmd_raw = '/start'
 
         if cmd_raw in ("/start", "/menu", "/help", "/bot"):
             self.user_states.pop(user_id, None)
@@ -4006,9 +3843,13 @@ class DirectTelegramBotRunner:
             return
 
         if cmd_raw in ("/stopall", "/ta", "/stop"):
+            if not is_root_admin(user_id):
+                self.send_text(chat_id, 'Chỉ quản trị viên chính được dừng toàn hệ thống.', reply_to=msg_id)
+                return
             try:
                 import app as _main_app
                 stopped = _main_app.stop_tasks_for_thread(None)
+                stopped += _main_app.app.extensions['notification_queue'].stop_all(str(user_id))
             except Exception:
                 stopped = 0
             self.send_text(chat_id, f"{tg_anim('stop', '')} <b>Đã dừng khẩn cấp toàn bộ ({stopped} chiến dịch)!</b>", reply_to=msg_id)
@@ -4023,13 +3864,16 @@ class DirectTelegramBotRunner:
         try:
             self.process_update(upd)
         except Exception as e:
-            self.last_error = str(e)
+            self.last_error = f"Telegram update failed ({type(e).__name__})"
 
     def _submit_update(self, upd):
         msg = upd.get("message") or upd.get("edited_message") or {}
         parts = str(msg.get("text") or "").split(None, 1)
         command = parts[0].lower().split("@")[0] if parts else ""
-        interactive = "callback_query" in upd or command in ("/start", "/menu", "/help", "/bot", "/ping")
+        interactive = "callback_query" in upd or command in (
+            "/start", "/menu", "/help", "/bot", "/ping", "/tasks", "/task_status",
+            "/task_stop", "/task_pause", "/task_resume", "/stopall", "/ta", "/stop",
+        )
         executor = self.interactive_executor if interactive else self.executor
         slots = self._interactive_update_slots if interactive else self._update_slots
         if not slots.acquire(blocking=False):
@@ -4088,7 +3932,7 @@ class DirectTelegramBotRunner:
                         fail_streak = 0
                     time.sleep(0.5)
             except Exception as e:
-                self.last_error = str(e)
+                self.last_error = f"Telegram polling failed ({type(e).__name__})"
                 fail_streak += 1
                 try:
                     self.poll_session.close()

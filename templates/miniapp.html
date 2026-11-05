@@ -1,101 +1,11 @@
-<!doctype html>
-<!-- Author: Dev Anh Khôi · GLAZE Mini App · v{{ version }} -->
-<html lang="vi">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#0b1021">
-  <title>GLAZE · Không gian của bạn</title>
-  <link rel="stylesheet" href="/static/miniapp.css?v={{ version }}">
-  <script id="telegram-sdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-  <script src="/static/miniapp.js?v={{ version }}" defer></script>
-</head>
-<body>
-  <a class="skip-link" href="#current-panel">Đến nội dung</a>
-  <main class="shell" id="current-panel">
-    <header class="top">
-      <div class="brand"><img src="/glaze_logo.png" alt="" width="44" height="44"><div><strong>GLAZE<span class="brand-dot">✦</span></strong><small>{{ author }} · v{{ version }}</small></div></div>
-      <div id="connection" class="status" role="status"><i aria-hidden="true"></i><span id="connection-label">Kết nối…</span></div>
-    </header>
-    <section class="hero">
-      <div class="eyebrow">YOUR CONNECTED SPACE</div>
-      <h1 id="page-title">Không gian quản lý<span> của bạn.</span></h1>
-      <p id="page-description">Tài khoản, dữ liệu và công cụ. Gọn trong một không gian.</p>
-      <div class="hero-line" aria-hidden="true"><span></span><span></span><span></span></div>
-    </section>
-    <div class="notice error" id="sync-error" role="alert" hidden></div>
-    <section class="pane" id="overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
-      <div class="metric-grid">
-        <article class="metric violet"><div class="metric-heading"><span>Tài khoản đã lưu</span><span aria-hidden="true">◎</span></div><strong id="metric-accounts">—</strong><small id="metric-account-total">Đang bật: —</small></article>
-        <article class="metric cyan"><div class="metric-heading"><span>Tác vụ đang chạy</span><span aria-hidden="true">◷</span></div><strong id="metric-tasks">—</strong><small id="metric-listeners">Luồng lắng nghe: —</small></article>
-        <article class="metric pink"><div class="metric-heading"><span>Liên kết đã lưu</span><span aria-hidden="true">→</span></div><strong id="metric-oauth">—</strong><small>OAuth / Discord Bot / Page</small></article>
-        <article class="metric amber"><div class="metric-heading"><span>Bộ nhớ</span><span aria-hidden="true">▤</span></div><strong id="metric-memory">—</strong><small>RAM của tiến trình</small></article>
-      </div>
-      <div class="section-head"><div><span class="kicker">BẮT ĐẦU TỪ ĐÂY</span><h2>Không gian làm việc</h2></div><span class="badge">3 nền tảng</span></div>
-      <div class="card quick-card"><div><h3>Kết nối, theo cách của bạn.</h3><p>Zalo qua QR. Discord &amp; Facebook qua ủy quyền chính thức.</p></div><button class="button primary full" data-go="accounts">＋ Quản lý tài khoản <span aria-hidden="true">→</span></button><div class="quick-grid"><button class="button" data-go="files">▤ Kho tệp</button><button class="button" data-go="commands">⌘ Bảng lệnh</button></div></div>
-      <div class="section-head"><div><h2>Phân tích tài khoản</h2><p>Số bản ghi bot đã lưu, theo nền tảng</p></div><button class="button icon-button" data-sync aria-label="Đồng bộ dữ liệu">↻</button></div>
-      <div class="card" id="platform-analytics" aria-live="polite"><div class="empty">Đang tải dữ liệu…</div></div>
-      <div class="section-head"><div><h2>Tác vụ hiện tại</h2><p>Chỉ hiển thị những tác vụ đang chạy</p></div><button class="text-button" data-go="tasks">Xem hết →</button></div>
-      <div class="card" id="overview-tasks"><div class="empty">Đang tải…</div></div>
-      <p id="last-updated" class="sync-time">Chưa có bản cập nhật thành công</p>
-      <div class="card stack"><p id="storage-info">Đang xác định kho dữ liệu…</p><label class="field">Đối chiếu mã kho trong xác nhận của Telegram<input id="receipt-storage" maxlength="32" placeholder="12 ký tự sau Kho dữ liệu"></label><button class="button" id="compare-storage">Đối chiếu tài khoản</button><p id="storage-result" role="status"></p></div>
-    </section>
-    <section class="pane" id="tasks" role="tabpanel" aria-labelledby="tab-tasks" tabindex="0" hidden>
-      <div class="section-head"><div><h2>Đang hoạt động</h2><p>Trạng thái trong tiến trình máy chủ hiện tại</p></div><button class="button small" data-refresh>Làm mới</button></div>
-      <label class="field">Hiển thị tác vụ<select id="task-filter" aria-label="Lọc tác vụ"><option value="active">Đang chạy / đang dừng</option><option value="all">Cả tác vụ đã kết thúc</option></select></label>
-      <div class="card" id="task-list"><div class="empty">Đang tải…</div></div>
-      <button id="stop-all" class="button danger full">Dừng tất cả tác vụ</button>
-    </section>
-    <section class="pane" id="accounts" role="tabpanel" aria-labelledby="tab-accounts" tabindex="0" hidden>
-      <div class="section-head"><div><span class="kicker">KẾT NỐI CHÍNH CHỦ</span><h2>Discord &amp; Facebook</h2></div></div>
-      <p class="section-description">Đăng nhập bằng email trên trang chính thức của nhà cung cấp. Bot không nhận mật khẩu và không xuất cookie phiên.</p>
-      <div id="oauth-providers" class="provider-grid"><div class="card empty">Đang kiểm tra cấu hình…</div></div>
-      <div id="configuration-result" class="notice" role="status" hidden></div>
-      <a id="oauth-link" class="button primary full" href="#" target="_blank" rel="noopener noreferrer" hidden>Tiếp tục đăng nhập →</a>
-      <div class="notice">OAuth chỉ cấp quyền hồ sơ đã đồng ý; không biến tài khoản cá nhân thành bot gửi tin nhắn. Phiên hết hạn cần kết nối lại.</div>
-      <div class="section-head"><div><h2>Liên kết đã xác minh</h2><p>Được lưu riêng với tài khoản chạy bot</p></div></div>
-      <div class="card" id="oauth-connections"><div class="empty">Đang tải…</div></div>
-      <div class="section-head"><div><h2>Bot Discord &amp; Facebook Page</h2><p>Lệnh quản lý qua API chính thức</p></div></div>
-      <div class="notice">Discord dùng /menu, /status, /tasks, /stopall sau khi đăng ký Interactions URL. Facebook Page nhận menu, status, tasks, stopall từ các ID quản lý đã cấu hình; cần quyền pages_messaging và webhook của Meta.</div>
-      <div id="official-integrations" class="stack"><div class="empty">Đang tải cấu hình…</div></div>
-      <div class="section-head"><div><h2>Kết nối Zalo</h2><p>Quét QR và xác nhận trên điện thoại của bạn</p></div><span class="badge">QR / Cookie</span></div>
-      <div class="card stack">
-        <button class="button primary full" id="start-qr">▦ Tạo mã QR</button>
-        <div id="qr-area" hidden><img id="qr-image" class="qr" alt="Mã QR đăng nhập Zalo" hidden><p id="qr-message" role="status">Đang tạo mã QR…</p></div>
-        <details><summary>Nhập phiên Zalo của bạn</summary><div class="stack details-body"><label class="field">Cookie + IMEI<textarea id="cookie-input" placeholder="IMEI | Cookie" autocomplete="off" spellcheck="false"></textarea></label><button id="add-account" class="button full">Thêm tài khoản</button></div></details>
-      </div>
-      <div class="section-head"><div><h2>Tài khoản chạy bot</h2><p>Đã lưu ≠ đăng nhập thành công ≠ luồng đang chạy</p></div><button class="button small" id="refresh-accounts">Đồng bộ</button></div>
-      <div class="filters"><input type="search" id="account-search" aria-label="Tìm tài khoản" placeholder="Tìm tên, UID hoặc mã tài khoản"><select id="account-filter" aria-label="Lọc nền tảng"><option value="all">Tất cả</option><option value="zalo">Zalo</option><option value="discord">Discord</option><option value="messenger">Messenger</option></select></div>
-      <div id="account-count" class="account-count" aria-live="polite"></div><div class="card" id="account-list"><div class="empty">Đang tải…</div></div>
-      <div class="notice">Lưu ý lưu trữ: SQLite trên Render Free có thể mất sau khi triển khai lại hoặc máy chủ bị thay. Cần ổ lưu bền vững để giữ dữ liệu qua các lần đó.</div>
-    </section>
-    <section class="pane" id="files" role="tabpanel" aria-labelledby="tab-files" tabindex="0" hidden>
-      <div class="section-head"><div><h2>Lựa chọn đã lưu</h2><p>Dùng chung giữa Telegram và Mini App</p></div><button class="button small" id="refresh-files">Làm mới</button></div>
-      <div class="selection-grid"><div class="selection"><span class="badge">NHÂY</span><strong id="selected-nhay">—</strong></div><div class="selection"><span class="badge pink-badge">NGÔN</span><strong id="selected-ngon">—</strong></div></div>
-      <p class="section-description">Đổi lựa chọn được lưu vào dữ liệu, không tự thay nội dung của tác vụ đã khởi chạy.</p>
-      <label class="search-field"><span class="sr-only">Tìm tệp</span><input id="file-search" type="search" placeholder="Tìm trong kho tệp…"></label>
-      <div class="card" id="file-list"><div class="empty">Đang tải…</div></div>
-      <div class="section-head"><div><h2>Thêm hoặc cập nhật tệp</h2><p>.txt · tối đa 1 MB · ưu tiên văn bản UTF-8</p></div></div>
-      <div class="card stack"><label class="field">Loại tệp<select id="file-target" aria-label="Loại tệp"><option value="nhay">Nhây</option><option value="ngon">Ngôn</option></select></label><label class="field upload-field">↑ Chọn tệp trên thiết bị<input id="file-upload" type="file" accept=".txt,text/plain"></label><div class="divider"><span>hoặc nhập nội dung</span></div><label class="field">Tên tệp<input id="file-name" placeholder="ten-tep.txt" maxlength="80"></label><label class="field">Nội dung<textarea id="file-content" placeholder="Nhập nội dung của bạn…"></textarea></label><button id="save-file" class="button primary full">Lưu và chọn tệp</button></div>
-    </section>
-    <section class="pane" id="commands" role="tabpanel" aria-labelledby="tab-commands" tabindex="0" hidden>
-      <div class="section-head"><div><h2>Toàn bộ lệnh được hỗ trợ</h2><p>Cú pháp, nền tảng và quyền sử dụng</p></div></div>
-      <div class="filters"><input type="search" id="command-search" aria-label="Tìm lệnh" placeholder="Tìm lệnh hoặc chức năng…"><select id="command-platform" aria-label="Nền tảng lệnh"><option value="all">Tất cả</option><option value="zalo">Zalo</option><option value="discord">Discord</option><option value="messenger">Messenger</option></select></div>
-      <p class="section-description">Chạm vào thẻ để sao chép. Quyền OAuth hồ sơ không cấp quyền chạy các lệnh chat.</p>
-      <div id="command-list" class="commands"><div class="empty">Đang tải bảng lệnh…</div></div>
-      <div class="section-head"><div><h2>Dữ liệu &amp; bảo trì</h2><p>Cập nhật có xác nhận từ máy chủ</p></div></div>
-      <div class="card stack"><button class="button" data-sync>↻ Đồng bộ tất cả dữ liệu</button><div class="quick-grid"><button class="button" id="reload-files">Nạp lại tệp</button><button class="button" id="clean-memory">Dọn bộ nhớ</button></div></div>
-    </section>
-    <footer>GLAZE · {{ author }} · v{{ version }}<span>Dữ liệu thật. Trạng thái rõ ràng.</span></footer>
-  </main>
-  <nav class="nav" role="tablist" aria-label="Điều hướng Mini App">
-    <button id="tab-overview" role="tab" aria-selected="true" aria-controls="overview" data-tab="overview" tabindex="0"><span aria-hidden="true">⌂</span>Tổng quan</button>
-    <button id="tab-tasks" role="tab" aria-selected="false" aria-controls="tasks" data-tab="tasks" tabindex="-1"><span aria-hidden="true">◷</span>Tác vụ</button>
-    <button id="tab-accounts" role="tab" aria-selected="false" aria-controls="accounts" data-tab="accounts" tabindex="-1"><span aria-hidden="true">◎</span>Tài khoản</button>
-    <button id="tab-files" role="tab" aria-selected="false" aria-controls="files" data-tab="files" tabindex="-1"><span aria-hidden="true">▤</span>Tệp</button>
-    <button id="tab-commands" role="tab" aria-selected="false" aria-controls="commands" data-tab="commands" tabindex="-1"><span aria-hidden="true">⌘</span>Lệnh</button>
-  </nav>
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-</body>
-</html>
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark light"><title>GLAZE · Control</title><link rel="stylesheet" href="/static/control.css?v={{ version }}"><script src="https://telegram.org/js/telegram-web-app.js" id="telegram-sdk" async></script><script src="/static/control.js?v={{ version }}" defer></script></head><body>
+<a class="skip-link" href="#pages">Bỏ qua điều hướng</a><header><div class="brand"><img src="/glaze_logo.png" alt="GLAZE" width="36" height="36"><div>GLAZE <small>{{ author }} · {{ version }}</small></div></div><button id="refresh" aria-label="Làm mới dữ liệu">↻</button><span id="connection" role="status" aria-live="polite">Đang kết nối</span></header><nav id="tabs" role="tablist" aria-label="Các màn hình"></nav><div id="error" role="alert" aria-live="assertive" hidden></div><main id="pages" tabindex="-1">
+<section id="home" role="tabpanel"><p class="eyebrow">KHÔNG GIAN CỦA BẠN</p><h1>Mọi kết nối.<br><span>Trong tầm tay.</span></h1><p id="updated">Đang đồng bộ dữ liệu thật…</p><div id="metrics" class="grid skeleton" aria-busy="true"></div><article><h2>Hoạt động gần đây</h2><p>Sự kiện tác vụ thông báo · 10 phút gần nhất</p><svg id="chart" viewBox="0 0 600 100" role="img" aria-label="Số sự kiện theo phút"></svg><p id="chart-summary"></p></article><article><h2>Tổng quan xử lý</h2><div id="health"></div><p>Thời gian API chỉ đo tác vụ thông báo đã chạy. Chưa có mẫu sẽ hiển thị “Chưa đo”.</p></article></section>
+<section id="accounts" role="tabpanel"><p class="eyebrow">TÀI KHOẢN</p><h1>Kết nối đã lưu</h1><label>Tìm tài khoản<input id="account-search" type="search" placeholder="Tên hoặc ID"></label><div id="account-list" class="stack skeleton"></div></section>
+<section id="discord" role="tabpanel"><p class="eyebrow">DISCORD</p><h1>Liên kết chính chủ</h1><article><p>OAuth xác minh hồ sơ trên Discord chính thức. Webhook gửi dưới danh tính webhook, không dưới tài khoản cá nhân.</p><button id="discord-login" class="primary">Đăng nhập Discord ↗</button><a id="oauth-link" hidden target="_blank" rel="noopener noreferrer">Tiếp tục tại Discord ↗</a><p id="oauth-status"></p></article><article><h2>Kênh thông báo</h2><div id="channels"></div><details><summary>Thêm webhook được cấp quyền</summary><form id="channel-form"><label>URL webhook<input name="url" type="password" required autocomplete="off" placeholder="https://discord.com/api/webhooks/…"></label><button>Kiểm tra và lưu</button></form></details></article><article><h2>Gửi thông báo</h2><form id="send-form"><fieldset id="channel-options"><legend>Chọn tối đa 5 kênh</legend></fieldset><label>Nội dung<textarea name="content" required maxlength="2000"></textarea></label><button class="primary">Đưa vào hàng chờ</button></form></article></section>
+<section id="zalo" role="tabpanel"><p class="eyebrow">ZALO</p><h1>Tài khoản & tệp</h1><article><button id="qr" class="primary">Quét QR Zalo</button><img id="qr-image" alt="Mã QR Zalo" hidden width="240" height="240"><p id="qr-status"></p><details><summary>Nhập Cookie + IMEI</summary><form id="zalo-form"><label>Phiên Zalo<textarea name="raw_input" required autocomplete="off"></textarea></label><button>Lưu tài khoản</button></form></details></article><article><h2>Chạy trên tài khoản và box đã chọn</h2><form id="launch-form"><label>Tài khoản Zalo<select id="launch-account" name="account_id" required></select></label><fieldset id="launch-boxes"><legend>Chọn tối đa 5 box</legend><p>Chọn tài khoản để tải tên box.</p></fieldset><button type="button" id="refresh-boxes">Làm mới tên box</button><label>Chức năng<select name="mode"><option value="treo_ngon">Treo ngôn</option><option value="treo_nhay">Treo nhây</option></select></label><label>Độ trễ nhân tạo (giây)<input name="delay" type="number" min="0" max="300" step="0.1" value="0" required></label><label>Nội dung tùy chọn<textarea name="custom_text" maxlength="2000" placeholder="Để trống để dùng tệp đã chọn"></textarea></label><button class="primary">Chạy trên box đã chọn</button></form></article><article><h2>Kho tệp dùng chung</h2><p id="selected-files"></p><div id="file-list"></div><details><summary>Thêm hoặc cập nhật tệp</summary><form id="file-form"><label>Tên tệp<input name="filename" required pattern=".+\.txt" placeholder="noi-dung.txt"></label><label>Loại tệp<select name="target"><option value="nhay">Nhây</option><option value="ngon">Ngôn</option></select></label><label>Nội dung<textarea name="content" required></textarea></label><button>Lưu và chọn tệp</button></form></details><details><summary>Tải tệp .txt từ thiết bị</summary><form id="upload-form"><label>Chọn tệp<input type="file" name="file" accept=".txt,text/plain" required></label><label>Dùng cho<select name="target"><option value="nhay">Nhây</option><option value="ngon">Ngôn</option></select></label><button>Tải lên</button></form></details></article></section>
+<section id="tasks" role="tabpanel"><p class="eyebrow">TÁC VỤ</p><h1>Chủ động điều khiển</h1><label>Lọc trạng thái<select id="task-filter"><option value="all">Tất cả</option><option value="active">Đang xử lý</option><option value="FAILED">Thất bại</option><option value="COMPLETED">Hoàn thành</option></select></label><div id="task-list" class="stack skeleton"></div><h2>Tác vụ Zalo hiện có</h2><div id="legacy-tasks"></div><button id="stop-all" class="danger">Dừng tất cả tác vụ</button></section>
+<section id="activity" role="tabpanel"><p class="eyebrow">NHẬT KÝ</p><h1>Diễn biến hệ thống</h1><p>Nhật ký trạng thái không chứa nội dung tin nhắn hay credential.</p><div id="event-list" class="stack"></div></section>
+<section id="music" role="tabpanel"><p class="eyebrow">ÂM NHẠC VIỆT</p><h1>Nhạc đang được yêu thích</h1><p id="music-source">Tuyển chọn từ Hot Hits Vietnam trên Spotify.</p><article><button id="music-play" class="primary">Mở trình phát Spotify</button><div id="music-player"></div><p>Spotify quyết định khả năng phát theo tài khoản và khu vực của bạn.</p><a id="music-playlist" target="_blank" rel="noopener noreferrer" hidden>Mở playlist trên Spotify ↗</a></article><div id="music-tracks" class="stack skeleton" aria-busy="true"></div></section>
+<section id="settings" role="tabpanel"><p class="eyebrow">CÀI ĐẶT</p><h1>Theo cách của bạn</h1><article><label>Giao diện<select id="theme"><option value="system">Theo Telegram / hệ thống</option><option value="dark">Tối</option><option value="light">Sáng</option></select></label><label>Cỡ chữ<select id="text-size"><option value="normal">Vừa</option><option value="large">Lớn và đậm</option></select></label><label>Màu nhấn<select id="accent"><option value="blue">Xanh tím</option><option value="rose">Hồng</option><option value="mint">Xanh ngọc</option></select></label></article><article><h2>Ứng dụng Discord OAuth2</h2><form id="oauth-form"><label>Application ID<input name="client_id" required inputmode="numeric" pattern="[0-9]+"></label><label>Client Secret<input name="client_secret" type="password" required autocomplete="off"></label><label>URL HTTPS của Mini App<input name="public_base_url" type="url" required placeholder="https://ten-dich-vu.onrender.com"></label><button>Lưu cấu hình mã hóa</button><p id="oauth-config-result" role="status"></p></form></article><article><h2>Lệnh Telegram</h2><div id="commands"></div></article><article><h2>Lệnh Zalo được hỗ trợ</h2><div id="zalo-commands"></div></article><article><h2>Lưu trữ</h2><p id="storage"></p><p>Render Free dùng ổ tạm. Muốn giữ dữ liệu qua redeploy cần ổ lưu bền vững hoặc cơ sở dữ liệu bên ngoài.</p><p>Độ trễ nhân tạo: 0 giây. Hệ thống vẫn chờ theo giới hạn API.</p></article></section>
+</main><nav id="bottom" aria-label="Điều hướng chính"></nav><dialog id="sheet" aria-labelledby="sheet-title"><div id="sheet-handle" aria-hidden="true"></div><h2 id="sheet-title"></h2><div id="sheet-content"></div><div id="sheet-actions"></div><button id="sheet-close">Đóng</button></dialog><div id="toasts" role="status" aria-live="polite"></div></body></html>

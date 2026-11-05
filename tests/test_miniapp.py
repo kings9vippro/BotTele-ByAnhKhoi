@@ -104,6 +104,34 @@ class MiniAppTests(unittest.TestCase):
         runner.executor.submit.return_value = Future()
         self.assertTrue(runner._submit_update(update))
 
+    def test_telegram_stop_command_uses_reserved_interactive_capacity(self):
+        import get_ck_im_zalo as telegram
+        runner = telegram.DirectTelegramBotRunner.__new__(telegram.DirectTelegramBotRunner)
+        runner._update_slots = threading.BoundedSemaphore(1)
+        runner._interactive_update_slots = threading.BoundedSemaphore(1)
+        runner.executor = Mock()
+        runner.interactive_executor = Mock()
+        runner.executor.submit.return_value = Future()
+        runner.interactive_executor.submit.return_value = Future()
+        self.assertTrue(runner._submit_update({'message': {'text': 'long job'}}))
+        self.assertTrue(runner._submit_update({'message': {'text': '/stopall'}}))
+        runner.interactive_executor.submit.assert_called_once()
+
+    def test_telegram_transport_exception_does_not_expose_bot_token(self):
+        import get_ck_im_zalo as telegram
+        runner = telegram.DirectTelegramBotRunner.__new__(telegram.DirectTelegramBotRunner)
+        runner.token = 'test-sensitive-token'
+        runner.api_base = 'https://api.telegram.org/bot' + runner.token
+        runner._tls = threading.local()
+        runner._create_isolated_session = Mock(return_value=Mock())
+        session = Mock()
+        session.post.side_effect = RuntimeError('failed at ' + runner.api_base + '/getMe')
+        runner._get_worker_session = Mock(return_value=session)
+        response = runner.api_call('getMe')
+        self.assertFalse(response['ok'])
+        self.assertNotIn(runner.token, response['description'])
+        self.assertNotIn(runner.token, runner.last_error)
+
     def test_telegram_import_reports_save_failure_and_hides_session_key(self):
         import get_ck_im_zalo as telegram
         runner = telegram.DirectTelegramBotRunner.__new__(telegram.DirectTelegramBotRunner)
@@ -131,7 +159,7 @@ class MiniAppTests(unittest.TestCase):
         accounts = [{"id": 1, "platform": "zalo", "enabled": 1, "token": "private"}, {"id": 2, "platform": "discord", "enabled": 0}, {"id": 3, "platform": "custom"}, {"id": 4, "platform": None}]
         with patch.object(app, "refresh_accounts_ram_cache", return_value=accounts):
             response = self.client.get("/api/miniapp/telemetry")
-        self.assertEqual(response.json["account_platforms"], {"zalo": 2, "discord": 1, "messenger": 0, "other": 1})
+        self.assertEqual(response.json["account_platforms"], {"zalo": 2, "discord": 0})
         self.assertNotIn("private", response.get_data(as_text=True))
 
     def test_sticker_wait_is_scoped_and_expires(self):
@@ -220,7 +248,7 @@ class MiniAppTests(unittest.TestCase):
 
     def test_miniapp_has_fresh_build_header(self):
         response = self.client.get("/miniapp")
-        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-1.3.0")
+        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-2.0.0")
         self.assertIn("no-store", response.headers["Cache-Control"])
 
     def test_custom_sticker_upload_plain_response_reaches_send(self):

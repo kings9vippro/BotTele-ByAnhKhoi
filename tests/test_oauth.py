@@ -1,5 +1,7 @@
 """OAuth contract tests. Author: Dev Anh Khôi. Version: 1.2.0. No live accounts."""
 import os
+import base64
+import hashlib
 import sqlite3
 import tempfile
 import unittest
@@ -18,11 +20,11 @@ class OAuthTests(unittest.TestCase):
         self.path = os.path.join(self.temp.name, "oauth.db")
         self.key = Fernet.generate_key().decode()
         self.environment = patch.dict(os.environ, {"OAUTH_PUBLIC_BASE_URL": "https://bot.example",
-            "OAUTH_ENCRYPTION_KEY": self.key, "DISCORD_CLIENT_ID": "test-client", "DISCORD_CLIENT_SECRET": "private-client-secret",
-            "FACEBOOK_APP_ID": "test-meta", "FACEBOOK_APP_SECRET": "private-meta-secret", "FACEBOOK_GRAPH_VERSION": "v23.0"})
+            "OAUTH_ENCRYPTION_KEY": self.key, "DISCORD_CLIENT_ID": "test-client", "DISCORD_CLIENT_SECRET": "private-client-secret"})
         self.environment.start()
         self.addCleanup(self.environment.stop)
         self.app = Flask(__name__)
+        self.owner = 'owner'
         self.app.secret_key = "test-only-signing-key"
         self.app.config["SESSION_COOKIE_HTTPONLY"] = True
         self.app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
@@ -36,7 +38,7 @@ class OAuthTests(unittest.TestCase):
         oauth.init_oauth_tables(conn)
         conn.commit()
         conn.close()
-        oauth.register_oauth_routes(self.app, self.db, lambda: "owner")
+        oauth.register_oauth_routes(self.app, self.db, lambda: self.owner)
         self.admin = self.app.test_client()
         with self.admin.session_transaction() as admin_session:
             admin_session["logged_in"] = True
@@ -53,12 +55,24 @@ class OAuthTests(unittest.TestCase):
         redirect = browser.get(urlsplit(started.json["url"]).path)
         self.assertEqual(redirect.status_code, 302)
         params = parse_qs(urlsplit(redirect.location).query)
-        self.assertEqual(params["scope"], ["identify" if provider == "discord" else "public_profile"])
+        self.assertEqual(params["scope"], ["identify"])
         self.assertNotIn("private", redirect.location)
         return browser, params["state"][0]
 
     def profile(self):
         return {"uid": "123456", "name": "<My Account>", "access": "private-access", "refresh": "private-refresh", "expires": 3600, "scope": "identify"}
+
+    def test_existing_oauth_attempts_table_migrates_for_pkce(self):
+        conn = self.db()
+        conn.execute('DROP TABLE oauth_attempts')
+        conn.execute('''CREATE TABLE oauth_attempts (
+            state_hash TEXT PRIMARY KEY, provider TEXT NOT NULL, launch_hash TEXT UNIQUE,
+            owner_id TEXT NOT NULL, created_at REAL NOT NULL, browser_hash TEXT,
+            used INTEGER NOT NULL DEFAULT 0)''')
+        oauth.init_oauth_tables(conn)
+        columns = {row[1] for row in conn.execute('PRAGMA table_info(oauth_attempts)')}
+        conn.close()
+        self.assertIn('verifier_encrypted', columns)
 
     def test_provider_configuration_is_truthful_and_secret_free(self):
         result = self.admin.get("/api/miniapp/oauth/providers")
@@ -97,10 +111,59 @@ class OAuthTests(unittest.TestCase):
             self.assertEqual(browser.get(path, query_string=query).status_code, 400)
             exchange.assert_called_once()
 
+    def test_pkce_s256_challenge_and_verifier_are_bound_to_one_attempt(self):
+        with patch.dict(os.environ, {'DISCORD_OAUTH_PKCE':'1'}):
+            started=self.admin.post('/api/miniapp/oauth/start',json={'provider':'discord'})
+            browser=self.app.test_client()
+            redirect=browser.get(urlsplit(started.json['url']).path)
+            params=parse_qs(urlsplit(redirect.location).query)
+            self.assertEqual(params['code_challenge_method'],['S256'])
+            conn=self.db()
+            stored=conn.execute('SELECT verifier_encrypted FROM oauth_attempts').fetchone()[0]
+            conn.close()
+            self.assertNotIn('code_verifier',redirect.location)
+            self.assertNotIn('private',stored)
+            with patch.object(oauth,'_exchange_profile',return_value=self.profile()) as exchange:
+                result=browser.get('/oauth/callback/discord',query_string={'state':params['state'][0],'code':'fixture'})
+            self.assertEqual(result.status_code,200)
+            verifier=exchange.call_args.args[1]['code_verifier']
+            self.assertEqual(params['code_challenge'][0],base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode())
+
+    def test_same_discord_identity_is_isolated_per_telegram_owner_and_relink_deduplicates(self):
+        with patch.object(oauth,'_exchange_profile',return_value=self.profile()):
+            for owner in ('alice','bob','alice'):
+                self.owner=owner
+                browser,state=self.begin()
+                self.assertEqual(browser.get('/oauth/callback/discord',query_string={'state':state,'code':'fixture'}).status_code,200)
+        self.assertEqual(len(self.admin.get('/api/miniapp/oauth/connections').json['connections']),1)
+        self.owner='bob'
+        self.assertEqual(len(self.admin.get('/api/miniapp/oauth/connections').json['connections']),1)
+        conn=self.db()
+        self.assertEqual(conn.execute('SELECT COUNT(*) FROM oauth_connections').fetchone()[0],2)
+        conn.close()
+
+    def test_disconnect_revokes_only_owners_connection(self):
+        with patch.object(oauth,'_exchange_profile',return_value=self.profile()):
+            for owner in ('alice','bob'):
+                self.owner=owner
+                browser,state=self.begin()
+                browser.get('/oauth/callback/discord',query_string={'state':state,'code':'fixture'})
+        self.owner='alice'
+        target=self.admin.get('/api/miniapp/oauth/connections').json['connections'][0]['id']
+        response=Mock(status_code=200)
+        response.__enter__=Mock(return_value=response)
+        response.__exit__=Mock()
+        with patch.object(oauth.requests,'post',return_value=response) as revoke:
+            self.assertEqual(self.admin.post('/api/miniapp/oauth/disconnect',json={'id':target}).status_code,200)
+            revoke.assert_called_once()
+        self.assertEqual(self.admin.get('/api/miniapp/oauth/connections').json['connections'],[])
+        self.owner='bob'
+        self.assertEqual(len(self.admin.get('/api/miniapp/oauth/connections').json['connections']),1)
+
     def test_provider_cancellation_creates_no_connection(self):
-        browser, state = self.begin("facebook")
+        browser, state = self.begin("discord")
         with patch.object(oauth, "_exchange_profile") as exchange:
-            result = browser.get("/oauth/callback/facebook", query_string={"state": state, "error": "access_denied"})
+            result = browser.get("/oauth/callback/discord", query_string={"state": state, "error": "access_denied"})
         self.assertEqual(result.status_code, 400)
         exchange.assert_not_called()
         self.assertEqual(self.admin.get("/api/miniapp/oauth/connections").json["connections"], [])
@@ -138,12 +201,14 @@ class OAuthTests(unittest.TestCase):
         http.get.return_value.__exit__ = Mock()
         with patch.object(oauth.requests, "Session") as factory:
             factory.return_value.__enter__.return_value = http
-            for provider in ("discord", "facebook"):
-                result = oauth._exchange_profile(provider, oauth._config(provider), "example")
-                self.assertEqual(result["uid"], "123456")
+            config = oauth._config("discord")
+            config["code_verifier"] = "test-s256-verifier"
+            result = oauth._exchange_profile("discord", config, "example")
+            self.assertEqual(result["uid"], "123456")
         self.assertEqual(http.get.call_args.kwargs["headers"]["Authorization"], "Bearer private-access")
-        self.assertIn("appsecret_proof", http.get.call_args.kwargs["params"])
+        self.assertEqual(http.get.call_args.kwargs["params"], {})
         self.assertFalse(http.post.call_args.kwargs["allow_redirects"])
+        self.assertEqual(http.post.call_args.kwargs["data"]["code_verifier"], "test-s256-verifier")
         http.get.return_value.__exit__.assert_called()
 
 

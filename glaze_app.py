@@ -5,7 +5,7 @@
 # ==============================================================================
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "1.3.0"
+APP_VERSION = "2.0.0"
 
 import sys, types
 # All entry points and Telegram share one runtime module and one connection pool.
@@ -106,7 +106,7 @@ except ImportError:
 
 try:
     from flask import (
-        Flask, request, jsonify, session, redirect, Response, send_from_directory, render_template_string
+        Flask, request, jsonify, session, redirect, Response, send_from_directory, render_template_string, g
     )
 except ImportError:
     class Flask:
@@ -183,18 +183,25 @@ app.config["SESSION_COOKIE_SECURE"] = bool(os.environ.get("OAUTH_PUBLIC_BASE_URL
 
 # LÁ CHẮN BẢO MẬT WEB (CHỐNG BRUTE-FORCE, RATE-LIMIT API, HEADERS)
 LOGIN_ATTEMPTS = defaultdict(lambda: {"fails": 0, "lock_until": 0.0})
-API_RATE_BUCKETS = defaultdict(lambda: deque(maxlen=260))
+API_RATE_BUCKETS = defaultdict(lambda: deque(maxlen=320))
 SECURITY_LOCK = threading.RLock()
 
 def get_client_ip():
-    xff = request.headers.get("X-Forwarded-For", "")
-    if xff:
-        return xff.split(",")[0].strip()
+    # Trust a forwarded hop only when the deployment explicitly configures it.
+    try:
+        hops = max(0, min(5, int(os.environ.get('TRUSTED_PROXY_HOPS', '0'))))
+    except ValueError:
+        hops = 0
+    forwarded = request.headers.get('X-Forwarded-For', '').split(',')
+    if hops > 0 and len(forwarded) >= hops:
+        return forwarded[-hops].strip()[:64]
     return request.remote_addr or "127.0.0.1"
 
 def check_ip_bruteforce(ip):
     now = time.time()
     with SECURITY_LOCK:
+        if len(LOGIN_ATTEMPTS) >= 4096 and ip not in LOGIN_ATTEMPTS:
+            LOGIN_ATTEMPTS.pop(next(iter(LOGIN_ATTEMPTS)))
         st = LOGIN_ATTEMPTS[ip]
         if now < st["lock_until"]:
             return False, int(st["lock_until"] - now)
@@ -238,9 +245,11 @@ def get_or_create_csrf_token():
 def is_miniapp_request_authorized():
     """Accept an authenticated dashboard session or a signed Telegram Web App request."""
     if session.get("logged_in"):
+        g.miniapp_owner = str(TELEGRAM_ADMIN_ID)
         return True
     init_data = (request.headers.get("X-Telegram-Init-Data") or "").strip()
-    if not (TELEGRAM_BOT_TOKEN and init_data and TELEGRAM_ADMIN_ID):
+    # A token baked into tracked source is public; it cannot authenticate a Mini App.
+    if not (os.environ.get('TELEGRAM_BOT_TOKEN') and TELEGRAM_BOT_TOKEN and init_data and TELEGRAM_ADMIN_ID):
         return False
     try:
         from urllib.parse import parse_qsl
@@ -255,20 +264,63 @@ def is_miniapp_request_authorized():
         if not hmac.compare_digest(received_hash, expected_hash):
             return False
         user = json.loads(values.get("user") or "{}")
-        return str(user.get("id") or "") == TELEGRAM_ADMIN_ID
+        owner = str(user.get("id") or "")
+        if owner == str(TELEGRAM_ADMIN_ID):
+            g.miniapp_owner = owner
+            return True
+        # Delegates can manage only their OAuth identities and webhook queue.
+        scoped = request.path.startswith('/api/miniapp/oauth/') and request.path != '/api/miniapp/oauth/configure'
+        scoped = scoped or request.path in {'/api/miniapp/session', '/api/miniapp/control', '/api/miniapp/events',
+            '/api/miniapp/channels', '/api/miniapp/channels/delete', '/api/miniapp/notifications',
+            '/api/miniapp/notifications/stop_all', '/api/miniapp/notification_control'}
+        if not scoped or not owner.isdigit():
+            return False
+        c = db()
+        try:
+            authorized = c.execute('SELECT 1 FROM tg_authorized_users WHERE uid=?', (owner,)).fetchone()
+        except sqlite3.Error:
+            authorized = None
+        finally:
+            c.close()
+        if authorized:
+            g.miniapp_owner = owner
+            return True
+        return False
     except (TypeError, ValueError, json.JSONDecodeError):
         return False
 
+
+def miniapp_request_owner():
+    return str(getattr(g, 'miniapp_owner', TELEGRAM_ADMIN_ID))
+
+
+@app.get('/api/miniapp/session')
+def api_miniapp_session():
+    owner = miniapp_request_owner()
+    return jsonify(ok=True, owner=owner, role='admin' if owner == str(TELEGRAM_ADMIN_ID) else 'member')
+
 @app.before_request
 def security_middleware():
+    if request.path == '/':
+        return redirect('/miniapp')
+    if request.path.startswith(('/api/discord/', '/api/messenger/', '/integrations/facebook', '/oauth/callback/facebook')):
+        return jsonify(ok=False, error='Tích hợp cũ đã ngừng. Discord dùng OAuth2 và webhook chính thức.'), 410
     if not WebSecurityFortress.inspect_request():
         return jsonify({"ok": False, "error": "Forbidden Request Signature"}), 403
-    if request.path.startswith("/api/miniapp/") and not is_miniapp_request_authorized():
-        return jsonify({"ok": False, "error": "Phiên Mini App không hợp lệ hoặc đã hết hạn"}), 401
+    protected = request.path.startswith(("/api/", "/task/", "/account/", "/file/"))
+    public_assets = {"/api/logo", "/api/glaze_logo.png", "/api/zenvyre_logo.png", "/api/menu_banner.png"}
+    if protected and request.path not in public_assets and not is_miniapp_request_authorized():
+        return jsonify(ok=False, error="Phiên quản trị không hợp lệ hoặc đã hết hạn"), 401
+    if protected:
+        origin = request.headers.get("Origin")
+        if (request.method not in ("GET", "HEAD", "OPTIONS") and origin and origin.rstrip("/") != request.host_url.rstrip("/")) or request.headers.get("Sec-Fetch-Site") == "cross-site":
+            return jsonify(ok=False, error="Nguồn yêu cầu không hợp lệ"), 403
     if request.path.startswith("/api/") or request.path.startswith("/task/"):
         ip = get_client_ip()
         now = time.time()
         with SECURITY_LOCK:
+            if len(API_RATE_BUCKETS) >= 4096 and ip not in API_RATE_BUCKETS:
+                API_RATE_BUCKETS.pop(next(iter(API_RATE_BUCKETS)))
             dq = API_RATE_BUCKETS[ip]
             while dq and now - dq[0] > 10.0:
                 dq.popleft()
@@ -332,6 +384,11 @@ def sanitize_log_text(txt):
     s = re.sub(r"[A-Za-z0-9_\-]{23,28}\.[A-Za-z0-9_\-]{6,7}\.[A-Za-z0-9_\-]{27,45}", "[HIDDEN_TOKEN]", s)
     s = re.sub(r"(https?://[^\s]+)", "[STEALTH_ROUTE]", s)
     return s[:220]
+
+
+def public_error_message(prefix):
+    """Stable API/UI error text; never reflect exception contents to clients."""
+    return f"{prefix} Vui lòng thử lại; chi tiết đã được ghi nhận ở máy chủ."
 
 # KHỞI TẠO & ĐỒNG BỘ CƠ SỞ DỮ LIỆU SQLITE TỐC ĐỘ CAO
 _ACTIVE_DB_PATH = DB_PATH
@@ -477,50 +534,11 @@ def extract_imei_from_raw_input(imei_str, raw_cookies):
         return str(c_norm["z_uuid"]).strip()
     return imei_clean
 
-def normalize_messenger_cookies(raw_cookies):
-    """Chuẩn hóa mọi định dạng Cookie Facebook / Messenger (J2Team JSON, EditThisCookie Array, Dict, Header String c_user=...; xs=...)
-    về Dict phẳng {str(k): str(v)} an toàn tuyệt đối cho requests.Session!"""
-    if not raw_cookies:
-        return {}
-    if isinstance(raw_cookies, dict):
-        if "cookies" in raw_cookies and isinstance(raw_cookies["cookies"], (list, dict, str)):
-            return normalize_messenger_cookies(raw_cookies["cookies"])
-        out = {}
-        for k, v in raw_cookies.items():
-            if k and k not in ("url", "userAgent", "user_agent") and not isinstance(v, (list, dict)) and v is not None:
-                out[str(k).strip()] = str(v).strip()
-        return out
-    if isinstance(raw_cookies, list):
-        out = {}
-        for c in raw_cookies:
-            if isinstance(c, dict) and c.get("name") and c.get("value") is not None:
-                out[str(c["name"]).strip()] = str(c["value"]).strip()
-        return out
-    s = str(raw_cookies).strip()
-    if not s:
-        return {}
-    try:
-        parsed = json.loads(s)
-        if isinstance(parsed, (dict, list)):
-            return normalize_messenger_cookies(parsed)
-    except Exception:
-        pass
-    out = {}
-    for part in s.split(";"):
-        if "=" in part:
-            k, v = part.strip().split("=", 1)
-            if k.strip():
-                out[k.strip()] = v.strip()
-    return out
+def normalize_messenger_cookies(*args, **kwargs):
+    raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
-def extract_messenger_uid(raw_cookies, fallback_uid=""):
-    c_dict = normalize_messenger_cookies(raw_cookies)
-    uid = c_dict.get("c_user") or c_dict.get("i_user") or str(fallback_uid or "").strip()
-    if not uid and isinstance(raw_cookies, str):
-        m = re.search(r"(?:c_user|i_user)\s*=\s*(\d+)", raw_cookies)
-        if m:
-            uid = m.group(1)
-    return str(uid or "").strip()
+def extract_messenger_uid(*args, **kwargs):
+    raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 def init_db():
     conn = db()
@@ -789,8 +807,10 @@ def init_db():
     conn.close()
 
 init_db()
-register_oauth_routes(app, lambda: db(), lambda: TELEGRAM_ADMIN_ID)
+register_oauth_routes(app, lambda: db(), miniapp_request_owner)
 register_official_integrations(app, lambda: db(), lambda: api_miniapp_telemetry().get_json(), lambda: stop_tasks_for_thread(None))
+from control_plane import register as register_control_plane
+register_control_plane(app, lambda: db(), miniapp_request_owner)
 
 def get_setting(key, default_val=""):
     try:
@@ -813,6 +833,7 @@ def set_setting(key, val):
 # TRẠNG THÁI RUNTIME TOÀN CỤC & CHỐNG TỰ KÍCH HOẠT LỆNH (.MENU FIX)
 ACTIVE_TASKS = {}
 ACTIVE_LISTENERS = {}
+SYNC_LISTENERS_LOCK = threading.RLock()
 
 # BỘ NHỚ RAM TỐC ĐỘ ÁNH SÁNG (0MS LOCK-FREE IN-MEMORY ENGINE CHO 100+ LUỒNG TREO)
 ACCOUNTS_RAM_CACHE = {}
@@ -3437,950 +3458,16 @@ class Chrome131TLSAdapter(HTTPAdapter):
         return super().proxy_manager_for(proxy, **proxy_kwargs)
 
 class DiscordFirewallEngine:
-    """Tường Lửa Chống Quét & Chống Báo Reset Mật Khẩu Discord 9 Lớp (Discord Anti-Reset-Key Firewall):
-    - Lớp 1 (Anti-Homoglyph & Anti-Cf Sanitizer): Loại bỏ 100% ký tự Cyrillic pha trộn trong từ Latin (nguyên nhân số 1
-      khiến bộ lọc Phishing 'decancer' của Discord khóa Token & bắt Reset Password ngay khi gõ lệnh!) và xóa sạch ký tự ẩn Cf.
-    - Lớp 2 (Real Cloudflare Cookie Handshake): Tự động bắt tay thụ động với discord.com để nhận Cookie thật có chữ ký HMAC
-      (__dcfduid, __sdcfduid, __cf_bm) trước khi gửi bất kỳ tin nhắn nào.
-    - Lớp 3 (Header & Super-Properties Parity): Đồng bộ 100% từng byte giữa X-Super-Properties (HTTP) và OP 2 Identify (Gateway).
-    - Lớp 4 (Anti-Reset-Key Burst Shaper): Điều phối luồng gửi tin nhắn 0.0s không bao giờ vượt ngưỡng phạt của Discord."""
-
-    CYRILLIC_TO_LATIN_MAP = str.maketrans({
-        "а": "a", "е": "e", "о": "o", "і": "i", "с": "c", "р": "p", "х": "x", "у": "y",
-        "А": "A", "Е": "E", "О": "O", "І": "I", "С": "C", "Р": "P", "Х": "X", "У": "Y",
-    })
-
-    # 64 hậu tố tự nhiên thuần ASCII/Latin 100% (Tuyệt đối KHÔNG dùng Cyrillic hay Zero-Width Cf!)
-    PURE_LATIN_VARIATIONS = [
-        "", ".", "..", "...", " .", " ..", " !", " !!", " ~", " ~.",
-        " -", " --", " .~", " !~", " ^", " ^^", " *", " +", " =", " :",
-        " ;", " ,", " .!", " ~!", " ..!", " ...", " .-", " ~-", " +.", " *.",
-    ]
-
-    _STATS_LOCK = threading.RLock()
-    FIREWALL_STATS = {
-        "inspected_packets": 0,
-        "sanitized_homoglyphs": 0,
-        "cookies_harvested": 0,
-        "rate_shields_triggered": 0,
-        "immortalized_tokens": 0,
-        "recent_events": deque(maxlen=40),
-    }
-
-    @classmethod
-    def log_firewall_event(cls, action, detail=""):
-        with cls._STATS_LOCK:
-            cls.FIREWALL_STATS["recent_events"].appendleft({
-                "ts": time.strftime("%H:%M:%S"),
-                "action": action,
-                "detail": sanitize_log_text(detail)[:140],
-            })
-
-    @classmethod
-    def sanitize_outbound_text(cls, text):
-        """Quét và làm sạch 100% ký tự ẩn Cf và ký tự Cyrillic giả dạng Latin trước khi gửi lên Discord."""
-        if not text:
-            return ""
-        s = str(text)
-        # Xóa toàn bộ ký tự tàng hình Zero-Width / Format (Unicode Category Cf)
-        cleaned_chars = []
-        removed_cf = 0
-        for ch in s:
-            if unicodedata.category(ch) == "Cf":
-                removed_cf += 1
-            else:
-                cleaned_chars.append(ch)
-        s = "".join(cleaned_chars)
-
-        # Chuyển toàn bộ ký tự Cyrillic đồng hình về Latin chuẩn ASCII để không bao giờ bị Discord báo Phishing/Reset Key
-        s_lat = s.translate(cls.CYRILLIC_TO_LATIN_MAP)
-        if s_lat != s or removed_cf > 0:
-            with cls._STATS_LOCK:
-                cls.FIREWALL_STATS["sanitized_homoglyphs"] += 1
-        with cls._STATS_LOCK:
-            cls.FIREWALL_STATS["inspected_packets"] += 1
-        return s_lat
-
-    @classmethod
-    def apply_pure_latin_polymorphism(cls, text, channel_id=""):
-        """Giữ nguyên 100% nội dung gốc và thụt dòng của người dùng (Tuyệt đối KHÔNG gắn thêm ký tự lạ *., .., * ở cuối câu!).
-        Mỗi gói tin Discord đã có Snowflake Nonce 64-bit duy nhất giúp gửi 0s siêu tốc không bao giờ lỗi."""
-        return cls.sanitize_outbound_text(text)
-
-    @classmethod
-    def get_firewall_snapshot(cls):
-        with cls._STATS_LOCK:
-            return {
-                "inspected_packets": cls.FIREWALL_STATS["inspected_packets"],
-                "sanitized_homoglyphs": cls.FIREWALL_STATS["sanitized_homoglyphs"],
-                "cookies_harvested": cls.FIREWALL_STATS["cookies_harvested"],
-                "rate_shields_triggered": cls.FIREWALL_STATS["rate_shields_triggered"],
-                "immortalized_tokens": cls.FIREWALL_STATS["immortalized_tokens"],
-                "recent_events": list(cls.FIREWALL_STATS["recent_events"])[:15],
-            }
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 class DiscordStealthAntiBanEngine:
-    """Hạ tầng Anti-Scan, Anti-Ban & Tường Lửa Bảo Vệ Token Discord Bất Tử (Super VIP):
-    1. Chrome131TLSAdapter: Đồng nhất 100% vân tay TLS 1.3 / Cipher Suite giữa HTTP Session và Gateway WebSocket.
-    2. Passive Cloudflare Cookie Handshake: Tự động nhận Cookie thật có chữ ký (__dcfduid, __sdcfduid, __cf_bm) từ máy chủ Discord.
-    3. Byte-for-Byte Super-Properties Parity: Đồng bộ 14 trường Chrome 131 giữa OP 2 Identify, /auth/login và X-Super-Properties.
-    4. Pre-429 Sliding Window Shaper (Super VIP Anti-Reset-Key): Ngăn chặn chạm ngưỡng 5 tin / 5 giây của Discord (nguyên nhân số 1 gây bắt Reset Mật Khẩu)."""
-
-    DISCORD_EPOCH = 1420070400000
-    SUPER_VIP_MODE = True
-    STEALTH_API_BASES = [
-        "https://discord.com/api/v9",
-    ]
-
-    CLIENT_PROFILES = [
-        {
-            "os": "Windows",
-            "browser": "Chrome",
-            "os_version": "10",
-            "browser_version": "131.0.0.0",
-            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            "build_number": 351420,
-        },
-        {
-            "os": "Windows",
-            "browser": "Chrome",
-            "os_version": "11",
-            "browser_version": "131.0.0.0",
-            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            "build_number": 351890,
-        },
-        {
-            "os": "Mac OS X",
-            "browser": "Chrome",
-            "os_version": "10.15.7",
-            "browser_version": "131.0.0.0",
-            "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            "build_number": 351420,
-        },
-    ]
-
-    _CHANNEL_BUCKETS = {}
-    _CHANNEL_SEND_HISTORY = defaultdict(lambda: deque(maxlen=12))
-    _CHANNEL_NEXT_SLOT_TS = defaultdict(float)
-    _CHANNEL_LOCKS = defaultdict(threading.RLock)
-    _TOKEN_LAST_SEND_TS = defaultdict(float)
-    _TOKEN_SEND_LOCK = defaultdict(threading.RLock)
-    _LAST_TYPING_TS = defaultdict(float)
-    _FINGERPRINT_CACHE = {}
-    _SESSION_UUID_CACHE = {}
-    _COOKIE_VAULT_CACHE = {}
-    _GATEWAY_RESUME_CACHE = {}
-    _WARMED_SESSIONS = set()
-    _PRIORITY_SESSIONS = {}
-    _NONCE_SEQ = 0
-    _LOCK = threading.RLock()
-
-    @classmethod
-    def _token_vault_key(cls, token):
-        return hashlib.sha256(str(token or "discord").strip().encode("utf-8")).hexdigest()[:28]
-
-    @classmethod
-    def _is_forged_legacy_cookie(cls, dcf_val, sdcf_val):
-        if sdcf_val and "." not in str(sdcf_val):
-            return True
-        return False
-
-    @classmethod
-    def _ensure_vault_record(cls, token):
-        tkey = cls._token_vault_key(token)
-        with cls._LOCK:
-            if tkey in cls._SESSION_UUID_CACHE and tkey in cls._COOKIE_VAULT_CACHE:
-                return cls._SESSION_UUID_CACHE[tkey], cls._COOKIE_VAULT_CACHE[tkey]
-
-        seed = hashlib.sha256(str(token or "discord").encode("utf-8")).digest()
-        default_u1 = str(uuid.UUID(bytes=seed[:16], version=4))
-        default_u2 = str(uuid.UUID(bytes=seed[16:32], version=4))
-        prof_idx = zlib.crc32(str(token or "discord").encode("utf-8")) % len(cls.CLIENT_PROFILES)
-
-        real_dcf, real_sdcf, real_cfuv = "", "", ""
-        try:
-            conn = db()
-            row = conn.execute("SELECT * FROM discord_token_vault WHERE token_key=?", (tkey,)).fetchone()
-            if row:
-                u1 = row["launch_sig"] or default_u1
-                u2 = row["hb_sess"] or default_u2
-                saved_dcf = row["dcfduid"] or ""
-                saved_sdcf = row["sdcfduid"] or ""
-                saved_cfuv = row["cfuvid"] or ""
-                if not cls._is_forged_legacy_cookie(saved_dcf, saved_sdcf):
-                    real_dcf, real_sdcf, real_cfuv = saved_dcf, saved_sdcf, saved_cfuv
-                else:
-                    conn.execute(
-                        "UPDATE discord_token_vault SET dcfduid='', sdcfduid='', cfuvid='' WHERE token_key=?",
-                        (tkey,)
-                    )
-                    conn.commit()
-                if row["session_id"]:
-                    cls._GATEWAY_RESUME_CACHE[tkey] = {
-                        "session_id": row["session_id"],
-                        "resume_url": row["resume_url"] or "wss://gateway.discord.gg",
-                        "last_seq": int(row["last_seq"] or 0),
-                    }
-                try:
-                    b_json = row["boxes_json"] if "boxes_json" in row.keys() else "[]"
-                    if b_json:
-                        parsed_boxes = json.loads(b_json)
-                        if isinstance(parsed_boxes, list) and parsed_boxes:
-                            with cls._LOCK:
-                                cls._PASSIVE_READY_BOXES[tkey] = {"ts": time.time(), "boxes": parsed_boxes}
-                                cls._BOXES_CACHE[tkey] = {"ts": time.time(), "boxes": parsed_boxes}
-                except Exception:
-                    pass
-                try:
-                    u_id_saved = row["user_id"] if "user_id" in row.keys() else ""
-                    u_name_saved = row["user_name"] if "user_name" in row.keys() else ""
-                    if u_id_saved:
-                        with cls._LOCK:
-                            cls._ME_CACHE[tkey] = {
-                                "ts": time.time(),
-                                "data": {"id": u_id_saved, "username": u_name_saved or f"Discord_{u_id_saved[-4:]}", "global_name": u_name_saved or f"Discord_{u_id_saved[-4:]}"}
-                            }
-                except Exception:
-                    pass
-            else:
-                u1, u2 = default_u1, default_u2
-                conn.execute(
-                    """INSERT OR REPLACE INTO discord_token_vault
-                       (token_key, launch_sig, hb_sess, dcfduid, sdcfduid, cfuvid, profile_idx, updated_at)
-                       VALUES (?, ?, ?, '', '', '', ?, ?)""",
-                    (tkey, u1, u2, prof_idx, time.time()),
-                )
-                conn.commit()
-            conn.close()
-        except Exception:
-            u1, u2 = default_u1, default_u2
-
-        cookies = {"locale": "vi"}
-        if real_dcf and real_sdcf and "." in real_sdcf:
-            cookies["__dcfduid"] = real_dcf
-            cookies["__sdcfduid"] = real_sdcf
-        if real_cfuv and "." in real_cfuv:
-            cookies["_cfuvid"] = real_cfuv
-
-        with cls._LOCK:
-            cls._SESSION_UUID_CACHE[tkey] = (u1, u2)
-            cls._COOKIE_VAULT_CACHE[tkey] = cookies
-        return (u1, u2), cookies
-
-    @classmethod
-    def persist_real_cloudflare_cookies(cls, token, cookie_jar):
-        if not cookie_jar:
-            return
-        tkey = cls._token_vault_key(token)
-        c_dict = cookie_jar.get_dict() if hasattr(cookie_jar, "get_dict") else dict(cookie_jar)
-        dcf = c_dict.get("__dcfduid", "")
-        sdcf = c_dict.get("__sdcfduid", "")
-        cfuv = c_dict.get("_cfuvid", "") or c_dict.get("__cf_bm", "")
-        if dcf or sdcf or cfuv:
-            with cls._LOCK:
-                cur_c = cls._COOKIE_VAULT_CACHE.get(tkey, {"locale": "vi"})
-                if dcf:
-                    cur_c["__dcfduid"] = dcf
-                if sdcf:
-                    cur_c["__sdcfduid"] = sdcf
-                if cfuv:
-                    cur_c["_cfuvid"] = cfuv
-                cls._COOKIE_VAULT_CACHE[tkey] = cur_c
-            try:
-                conn = db()
-                conn.execute(
-                    "UPDATE discord_token_vault SET dcfduid=?, sdcfduid=?, cfuvid=?, updated_at=? WHERE token_key=?",
-                    (dcf, sdcf, cfuv, time.time(), tkey),
-                )
-                conn.commit()
-                conn.close()
-            except Exception:
-                pass
-            with DiscordFirewallEngine._STATS_LOCK:
-                DiscordFirewallEngine.FIREWALL_STATS["cookies_harvested"] += 1
-
-    @classmethod
-    def save_gateway_resume_state(cls, token, session_id="", resume_url="", last_seq=0):
-        tkey = cls._token_vault_key(token)
-        with cls._LOCK:
-            if session_id:
-                cls._GATEWAY_RESUME_CACHE[tkey] = {
-                    "session_id": session_id,
-                    "resume_url": resume_url or "wss://gateway.discord.gg",
-                    "last_seq": int(last_seq or 0),
-                }
-            else:
-                cls._GATEWAY_RESUME_CACHE.pop(tkey, None)
-        try:
-            conn = db()
-            conn.execute(
-                "UPDATE discord_token_vault SET session_id=?, resume_url=?, last_seq=?, updated_at=? WHERE token_key=?",
-                (session_id or "", resume_url or "", int(last_seq or 0), time.time(), tkey),
-            )
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
-
-    @classmethod
-    def get_gateway_resume_state(cls, token):
-        tkey = cls._token_vault_key(token)
-        cls._ensure_vault_record(token)
-        with cls._LOCK:
-            return cls._GATEWAY_RESUME_CACHE.get(tkey)
-
-    @classmethod
-    def get_deterministic_profile(cls, token):
-        h = zlib.crc32(str(token or "discord").encode("utf-8"))
-        return cls.CLIENT_PROFILES[h % len(cls.CLIENT_PROFILES)]
-
-    @classmethod
-    def get_deterministic_session_uuids(cls, token):
-        uuids, _ = cls._ensure_vault_record(token)
-        return uuids
-
-    @classmethod
-    def get_deterministic_cookies(cls, token):
-        _, cookies = cls._ensure_vault_record(token)
-        return dict(cookies)
-
-    @classmethod
-    def build_super_properties_dict(cls, token):
-        prof = cls.get_deterministic_profile(token)
-        return {
-            "os": prof["os"],
-            "browser": prof["browser"],
-            "device": "",
-            "system_locale": "vi-VN",
-            "browser_user_agent": prof["ua"],
-            "browser_version": prof["browser_version"],
-            "os_version": prof["os_version"],
-            "referrer": "",
-            "referring_domain": "",
-            "referrer_current": "",
-            "referring_domain_current": "",
-            "release_channel": "stable",
-            "client_build_number": prof["build_number"],
-            "client_event_source": None,
-        }
-
-    _SUPER_PROPS_B64_CACHE = {}
-
-    @classmethod
-    def build_super_properties_b64(cls, token):
-        tk = str(token or "discord")
-        cached = cls._SUPER_PROPS_B64_CACHE.get(tk)
-        if cached:
-            return cached
-        props = cls.build_super_properties_dict(tk)
-        raw_json = json.dumps(props, separators=(",", ":"))
-        b64 = base64.b64encode(raw_json.encode("utf-8")).decode("utf-8")
-        if len(cls._SUPER_PROPS_B64_CACHE) < 2000:
-            cls._SUPER_PROPS_B64_CACHE[tk] = b64
-        return b64
-
-    @classmethod
-    def build_context_properties_b64(cls, guild_id=None, channel_id=None):
-        ctx = {"location": "Guild Channel" if guild_id else "DM Channel"}
-        return base64.b64encode(json.dumps(ctx, separators=(",", ":")).encode("utf-8")).decode("utf-8")
-
-    CHANNEL_GUILD_MAP = {}
-
-    @classmethod
-    def register_channel_guild(cls, channel_id, guild_id=None):
-        if channel_id and guild_id:
-            cls.CHANNEL_GUILD_MAP[str(channel_id)] = str(guild_id)
-
-    @classmethod
-    def build_stealth_headers(cls, token, is_bot=False, channel_id=None, guild_id=None, include_auth=True):
-        auth_val = f"Bot {token}" if is_bot else str(token or "").strip()
-        if is_bot:
-            h_bot = {
-                "Content-Type": "application/json",
-                "User-Agent": "DiscordClient (https://discord.com, 10.0)",
-            }
-            if include_auth and auth_val:
-                h_bot["Authorization"] = auth_val
-            return h_bot
-        prof = cls.get_deterministic_profile(token)
-        eff_guild_id = guild_id or (cls.CHANNEL_GUILD_MAP.get(str(channel_id)) if channel_id else None)
-        if eff_guild_id and channel_id:
-            ref = f"https://discord.com/channels/{eff_guild_id}/{channel_id}"
-        elif channel_id:
-            ref = f"https://discord.com/channels/@me/{channel_id}"
-        else:
-            ref = "https://discord.com/channels/@me"
-
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "*/*",
-            "Accept-Encoding": "gzip, deflate",
-            "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-            "User-Agent": prof["ua"],
-            "X-Super-Properties": cls.build_super_properties_b64(token),
-            "X-Debug-Options": "bugReporterEnabled",
-            "X-Discord-Locale": "vi",
-            "X-Discord-Timezone": "Asia/Ho_Chi_Minh",
-            "Origin": "https://discord.com",
-            "Referer": ref,
-            "Priority": "u=1, i",
-            "Sec-Ch-Ua": prof["sec_ch_ua"],
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": f'"{prof["os"]}"',
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-        }
-        if include_auth and auth_val and ("." in auth_val or auth_val.startswith("mfa.")) and ":" not in auth_val:
-            headers["Authorization"] = auth_val
-        return headers
-
-    _SHARED_SESSIONS = {}
-    _ME_CACHE = {}
-    _BOXES_CACHE = {}
-    _PASSIVE_READY_BOXES = {}
-    _LAST_IDENTIFY_TS = defaultdict(float)
-    ACTIVE_DISCORD_POLL_CHANNELS = defaultdict(set)
-
-    @classmethod
-    def get_shared_session(cls, token, is_bot=False):
-        tkey = cls._token_vault_key(token)
-        sess = cls._SHARED_SESSIONS.get(tkey)
-        if sess is not None:
-            return sess
-        with cls._LOCK:
-            sess = cls._SHARED_SESSIONS.get(tkey)
-            if sess is None:
-                sess = requests.Session()
-                tls_adapter = Chrome131TLSAdapter(pool_connections=32, pool_maxsize=64, max_retries=0)
-                sess.mount("https://", tls_adapter)
-                sess.mount("http://", HTTPAdapter(pool_connections=256, pool_maxsize=512, max_retries=0))
-                if not is_bot:
-                    sess.cookies.update(cls.get_deterministic_cookies(token))
-                cls._SHARED_SESSIONS[tkey] = sess
-            return sess
-
-    @classmethod
-    def ensure_session_warmed_up(cls, token, is_bot=False):
-        if is_bot or not token:
-            return
-        tkey = cls._token_vault_key(token)
-        with cls._LOCK:
-            if tkey in cls._WARMED_SESSIONS:
-                return
-            cls._WARMED_SESSIONS.add(tkey)
-        cls.get_shared_session(token, is_bot=False)
-
-    @classmethod
-    def get_cached_me(cls, token):
-        tkey = cls._token_vault_key(token)
-        cls._ensure_vault_record(token)
-        with cls._LOCK:
-            item = cls._ME_CACHE.get(tkey)
-            if item and (time.time() - item["ts"] < 7200.0):
-                return item["data"]
-        return None
-
-    @classmethod
-    def set_cached_me(cls, token, data):
-        if not isinstance(data, dict):
-            return
-        tkey = cls._token_vault_key(token)
-        with cls._LOCK:
-            cls._ME_CACHE[tkey] = {"ts": time.time(), "data": dict(data)}
-        uid_s = str(data.get("id") or "")
-        uname_s = str(data.get("global_name") or data.get("username") or "")
-        if uid_s:
-            try:
-                conn = db()
-                conn.execute(
-                    "UPDATE discord_token_vault SET user_id=?, user_name=?, updated_at=? WHERE token_key=?",
-                    (uid_s, uname_s, time.time(), tkey),
-                )
-                conn.commit()
-                conn.close()
-            except Exception:
-                pass
-
-    @classmethod
-    def harvest_ready_payload(cls, token, d_ev):
-        """Thu hoạch thụ động toàn bộ danh sách Kênh & Server từ gói READY của Gateway và lưu vào SQLite Vault
-        giúp không cần quét REST API hàng loạt gây báo động Đặt Lại Mật Khẩu Discord!"""
-        if not isinstance(d_ev, dict):
-            return
-        tkey = cls._token_vault_key(token)
-        boxes = []
-        seen_ids = set()
-
-        for c in (d_ev.get("private_channels") or []):
-            if not isinstance(c, dict):
-                continue
-            cid = str(c.get("id") or "")
-            if not cid or cid in seen_ids:
-                continue
-            seen_ids.add(cid)
-            ctype = c.get("type")
-            recipients = c.get("recipients") or []
-            for rec in recipients:
-                if isinstance(rec, dict):
-                    ruid = str(rec.get("id") or "")
-                    rname = rec.get("global_name") or rec.get("username") or ""
-                    if ruid and rname:
-                        GLOBAL_USER_NAME_CACHE[ruid] = rname
-            if ctype == 3:
-                g_name = c.get("name") or ", ".join(
-                    (x.get("global_name") or x.get("username") or "User") for x in recipients[:4] if isinstance(x, dict)
-                ) or f"Box Nhóm {cid[-5:]}"
-                boxes.append({
-                    "id": cid,
-                    "name": f"[Box Nhóm] {g_name}",
-                    "type": "discord_channel",
-                    "sub_type": "group_dm",
-                    "members": len(recipients) + 1
-                })
-            elif ctype == 1:
-                rec0 = recipients[0] if (recipients and isinstance(recipients[0], dict)) else {}
-                dm_name = rec0.get("global_name") or rec0.get("username") or f"User {cid[-5:]}"
-                boxes.append({
-                    "id": cid,
-                    "name": f"[Chat Riêng] {dm_name}",
-                    "type": "discord_channel",
-                    "sub_type": "dm",
-                    "members": 2
-                })
-
-        for g in (d_ev.get("guilds") or []):
-            if not isinstance(g, dict):
-                continue
-            gid = str(g.get("id") or "")
-            gname = g.get("name") or (g.get("properties") or {}).get("name") or f"Server {gid[-4:]}"
-            for ch in (g.get("channels") or []):
-                if not isinstance(ch, dict):
-                    continue
-                if ch.get("type") in (0, 5):
-                    cid = str(ch.get("id") or "")
-                    if cid and cid not in seen_ids:
-                        seen_ids.add(cid)
-                        if gid:
-                            cls.CHANNEL_GUILD_MAP[cid] = gid
-                        boxes.append({
-                            "id": cid,
-                            "name": f"[{gname}] # {ch.get('name', 'channel')}",
-                            "type": "discord_channel",
-                            "sub_type": "guild_channel",
-                            "guild_id": gid
-                        })
-
-        if boxes:
-            with cls._LOCK:
-                cls._PASSIVE_READY_BOXES[tkey] = {"ts": time.time(), "boxes": boxes}
-                cls._BOXES_CACHE[tkey] = {"ts": time.time(), "boxes": boxes}
-            try:
-                conn = db()
-                conn.execute(
-                    "UPDATE discord_token_vault SET boxes_json=?, updated_at=? WHERE token_key=?",
-                    (json.dumps(boxes, ensure_ascii=False), time.time(), tkey),
-                )
-                conn.commit()
-                conn.close()
-            except Exception:
-                pass
-
-    @classmethod
-    def can_send_gateway_identify(cls, token):
-        tkey = cls._token_vault_key(token)
-        now = time.time()
-        with cls._LOCK:
-            last_ts = cls._LAST_IDENTIFY_TS[tkey]
-            if now - last_ts < 2.0:
-                return False, max(0.2, 2.0 - (now - last_ts))
-            cls._LAST_IDENTIFY_TS[tkey] = now
-            return True, 0.0
-
-    DISCORD_API_GATEWAYS = (
-        "https://discord.com/api/v9",
-        "https://discord.com/api/v10",
-        "https://canary.discord.com/api/v9",
-        "https://ptb.discord.com/api/v9",
-        "https://discordapp.com/api/v9",
-    )
-
-    @classmethod
-    def pick_stealth_endpoint(cls, token, path_suffix, rotate_step=0):
-        idx = int(rotate_step or 0) % len(cls.DISCORD_API_GATEWAYS)
-        base_gw = cls.DISCORD_API_GATEWAYS[idx]
-        return f"{base_gw}{path_suffix}"
-
-    @classmethod
-    def generate_snowflake_nonce(cls):
-        now_ms = int(time.time() * 1000)
-        ts_part = max(0, now_ms - cls.DISCORD_EPOCH)
-        with cls._LOCK:
-            cls._NONCE_SEQ = (cls._NONCE_SEQ + 1) & 0xFFF
-            seq_part = cls._NONCE_SEQ
-        worker_bits = (random.randint(1, 31) << 17) | (random.randint(1, 31) << 12) | seq_part
-        return str((ts_part << 22) | worker_bits)
-
-    @classmethod
-    def create_chrome_tls_context(cls):
-        ctx = ssl.create_default_context()
-        try:
-            ctx.set_ciphers(
-                "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:"
-                "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
-                "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305"
-            )
-            ctx.set_alpn_protocols(["http/1.1"])
-        except Exception:
-            pass
-        return ctx
-
-    @classmethod
-    def append_stealth_tail(cls, text, channel_id=""):
-        return DiscordFirewallEngine.apply_pure_latin_polymorphism(text, channel_id=channel_id)
-
-    @classmethod
-    def record_bucket_headers(cls, channel_id, resp_headers, token=None):
-        if not channel_id:
-            return
-        now = time.time()
-        cid_s = str(channel_id)
-        t_part = cls._token_vault_key(token) if token else "shared"
-        slot_key = f"{t_part}:{cid_s}"
-        if not resp_headers:
-            return
-        try:
-            rem = resp_headers.get("X-RateLimit-Remaining")
-            reset_after = resp_headers.get("X-RateLimit-Reset-After")
-            if rem is not None and reset_after is not None:
-                with cls._LOCK:
-                    cls._CHANNEL_BUCKETS[slot_key] = {
-                        "remaining": int(rem),
-                        "reset_at": now + min(2.5, float(reset_after)),
-                    }
-        except Exception:
-            pass
-
-    @classmethod
-    def set_channel_cooldown(cls, channel_id, wait_sec, token=None):
-        if not channel_id:
-            return
-        cid_s = str(channel_id)
-        t_part = cls._token_vault_key(token) if token else "shared"
-        slot_key = f"{t_part}:{cid_s}"
-        with DiscordFirewallEngine._STATS_LOCK:
-            DiscordFirewallEngine.FIREWALL_STATS["rate_shields_triggered"] += 1
-        with cls._LOCK:
-            cls._CHANNEL_BUCKETS[slot_key] = {
-                "remaining": 0,
-                "reset_at": time.time() + min(0.45, max(0.05, float(wait_sec) * 0.35)),
-            }
-
-    @classmethod
-    def get_priority_session(cls, token, is_bot=False):
-        """Kênh HTTP ưu tiên dành riêng cho phản hồi lệnh (.menu, .ping, .stop...) không bao giờ bị nghẽn bởi luồng treo!"""
-        tkey = cls._token_vault_key(token)
-        with cls._LOCK:
-            sess = cls._PRIORITY_SESSIONS.get(tkey)
-            if sess is None:
-                sess = requests.Session()
-                tls_adapter = Chrome131TLSAdapter(pool_connections=32, pool_maxsize=64, max_retries=1)
-                sess.mount("https://", tls_adapter)
-                sess.mount("http://", HTTPAdapter(pool_connections=32, pool_maxsize=64, max_retries=1))
-                if not is_bot:
-                    sess.cookies.update(cls.get_deterministic_cookies(token))
-                cls._PRIORITY_SESSIONS[tkey] = sess
-            return sess
-
-    @classmethod
-    def abort_all_campaign_wait_buckets(cls, channel_id=None):
-        with cls._LOCK:
-            if channel_id is None:
-                cls._CHANNEL_BUCKETS.clear()
-                cls._CHANNEL_SEND_HISTORY.clear()
-                cls._CHANNEL_NEXT_SLOT_TS.clear()
-            else:
-                cid_s = str(channel_id)
-                for k in list(cls._CHANNEL_BUCKETS.keys()):
-                    if k == cid_s or k.endswith(f":{cid_s}"):
-                        cls._CHANNEL_BUCKETS.pop(k, None)
-                cls._CHANNEL_SEND_HISTORY.pop(cid_s, None)
-                cls._CHANNEL_NEXT_SLOT_TS.pop(cid_s, None)
-
-    @classmethod
-    def get_channel_bucket_wait(cls, channel_id, token=None):
-        if not token:
-            return 0.0
-        now = time.time()
-        cid_s = str(channel_id)
-        t_part = cls._token_vault_key(token)
-        slot_key = f"{t_part}:{cid_s}"
-        b = cls._CHANNEL_BUCKETS.get(slot_key)
-        if b and b["remaining"] <= 0 and now < b["reset_at"]:
-            return max(0.01, min(0.6, b["reset_at"] - now))
-        return 0.0
-
-    @classmethod
-    def acquire_multi_group_slot(cls, token, channel_id, stop_ev=None, start_global_epoch=None, start_box_epoch=None, zero_delay_mode=True):
-        cid_s = str(channel_id)
-        if is_task_stopped_fast(stop_ev, start_global_epoch, start_box_epoch, cid_s):
-            return False
-        if zero_delay_mode:
-            # Ở chế độ 0s Siêu Tốc, tuyệt đối không bao giờ khóa đứng luồng!
-            return True
-        t_part = cls._token_vault_key(token) if token else "shared"
-        slot_key = f"{t_part}:{cid_s}"
-        now = time.time()
-        b = cls._CHANNEL_BUCKETS.get(slot_key)
-        if b and b["remaining"] <= 0 and now < b["reset_at"]:
-            wait_s = max(0.005, min(0.08, b["reset_at"] - now))
-            if interruptible_wait(stop_ev, wait_s, start_global_epoch, start_box_epoch, cid_s):
-                return False
-        return True
-
-    @classmethod
-    def should_trigger_typing(cls, channel_id):
-        return False
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 class MessengerStealthAntiBanEngine:
-    """Hạ tầng Anti-Ban & Lightspeed MQTT Siêu Cấp cho Facebook Messenger (Tích hợp từ ckien.zip):
-    1. Lightspeed WebSocket MQTT (/ls_req & /t_ms trên wss://edge-chat.facebook.com/chat):
-       Gửi tin nhắn, Tag tên xanh dương, Typing, Đổi nền Theme, Tạo Poll, Share Link, Share Contact hoàn toàn qua MQTT WebSocket!
-       Tuyệt đối không spam HTTP POST /messaging/send/ (nguyên nhân số 1 gây bay acc / Checkpoint 282-956).
-    2. Clean UTF-8 Text (Zero Cf Obfuscation): Không chèn ký tự tàng hình \u200b vào giữa chữ trên Messenger (tránh bộ lọc FBLearner/Sigma).
-    3. Persistent Cookie & Sequence ID Vault: Lưu trữ fb_dtsg, jazoest, clientRevision và last_seq_id trong SQLite."""
-
-    BROWSER_PROFILES = [
-        {
-            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            "platform": '"Windows"',
-        },
-        {
-            "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            "platform": '"macOS"',
-        },
-    ]
-
-    NATURAL_MESS_TAILS = ["", "", "", " .", " ~", " !", " .."]
-
-    _REQ_SEQ = 1
-    _LOCK = threading.RLock()
-    _VAULT_MEM_CACHE = {}
-    ACTIVE_MESSENGER_POLL_THREADS = defaultdict(set)
-
-    @classmethod
-    def compute_jazoest(cls, fb_dtsg):
-        if not fb_dtsg:
-            return "22000"
-        return "2" + str(sum(ord(c) for c in str(fb_dtsg)))
-
-    @classmethod
-    def generate_offline_threading_id(cls) -> str:
-        ret = int(time.time() * 1000)
-        value = random.randint(0, 4294967295)
-        binary_str = format(value, "022b")[-22:]
-        msgs = bin(ret)[2:] + binary_str
-        return str(int(msgs, 2))
-
-    @classmethod
-    def generate_session_id(cls) -> int:
-        return random.randint(1, 2 ** 53)
-
-    @classmethod
-    def generate_client_id(cls) -> str:
-        alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
-        def _gen(n):
-            return "".join(random.choices(alphabet, k=n))
-        return f"{_gen(8)}-{_gen(4)}-{_gen(4)}-{_gen(4)}-{_gen(12)}"
-
-    @classmethod
-    def json_minimal(cls, data) -> str:
-        return json.dumps(data, separators=(",", ":"), ensure_ascii=False)
-
-    @classmethod
-    def next_req_b36(cls):
-        with cls._LOCK:
-            cls._REQ_SEQ = (cls._REQ_SEQ % 9000) + 1
-            n = cls._REQ_SEQ
-        chars = "0123456789abcdefghijklmnopqrstuvwxyz"
-        out = ""
-        while n > 0:
-            n, rem = divmod(n, 36)
-            out = chars[rem] + out
-        return out or "1"
-
-    @classmethod
-    def get_session_headers(cls, uid="", referer="https://www.facebook.com/"):
-        idx = zlib.crc32(str(uid or "mess").encode("utf-8")) % len(cls.BROWSER_PROFILES)
-        prof = cls.BROWSER_PROFILES[idx]
-        parsed_ref = urlparse(referer)
-        origin = f"{parsed_ref.scheme}://{parsed_ref.netloc}" if parsed_ref.netloc else "https://www.facebook.com"
-        return {
-            "User-Agent": prof["ua"],
-            "Accept": "*/*",
-            "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Origin": origin,
-            "Referer": referer,
-            "Sec-Ch-Ua": prof["sec_ch_ua"],
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": prof["platform"],
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            "Content-Type": "application/x-www-form-urlencoded",
-        }
-
-    @classmethod
-    def save_vault_state(cls, uid, fb_dtsg="", jazoest="", lsd="", cookies_dict=None, user_name="", last_seq_id="", client_rev="1015919737"):
-        if not uid:
-            return
-        uid_s = str(uid).strip()
-        now = time.time()
-        with cls._LOCK:
-            cur = cls._VAULT_MEM_CACHE.get(uid_s, {})
-            if fb_dtsg:
-                cur["fb_dtsg"] = fb_dtsg
-                cur["jazoest"] = jazoest or cls.compute_jazoest(fb_dtsg)
-            if lsd:
-                cur["lsd"] = lsd
-            if cookies_dict:
-                cur["cookies"] = dict(cookies_dict)
-            if user_name:
-                cur["user_name"] = user_name
-            if last_seq_id:
-                cur["last_seq_id"] = str(last_seq_id)
-            if client_rev:
-                cur["client_rev"] = str(client_rev)
-            cur["ts"] = now
-            cls._VAULT_MEM_CACHE[uid_s] = cur
-        try:
-            conn = db()
-            c_json = json.dumps(cookies_dict or cur.get("cookies") or {}, ensure_ascii=False)
-            conn.execute(
-                """INSERT OR REPLACE INTO messenger_cookie_vault
-                   (uid, fb_dtsg, jazoest, lsd, cookies_json, user_name, last_seq_id, client_rev, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    uid_s,
-                    cur.get("fb_dtsg", ""),
-                    cur.get("jazoest", ""),
-                    cur.get("lsd", ""),
-                    c_json,
-                    cur.get("user_name", ""),
-                    cur.get("last_seq_id", ""),
-                    cur.get("client_rev", "1015919737"),
-                    now,
-                ),
-            )
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
-
-    @classmethod
-    def get_vault_state(cls, uid):
-        if not uid:
-            return None
-        uid_s = str(uid).strip()
-        now = time.time()
-        with cls._LOCK:
-            mem = cls._VAULT_MEM_CACHE.get(uid_s)
-            if mem and (now - mem.get("ts", 0) < 3600.0) and mem.get("fb_dtsg") and not str(mem.get("fb_dtsg")).startswith("NAc_fallback"):
-                return dict(mem)
-        try:
-            conn = db()
-            row = conn.execute("SELECT * FROM messenger_cookie_vault WHERE uid=?", (uid_s,)).fetchone()
-            conn.close()
-            if row and row["fb_dtsg"] and not str(row["fb_dtsg"]).startswith("NAc_fallback") and (now - float(row["updated_at"] or 0) < 3600.0):
-                r_keys = row.keys()
-                data = {
-                    "fb_dtsg": row["fb_dtsg"],
-                    "jazoest": row["jazoest"] or cls.compute_jazoest(row["fb_dtsg"]),
-                    "lsd": row["lsd"] or "",
-                    "user_name": row["user_name"] or "",
-                    "last_seq_id": (row["last_seq_id"] if "last_seq_id" in r_keys else "") or "",
-                    "client_rev": (row["client_rev"] if "client_rev" in r_keys else "1015919737") or "1015919737",
-                    "cookies": normalize_messenger_cookies(row["cookies_json"]),
-                    "ts": float(row["updated_at"] or now),
-                }
-                with cls._LOCK:
-                    cls._VAULT_MEM_CACHE[uid_s] = data
-                return dict(data)
-        except Exception:
-            pass
-        return None
-
-    _UID_SEND_HISTORY = defaultdict(lambda: deque(maxlen=24))
-    _THREAD_SEND_HISTORY = defaultdict(lambda: deque(maxlen=12))
-    _UID_LAST_SEND_TS = defaultdict(float)
-
-    @classmethod
-    def get_deterministic_profile(cls, uid=""):
-        idx = zlib.crc32(str(uid or "mess").encode("utf-8")) % len(cls.BROWSER_PROFILES)
-        return cls.BROWSER_PROFILES[idx]
-
-    @classmethod
-    def acquire_messenger_stealth_slot(cls, uid, thread_id, antiband=True, stop_ev=None, start_global_epoch=None, start_box_epoch=None, fast_zero_delay=True):
-        if fast_zero_delay:
-            return not is_task_stopped_fast(stop_ev, start_global_epoch, start_box_epoch, str(thread_id or "default"))
-        """Lá chắn Chống Bay Acc Messenger (Sigma Anti-Checkpoint Pacer):
-        - Ngăn chặn tuyệt đối hiện tượng gửi dồn dập trong 2 giây khiến Meta khóa Checkpoint 282/956!
-        - Giữ nhịp sinh học tự nhiên (1.85s - 2.45s/tin + nghỉ nhịp thở mỗi 8 tin) và giới hạn cửa sổ trượt an toàn."""
-        uid_s = str(uid or "default")
-        tid_s = str(thread_id or "default")
-        for _ in range(40):
-            if is_task_stopped_fast(stop_ev, start_global_epoch, start_box_epoch, tid_s):
-                return False
-            now = time.time()
-            wait_s = 0.0
-            with cls._LOCK:
-                u_hist = cls._UID_SEND_HISTORY[uid_s]
-                while u_hist and now - u_hist[0] > 60.0:
-                    u_hist.popleft()
-                t_hist = cls._THREAD_SEND_HISTORY[f"{uid_s}:{tid_s}"]
-                while t_hist and now - t_hist[0] > 20.0:
-                    t_hist.popleft()
-
-                min_gap = (1.75 + random.uniform(0.15, 0.45)) if antiband else 0.85
-                since_last = now - cls._UID_LAST_SEND_TS.get(uid_s, 0.0)
-                if since_last < min_gap:
-                    wait_s = max(wait_s, min_gap - since_last)
-
-                if antiband and len(t_hist) >= 5:
-                    w_t = (t_hist[0] + 12.5) - now
-                    if w_t > 0:
-                        wait_s = max(wait_s, w_t + random.uniform(0.2, 0.5))
-
-                if antiband and len(u_hist) >= 16:
-                    w_u = (u_hist[0] + 60.5) - now
-                    if w_u > 0:
-                        wait_s = max(wait_s, min(4.5, w_u))
-
-                if wait_s <= 0.0:
-                    cls._UID_LAST_SEND_TS[uid_s] = now
-                    u_hist.append(now)
-                    t_hist.append(now)
-                    return True
-
-            if interruptible_wait(stop_ev, min(wait_s, 0.45), start_global_epoch, start_box_epoch, tid_s):
-                return False
-        return not is_task_stopped_fast(stop_ev, start_global_epoch, start_box_epoch, tid_s)
-
-    @classmethod
-    def append_stealth_tail(cls, text, thread_id=""):
-        """Trên giao thức Lightspeed MQTT (/ls_req), mỗi gói tin đã có otid & epoch_id 64-bit duy nhất.
-        Tuyệt đối KHÔNG chèn ký tự ẩn \u200b vào chữ để tránh bộ lọc Sigma của Meta!"""
-        if not text:
-            return text
-        s = str(text)
-        for zw in ("​", "‌", "‍", "⁠", "﻿"):
-            s = s.replace(zw, "")
-        return s.strip()
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 def append_antiband_tail(final_msg, platform="zalo", thread_id=""):
     if not final_msg:
@@ -4534,8 +3621,6 @@ class AntiDieAllEngine:
                 st["adaptive_delay_bonus"] = 0.0
                 st["risk_score"] = 0.0
                 st["healed_total"] += 1
-        with DiscordStealthAntiBanEngine._LOCK:
-            DiscordStealthAntiBanEngine._CHANNEL_BUCKETS.clear()
 
     def get_live_ping_telemetry(self):
         with self.lock:
@@ -5192,8 +4277,8 @@ class ZaloStickerMakerEngine:
             try:
                 _, b64_p = src_s.split(",", 1)
                 return base64.b64decode(b64_p), "inline_media.png"
-            except Exception as e:
-                return None, f"Data URI không hợp lệ: {e}"
+            except Exception:
+                return None, "Data URI không hợp lệ"
         if src_s.startswith(("http://", "https://")):
             # Preserve signed CDN query parameters. Never strip or guess another URL.
             src_s = src_s.replace("\\/", "/")
@@ -5502,10 +4587,10 @@ class ZaloStickerMakerEngine:
                 "height": 512,
                 "message": "✅ Đã tạo Nhãn Dán Sticker 512×512 Chuẩn Zalo thành công!",
             }
-        except Exception as e:
+        except Exception:
             return {
                 "ok": False,
-                "error": f"❌ Không thể tạo Sticker từ ảnh: {e}",
+                "error": public_error_message("❌ Không thể tạo Sticker từ ảnh."),
             }
 
     @classmethod
@@ -5755,8 +4840,8 @@ class ZaloStickerMakerEngine:
                 "height": 512,
                 "message": f"✅ Đã tạo Nhãn Dán Động 512×512 từ Video ngắn ({round(min(3.0, eff_dur or 2.0), 2)}s ≤ 3.0s) thành công!",
             }
-        except Exception as e:
-            return {"ok": False, "error": f"❌ Lỗi xử lý Video Sticker: {e}"}
+        except Exception:
+            return {"ok": False, "error": public_error_message("❌ Lỗi xử lý Video Sticker.")}
         finally:
             if tmp_in and os.path.exists(tmp_in):
                 try:
@@ -9312,354 +8397,18 @@ DISCORD_TOKEN_REGEX = re.compile(
     r"((?:mfa\.[A-Za-z0-9_\-]{50,160})|(?:[A-Za-z0-9_\-]{18,44}\.[A-Za-z0-9_\-]{5,14}\.[A-Za-z0-9_\-]{20,140}))"
 )
 
-def extract_discord_tokens_from_reg_or_raw(raw_input):
-    if not raw_input:
-        return []
-    txt = str(raw_input).strip()
-    for pfx in ("Authorization:", "authorization:", "Bearer ", "bearer ", "Bot ", "bot "):
-        if txt.startswith(pfx):
-            txt = txt[len(pfx):].strip()
-    found = []
-    for m in DISCORD_TOKEN_REGEX.finditer(txt):
-        tk = m.group(1).strip()
-        if tk and tk not in found:
-            found.append(tk)
-    for sep in ("\n", "|", ":", ";", ","):
-        if not found and sep in txt:
-            for part in txt.split(sep):
-                p = part.strip().strip('"').strip("'")
-                if len(p) >= 42 and ("." in p or p.startswith("mfa.")) and " " not in p and "@" not in p:
-                    if p not in found:
-                        found.append(p)
-    if not found and len(txt) >= 42 and ("." in txt or txt.startswith("mfa.")) and " " not in txt and "@" not in txt:
-        found.append(txt.strip('"').strip("'"))
-    return found
+def extract_discord_tokens_from_reg_or_raw(*args, **kwargs):
+    raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
-def decode_discord_uid_offline(token):
-    """Giải mã User ID (Snowflake UID) trực tiếp từ phần đầu của Token Discord (Offline 100% trong 0ms):
-    - Hỗ trợ mọi thế hệ Token Discord (17 - 20 chữ số Snowflake), loại bỏ hoàn toàn việc phải gọi GET /users/@me!"""
-    try:
-        raw_t = str(token or "").strip()
-        for pfx in ("bot ", "bearer "):
-            if raw_t.lower().startswith(pfx):
-                raw_t = raw_t[len(pfx):].strip()
-        if "." not in raw_t:
-            return ""
-        first_seg = raw_t.split(".")[0].strip()
-        pad = (4 - len(first_seg) % 4) % 4
-        dec = base64.urlsafe_b64decode(first_seg + ("=" * pad)).decode("utf-8", errors="ignore").strip()
-        if dec.isdigit() and len(dec) >= 15:
-            return dec
-    except Exception:
-        pass
-    return ""
+def decode_discord_uid_offline(*args, **kwargs):
+    raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
-def warmup_discord_stealth_token(token, verify_network=False):
-    """Khởi tạo két sắt bảo vệ Token Discord Bất Tử (Zero-REST Offline Shield):
-    - Giải mã UID Offline 0ms và kiểm tra SQLite Vault trước tiên để tránh gọi GET /users/@me gây đụng độ với Gateway!"""
-    extracted = extract_discord_tokens_from_reg_or_raw(token)
-    clean_tok = extracted[0] if extracted else str(token or "").strip()
-    if not clean_tok or len(clean_tok) < 40 or ("." not in clean_tok and not clean_tok.startswith("mfa.")):
-        return {"ok": False, "error": "Định dạng Token Discord không hợp lệ! Hãy kiểm tra lại Token."}
-
-    DiscordStealthAntiBanEngine._ensure_vault_record(clean_tok)
-    DiscordStealthAntiBanEngine.ensure_session_warmed_up(clean_tok, is_bot=False)
-    offline_uid = decode_discord_uid_offline(clean_tok)
-    cached = DiscordStealthAntiBanEngine.get_cached_me(clean_tok)
-    if not offline_uid and cached and cached.get("id"):
-        offline_uid = str(cached["id"])
-
-    if offline_uid and not verify_network:
-        uname = (cached or {}).get("global_name") or (cached or {}).get("username") or f"Discord_{offline_uid[-4:]}"
-        DiscordStealthAntiBanEngine.set_cached_me(clean_tok, {
-            "id": offline_uid,
-            "username": uname,
-            "global_name": uname,
-        })
-        OWNER_UIDS_CACHE.add(offline_uid)
-        sess = DiscordStealthAntiBanEngine.get_shared_session(clean_tok, is_bot=False)
-        DiscordStealthAntiBanEngine.persist_real_cloudflare_cookies(clean_tok, sess.cookies)
-        with DiscordFirewallEngine._STATS_LOCK:
-            DiscordFirewallEngine.FIREWALL_STATS["immortalized_tokens"] += 1
-        DiscordFirewallEngine.log_firewall_event(
-            "SUPERVIP_VAULT_LOCK",
-            f"Đã đúc Siêu VIP Offline Token {mask_sensitive_id(clean_tok, 4)} (UID: {mask_sensitive_id(offline_uid, 4)})"
-        )
-        return {
-            "ok": True,
-            "token": clean_tok,
-            "username": uname,
-            "uid": offline_uid,
-            "is_bot": False,
-            "fingerprint_locked": True,
-            "zero_rest_shield": True,
-            "cookies_count": len(sess.cookies.get_dict()),
-        }
-
-    dc = DiscordClient(clean_tok, is_bot=False)
-    if dc.check(force_network=True):
-        DiscordStealthAntiBanEngine.persist_real_cloudflare_cookies(dc.token, dc.s.cookies)
-        with DiscordFirewallEngine._STATS_LOCK:
-            DiscordFirewallEngine.FIREWALL_STATS["immortalized_tokens"] += 1
-        return {
-            "ok": True,
-            "token": dc.token,
-            "username": dc.display_name or dc.username,
-            "uid": dc.user_id,
-            "is_bot": dc.is_bot,
-            "fingerprint_locked": True,
-            "cookies_count": len(dc.s.cookies.get_dict()),
-        }
-    return {"ok": False, "error": "Token Discord không hợp lệ hoặc đã hết hạn!"}
+def warmup_discord_stealth_token(*args, **kwargs):
+    raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 class DiscordImmortalRegTool:
-    """Hệ Thống Tool Reg Acc & Đúc Token Discord Bất Tử 4-Trong-1 (Super VIP — Chống Báo Reset Mật Khẩu 100%):
-    - ĐÃ SỬA TRIỆT ĐỂ lỗi thiếu X-Super-Properties khi gọi /api/v9/auth/login khiến người dùng không đăng nhập được bằng Gmail/Mật khẩu!
-    - Tự động giữ nguyên đầy đủ cả X-Super-Properties, X-Fingerprint và Cookie Cloudflare thật."""
-
-    @classmethod
-    def perform_clean_browser_pre_handshake(cls, seed_key, referer_url="https://discord.com/login", proxy_url=None):
-        """Khởi tạo phiên trình duyệt Chrome 131 chống Captcha 100% cho Discord Login:
-        - Tự động kết hợp Proxy sạch (nếu có trong ProxyPoolEngine) để tránh IP máy chủ Cloud bị hỏi Captcha.
-        - Thu thập đầy đủ bộ Cookie Cloudflare (__dcfduid, __sdcfduid, _cfuvid, __cf_bm) + X-Fingerprint + X-Super-Properties."""
-        s = requests.Session()
-        tls_adapter = Chrome131TLSAdapter(pool_connections=32, pool_maxsize=64, max_retries=1)
-        s.mount("https://", tls_adapter)
-        s.mount("http://", HTTPAdapter(pool_connections=32, pool_maxsize=64, max_retries=1))
-        if proxy_url:
-            s.proxies.update({"http": proxy_url, "https": proxy_url})
-        s.cookies.update({"locale": "vi"})
-
-        prof = DiscordStealthAntiBanEngine.get_deterministic_profile(seed_key)
-        nav_headers = {
-            "User-Agent": prof["ua"],
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate",
-            "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Sec-Ch-Ua": prof["sec_ch_ua"],
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": f'"{prof["os"]}"',
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1",
-        }
-        fingerprint = ""
-        try:
-            s.get(referer_url, headers=nav_headers, timeout=6)
-        except Exception:
-            pass
-
-        api_headers = DiscordStealthAntiBanEngine.build_stealth_headers(
-            seed_key, is_bot=False, include_auth=False
-        )
-        super_b64 = api_headers.get("X-Super-Properties", "")
-        if super_b64:
-            api_headers["X-Track"] = super_b64
-        api_headers["Referer"] = referer_url
-        s.headers.update(api_headers)
-
-        for exp_ep in (
-            "https://discord.com/api/v9/experiments?with_guild_experiments=true",
-            "https://discord.com/api/v9/experiments",
-        ):
-            try:
-                r_fp = s.get(exp_ep, timeout=6)
-                if r_fp.status_code == 200:
-                    fingerprint = r_fp.json().get("fingerprint") or ""
-                    if fingerprint:
-                        s.headers["X-Fingerprint"] = fingerprint
-                        break
-            except Exception:
-                pass
-
-        return s, fingerprint
-
-    @classmethod
-    def immortalize_tokens_batch(cls, raw_input, custom_name="", auto_save=True, chat_cmd_enabled=1, allow_all_cmd=0):
-        tokens = extract_discord_tokens_from_reg_or_raw(raw_input)
-        if not tokens:
-            return {"ok": False, "error": "Không tìm thấy Token hợp lệ trong dữ liệu nhập vào!"}
-
-        results = []
-        saved_count = 0
-        conn = db() if auto_save else None
-
-        for idx, tk in enumerate(tokens):
-            if idx > 0:
-                time.sleep(random.uniform(0.08, 0.18))
-            w_res = warmup_discord_stealth_token(tk)
-            if w_res.get("ok"):
-                uid = str(w_res.get("uid") or "").strip()
-                real_uname = w_res.get("username") or (f"Discord_{uid[-4:]}" if uid else f"Discord VIP #{idx + 1}")
-                if custom_name:
-                    uname = f"{custom_name} #{idx + 1}" if len(tokens) > 1 else custom_name
-                else:
-                    uname = real_uname
-                if uid:
-                    OWNER_UIDS_CACHE.add(uid)
-                prof = DiscordStealthAntiBanEngine.get_deterministic_profile(tk)
-                c_dict = DiscordStealthAntiBanEngine.get_deterministic_cookies(tk)
-                has_signed_cookie = ("__dcfduid" in c_dict and "__sdcfduid" in c_dict)
-
-                if auto_save and conn:
-                    existing = conn.execute(
-                        "SELECT id FROM accounts WHERE platform='discord' AND token=?",
-                        (tk,)
-                    ).fetchone()
-                    if not existing and uid:
-                        existing = conn.execute(
-                            "SELECT id FROM accounts WHERE platform='discord' AND uid=?",
-                            (uid,)
-                        ).fetchone()
-                    if existing:
-                        conn.execute(
-                            "UPDATE accounts SET name=?, token=?, uid=?, chat_cmd_enabled=?, allow_all_cmd=?, enabled=1 WHERE id=?",
-                            (uname, tk, uid, int(chat_cmd_enabled), int(allow_all_cmd), existing["id"])
-                        )
-                    else:
-                        conn.execute(
-                            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
-                               VALUES (?, 'discord', '', '{}', ?, 0, ?, ?, '.', ?, 1, ?)""",
-                            (uname, tk, uid, int(chat_cmd_enabled), int(allow_all_cmd), time.time()),
-                        )
-                    saved_count += 1
-
-                results.append({
-                    "ok": True,
-                    "username": uname,
-                    "uid": uid,
-                    "masked_token": mask_sensitive_id(tk, 6),
-                    "token": tk,
-                    "os_profile": f"{prof['os']} {prof['os_version']} • Chrome {prof['browser_version']}",
-                    "cloudflare_signed": has_signed_cookie,
-                    "backup_line": f"{uname}|{uid}|{tk}",
-                })
-            else:
-                results.append({
-                    "ok": False,
-                    "masked_token": mask_sensitive_id(tk, 5),
-                    "error": w_res.get("error", "Token die hoặc đã bị đổi mật khẩu"),
-                })
-
-        if conn:
-            conn.commit()
-            conn.close()
-            sync_all_zalo_listeners()
-
-        ok_list = [r for r in results if r.get("ok")]
-        dead_list = [r for r in results if not r.get("ok")]
-        return {
-            "ok": len(ok_list) > 0,
-            "total": len(tokens),
-            "alive_count": len(ok_list),
-            "dead_count": len(dead_list),
-            "saved_count": saved_count,
-            "results": results,
-            "live_tokens": [r["token"] for r in ok_list],
-            "backup_text": "\n".join(r["backup_line"] for r in ok_list),
-            "message": f"Đã đúc thành công {len(ok_list)}/{len(tokens)} Token Discord Bảo Vệ Tự Động (Chống Reset Key 100%)!"
-        }
-
-    @classmethod
-    def register_new_account(cls, email, username, password, dob="2000-06-15", invite_code="", auto_save=True):
-        email_clean = (email or "").strip()
-        user_clean = (username or "").strip() or f"noel_{random.randint(1000, 9999)}"
-        pw_clean = (password or "").strip()
-        dob_clean = (dob or "2000-06-15").strip()
-
-        if not email_clean or not pw_clean or len(pw_clean) < 6:
-            return {"ok": False, "error": "Vui lòng nhập Email hợp lệ và Mật khẩu tối thiểu 6 ký tự!"}
-
-        seed_key = f"reg:{email_clean.lower()}:{user_clean.lower()}"
-        s, fingerprint = cls.perform_clean_browser_pre_handshake(
-            seed_key, referer_url="https://discord.com/register"
-        )
-        s.headers["X-Context-Properties"] = "eyJsb2NhdGlvbiI6IlJlZ2lzdGVyIn0="
-
-        reg_payload = {
-            "fingerprint": fingerprint or None,
-            "email": email_clean,
-            "username": re.sub(r"[^a-z0-9_\.]", "_", user_clean.lower())[:30],
-            "global_name": user_clean,
-            "password": pw_clean,
-            "invite": invite_code.strip() if invite_code else None,
-            "consent": True,
-            "date_of_birth": dob_clean,
-            "gift_code_sku_id": None,
-            "promotional_email_opt_in": False,
-        }
-
-        try:
-            r = s.post("https://discord.com/api/v9/auth/register", json=reg_payload, timeout=15)
-            d = r.json() if r.content else {}
-        except Exception as e:
-            return {"ok": False, "error": f"Lỗi kết nối tới cổng Reg Discord: {e}"}
-
-        if r.status_code in (200, 201) and d.get("token"):
-            tk = d["token"]
-            DiscordStealthAntiBanEngine.persist_real_cloudflare_cookies(tk, s.cookies)
-            imm = cls.immortalize_tokens_batch(tk, custom_name=user_clean, auto_save=auto_save)
-            return {
-                "ok": True,
-                "token": tk,
-                "username": user_clean,
-                "fingerprint": fingerprint,
-                "immortal_info": imm,
-                "message": f"Đã Reg thành công tài khoản {user_clean} & đúc Token Bất Tử vào Tường Lửa!"
-            }
-
-        raw_err = json.dumps(d, ensure_ascii=False)
-        if d.get("captcha_key") or "captcha" in raw_err.lower():
-            return {
-                "ok": False,
-                "captcha_required": True,
-                "fingerprint": fingerprint,
-                "prepared_profile": {
-                    "email": email_clean,
-                    "username": user_clean,
-                    "dob": dob_clean,
-                    "fingerprint": fingerprint[:32] + "..." if fingerprint else "Locked",
-                },
-                "error": (
-                    "Đã khởi tạo hồ sơ Reg sạch & cấp X-Fingerprint thật! Do IP máy chủ Cloud bị Discord yêu cầu Captcha khi tạo nick mới, "
-                    "hãy dùng nút 'Code Lấy Token' trên trình duyệt của bạn rồi dán vào ô Token để đúc Token Bất Tử 100%!"
-                )
-            }
-
-        return {"ok": False, "error": d.get("message") or f"Cổng Reg trả về mã {r.status_code}: {raw_err[:140]}"}
-
-    @classmethod
-    def generate_batch_clean_reg_profiles(cls, count=5, base_prefix="noel_vip"):
-        count = max(1, min(10, int(count or 5)))
-        profiles_out = []
-        prefixes = [base_prefix or "noel_vip", "aurora_vn", "frost_king", "crystal_pro", "stellar_x", "nova_elite"]
-        for i in range(count):
-            pfx = prefixes[i % len(prefixes)]
-            rnd = random.randint(1000, 9999)
-            uname = f"{pfx}_{rnd}"
-            pw = f"Noel@{rnd}#Vip{random.randint(10, 99)}"
-            dob = f"{random.randint(1996, 2003)}-{random.randint(1, 12):02d}-{random.randint(10, 26):02d}"
-            seed_key = f"batch_reg:{uname}:{time.time()}:{i}"
-            s, fp = cls.perform_clean_browser_pre_handshake(seed_key, referer_url="https://discord.com/register")
-            c_dict = s.cookies.get_dict()
-            profiles_out.append({
-                "index": i + 1,
-                "username": uname,
-                "password": pw,
-                "dob": dob,
-                "fingerprint": fp or "Locked_Chrome131_FP",
-                "dcfduid": c_dict.get("__dcfduid", ""),
-                "sdcfduid": c_dict.get("__sdcfduid", ""),
-                "cloudflare_ready": bool(c_dict.get("__dcfduid") or fp),
-            })
-        return {
-            "ok": True,
-            "count": len(profiles_out),
-            "profiles": profiles_out,
-            "message": f"Đã khởi tạo {len(profiles_out)} hồ sơ Reg sạch kèm X-Fingerprint & Cookie Cloudflare thật!"
-        }
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 _DISCORD_LOGIN_TICKETS = {}
 
@@ -9674,7 +8423,6 @@ API_TIKTOK_VIDEO = "https://keyherlyswar.x10.mx/Apidocs/tien_ich/infovideott.php
 API_FB_GETID     = "https://scanfb.id.vn/getID.php?linkFB={}"
 API_FB_INFO      = "https://scanfb.id.vn/getInfo.php?id={}"
 API_FB_AVT       = "https://keyherlyswar.x10.mx/Apidocs/tien_ich/avtfb.php?uid={}"
-API_2FA          = "https://keyherlyswar.x10.mx/Apidocs/tien_ich/2fa.php?secret={}"
 
 def add_border_to_qr(image_data: bytes) -> bytes:
     try:
@@ -9763,27 +8511,40 @@ class ZaloCookieVaultEngine:
 
     @classmethod
     def list_vault_records(cls):
+        """Return a browser-safe inventory; credential material stays server-side."""
         out = []
         try:
             conn = db()
             rows = conn.execute("SELECT * FROM zalo_cookie_vault ORDER BY updated_at DESC").fetchall()
             conn.close()
             for r in rows:
-                c_dict = normalize_zalo_cookies(r["cookies_json"])
                 out.append({
                     "uid": r["uid"],
                     "display_name": r["display_name"] or f"Zalo_{str(r['uid'])[-4:]}",
                     "masked_name": mask_account_name(r["display_name"] or "Zalo VIP"),
-                    "imei": r["imei"],
+                    "imei_present": bool(r["imei"]),
                     "masked_imei": mask_sensitive_id(r["imei"], 6),
-                    "cookies": c_dict,
-                    "cookies_str": json.dumps(c_dict, ensure_ascii=False),
+                    "cookies_present": bool(r["cookies_json"]),
                     "zpw_enk_ready": bool(r["zpw_enk"]),
                     "updated_at": r["updated_at"],
                 })
         except Exception:
             pass
         return out
+
+    @classmethod
+    def get_vault_record(cls, uid):
+        """Load one credential record for an internal server-side activation only."""
+        uid_s = str(uid or "").strip()
+        if not uid_s:
+            return None
+        try:
+            conn = db()
+            row = conn.execute("SELECT * FROM zalo_cookie_vault WHERE uid=?", (uid_s,)).fetchone()
+            conn.close()
+            return dict(row) if row else None
+        except Exception:
+            return None
 
     @classmethod
     def delete_vault_record(cls, uid):
@@ -10821,955 +9582,32 @@ class ZaloQRLoginManager:
                 user_info_dict=user_info_got,
                 session_obj=s
             )
-        except Exception as e:
+        except Exception:
             st["status"] = "error"
-            st["message"] = f"Lỗi khởi tạo phiên QR Zalo: {e}"
+            st["message"] = public_error_message("Lỗi khởi tạo phiên QR Zalo:")
             cls._persist_qr_state_to_db(st, async_write=False)
 
 
 class DiscordTokenGetter:
-    def __init__(self):
-        self.session = None
-        self.headers = {}
-        self.create_new_session()
-
-    def create_new_session(self, seed_key="discord_web"):
-        self.session, self.fingerprint = DiscordImmortalRegTool.perform_clean_browser_pre_handshake(
-            seed_key, referer_url="https://discord.com/login"
-        )
-        self.headers = dict(self.session.headers)
-
-    def login_discord(self, email, password, twofa_code="", twofa_type="totp"):
-        res = login_discord_reg_session(email, password, two_fa_code=twofa_code, twofa_type=twofa_type)
-        if res.get("ok"):
-            prof = res.get("profile") or {}
-            return res.get("token"), prof.get("id", ""), "Thành công"
-        return None, None, res.get("error", "Không thể đăng nhập")
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 class FacebookPCDeviceGuard:
-    """Hệ Thống Định Danh Thiết Bị Máy Tính (Desktop PC Workstation) & Tự Động Lấy Máy Tính Thông Báo Vào Facebook:
-    - Cố định mỗi Cookie Facebook (c_user) vào 1 Thiết Bị Máy Tính Windows 11 Pro / MacBook Pro M3 Max (Chrome 131 Desktop).
-    - Tự động gắn Cookie màn hình Máy Tính (wd=1920x1080, dpr=1, locale=vi_VN) và tuyệt đối CẤM gọi mbasic.facebook.com / m.facebook.com!
-    - Ngay khi bỏ Cookie vào, tự động lấy Máy Tính đó gửi Thông Báo Xác Nhận Phiên Đăng Nhập vào thẳng Facebook/Messenger
-      để hệ thống FBLearner của Facebook nhận diện đây là Máy Tính chính chủ hợp lệ, chống báo 'Tài khoản bị hack' / Checkpoint 100%!"""
-
-    PC_WORKSTATIONS = [
-        {
-            "pc_name": "WORKSTATION-WIN11-PRO-SG (Windows 11 Pro 64-bit • Chrome 131.0 PC)",
-            "short_name": "WORKSTATION-WIN11-PRO",
-            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            "platform": '"Windows"',
-            "wd": "1920x1080",
-            "dpr": "1",
-        },
-        {
-            "pc_name": "ASUS-ROG-ZEPHYRUS-G16 (Windows 11 Pro • Chrome 131.0 Desktop)",
-            "short_name": "ASUS-ROG-ZEPHYRUS-G16",
-            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            "platform": '"Windows"',
-            "wd": "2560x1440",
-            "dpr": "1",
-        },
-        {
-            "pc_name": "MacBook-Pro-M3-Max-SG (macOS Sequoia 15.1 • Chrome 131.0 Desktop)",
-            "short_name": "MacBook-Pro-M3-Max",
-            "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "sec_ch_ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-            "platform": '"macOS"',
-            "wd": "1728x1117",
-            "dpr": "2",
-        },
-    ]
-
-    _NOTIFIED_UIDS = {}
-    _LOCK = threading.RLock()
-
-    @classmethod
-    def get_pc_profile(cls, uid=""):
-        idx = zlib.crc32(str(uid or "fb_pc").encode("utf-8")) % len(cls.PC_WORKSTATIONS)
-        return cls.PC_WORKSTATIONS[idx]
-
-    @classmethod
-    def bind_pc_profile_to_cookies(cls, uid, raw_cookies):
-        c_dict = normalize_messenger_cookies(raw_cookies)
-        prof = cls.get_pc_profile(uid)
-        c_dict.setdefault("wd", prof["wd"])
-        c_dict.setdefault("dpr", prof["dpr"])
-        c_dict.setdefault("locale", "vi_VN")
-        return {
-            "pc_name": prof["pc_name"],
-            "short_name": prof["short_name"],
-            "ua": prof["ua"],
-            "sec_ch_ua": prof["sec_ch_ua"],
-            "platform": prof["platform"],
-            "cookies": c_dict,
-        }
-
-    @classmethod
-    def notify_pc_login_to_facebook(cls, messenger_client, target_thread_id=None, force=False):
-        """Khóa Vân Tay Máy Tính Тĩnh (Zero-Checkpoint Passive Desktop Binding):
-        - TUYỆT ĐỐI KHÔNG tự ý bắn tin nhắn văn bản tự động ngay lúc vừa nạp Cookie (nguyên nhân khiến Facebook nghi ngờ chiếm quyền & bắt 'Đổi mật khẩu' như ảnh 9e4e1c82.jpeg).
-        - Chỉ đồng bộ thụ động phiên Desktop Chrome 131 (wd=1920x1080, dpr=1, locale=vi_VN) vào Vault để giữ Cookie sống bền vững 100%!"""
-        if not messenger_client or not getattr(messenger_client, "uid", None):
-            return False
-        uid_s = str(messenger_client.uid).strip()
-        now = time.time()
-        with cls._LOCK:
-            cls._NOTIFIED_UIDS[uid_s] = now
-        try:
-            prof = cls.get_pc_profile(uid_s)
-            messenger_client.cookies_dict.setdefault("wd", prof["wd"])
-            messenger_client.cookies_dict.setdefault("dpr", prof["dpr"])
-            messenger_client.cookies_dict.setdefault("locale", "vi_VN")
-            if hasattr(messenger_client, "_save_vault_state"):
-                messenger_client._save_vault_state()
-        except Exception:
-            pass
-        return True
-
-    @classmethod
-    def notify_pc_login_to_facebook_async(cls, messenger_client, target_thread_id=None, force=False):
-        threading.Thread(
-            target=cls.notify_pc_login_to_facebook,
-            args=(messenger_client, target_thread_id, force),
-            daemon=True
-        ).start()
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 
 class FacebookCookieGetter:
-    """Hệ Thống Anti-Reg Acc & Lấy Cookie Facebook Bằng Máy Tính Desktop Chrome 131:
-    - Tuyệt đối KHÔNG gọi mbasic.facebook.com hay m.facebook.com (nguyên nhân gây báo 'Tài khoản bị hack').
-    - Giữ nguyên vân tay Máy Tính Windows 11 Chrome 131, hỗ trợ mã 2FA 6 số / Secret Key 2FA,
-      và tự động lấy Máy Tính thông báo vào Facebook ngay khi đăng nhập xong!"""
-    def __init__(self):
-        self.session = None
-        self.headers = {}
-        self.create_new_session()
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
-    def create_new_session(self, seed_uid=""):
-        self.session = requests.Session()
-        tls_adapter = Chrome131TLSAdapter(pool_connections=16, pool_maxsize=32, max_retries=1)
-        self.session.mount("https://", tls_adapter)
-        self.session.mount("http://", HTTPAdapter(pool_connections=16, pool_maxsize=32, max_retries=1))
-        prof = FacebookPCDeviceGuard.get_pc_profile(seed_uid)
-        self.headers = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "vi-VN,vi;q=0.95,en-US;q=0.8,en;q=0.7",
-            "Cache-Control": "max-age=0",
-            "Origin": "https://www.facebook.com",
-            "Referer": "https://www.facebook.com/",
-            "Sec-Ch-Prefers-Color-Scheme": "dark",
-            "Sec-Ch-Ua": prof["sec_ch_ua"],
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": prof["platform"],
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1",
-            "User-Agent": prof["ua"],
-        }
-        self.session.headers.update(self.headers)
-        self.session.cookies.set("wd", prof["wd"], domain=".facebook.com")
-        self.session.cookies.set("dpr", prof["dpr"], domain=".facebook.com")
-        self.session.cookies.set("locale", "vi_VN", domain=".facebook.com")
-
-    def extract_value(self, html, field_name):
-        if not html:
-            return ""
-        m = re.search(rf'name="{re.escape(field_name)}"\s+value="([^"]*)"', html)
-        return m.group(1) if m else ""
-
-    def login_facebook(self, email, password, twofa_code=""):
-        raw_in = f"{email or ''} {password or ''}".strip()
-        if "c_user=" in raw_in and "xs=" in raw_in:
-            c_dict = normalize_messenger_cookies(raw_in)
-            uid = extract_messenger_uid(c_dict)
-            if uid:
-                pc_info = FacebookPCDeviceGuard.bind_pc_profile_to_cookies(uid, c_dict)
-                ck_str = "; ".join(f"{k}={v}" for k, v in pc_info["cookies"].items())
-                return ck_str, uid, f"Đã khóa Thiết Bị Máy Tính {pc_info['short_name']} & chống quét thành công"
-
-        email_s = (email or "").strip()
-        pass_s = (password or "").strip()
-        if not email_s or not pass_s:
-            return None, None, "Vui lòng nhập đầy đủ Email/SĐT và Mật khẩu Facebook (hoặc dán trực tiếp Cookie c_user + xs)!"
-        try:
-            self.create_new_session(seed_uid=email_s)
-            r_init = self.session.get("https://www.facebook.com/", headers=self.headers, timeout=12)
-            html_init = r_init.text or ""
-            action_m = re.search(r'action="(/login/device-based/regular/login/[^"]+)"', html_init)
-            post_url = f"https://www.facebook.com{action_m.group(1).replace('&amp;', '&')}" if action_m else "https://www.facebook.com/login/device-based/regular/login/?login_attempt=1&lwv=110"
-
-            login_data = {
-                "email": email_s,
-                "pass": pass_s,
-                "login": "1",
-            }
-            for hidden_k in ("lsd", "jazoest", "li", "m_ts", "try_number", "unrecognized_tries", "bi_xrwh"):
-                v = self.extract_value(html_init, hidden_k)
-                if v:
-                    login_data[hidden_k] = v
-
-            post_hdrs = dict(self.headers)
-            post_hdrs["Content-Type"] = "application/x-www-form-urlencoded"
-            post_hdrs["Referer"] = "https://www.facebook.com/"
-            r_login = self.session.post(
-                post_url,
-                data=login_data,
-                headers=post_hdrs,
-                allow_redirects=True,
-                timeout=15,
-            )
-            cookies = self.session.cookies.get_dict()
-
-            # Hỗ trợ tự động xác thực 2FA trên trình duyệt Máy Tính nếu có truyền twofa_code
-            if "c_user" not in cookies and twofa_code and ("checkpoint" in cookies or "checkpoint" in (r_login.url or "").lower()):
-                clean_2fa = str(twofa_code).strip().replace(" ", "")
-                if len(clean_2fa) >= 12 and not clean_2fa.isdigit():
-                    otp_6, _ = generate_totp_rfc6238(clean_2fa)
-                    if otp_6:
-                        clean_2fa = otp_6
-                cp_html = r_login.text or ""
-                cp_data = {
-                    "approvals_code": clean_2fa,
-                    "codes_submitted": "0",
-                    "submit[Submit Code]": "Continue",
-                }
-                for ck_f in ("fb_dtsg", "jazoest", "lsd", "nh"):
-                    cv = self.extract_value(cp_html, ck_f)
-                    if cv:
-                        cp_data[ck_f] = cv
-                self.session.post("https://www.facebook.com/checkpoint/?next", data=cp_data, headers=post_hdrs, allow_redirects=True, timeout=15)
-                cookies = self.session.cookies.get_dict()
-
-            if "c_user" in cookies and "xs" in cookies:
-                uid = str(cookies.get("c_user"))
-                pc_info = FacebookPCDeviceGuard.bind_pc_profile_to_cookies(uid, cookies)
-                cookie_str = "; ".join(f"{k}={v}" for k, v in pc_info["cookies"].items())
-                return cookie_str, uid, f"Đã đăng nhập bằng Máy Tính {pc_info['short_name']} thành công!"
-            if "checkpoint" in str(cookies).lower():
-                return None, None, "Tài khoản bật bảo mật 2 lớp (2FA) hoặc cần xác nhận thiết bị. Hãy dán trực tiếp Cookie (c_user + xs) từ trình duyệt máy tính để hệ thống tự lấy Máy Tính thông báo vào Facebook mà không bao giờ bị quét!"
-            return None, None, "Để tránh Facebook quét IP lạ khi đăng nhập bằng mật khẩu, hãy dán trực tiếp Cookie (c_user + xs) vào ô Nạp Nhanh Cookie Facebook để hệ thống tự động lấy Máy Tính thông báo vào Facebook!"
-        except Exception as e:
-            return None, None, str(e)
-
-def login_discord_reg_session(login_email, password, two_fa_code="", twofa_type="totp"):
-    """Đăng nhập Discord bằng Gmail/SĐT + Mật khẩu chuẩn trình duyệt Chrome 131 (/api/v9/auth/login):
-    - Giữ nguyên X-Super-Properties + X-Fingerprint + Cookie Cloudflare thật giúp đăng nhập mượt mà và chống báo Reset mật khẩu!"""
-    raw_combined = f"{login_email or ''} {password or ''}"
-    direct_tokens = extract_discord_tokens_from_reg_or_raw(raw_combined)
-    if direct_tokens:
-        tk = direct_tokens[0]
-        w_info = warmup_discord_stealth_token(tk)
-        if w_info.get("ok"):
-            return {
-                "ok": True,
-                "token": tk,
-                "profile": {"id": w_info.get("uid", ""), "username": w_info.get("username", "Discord User")}
-            }
-
-    email_clean = (login_email or "").strip()
-    if ":" in email_clean and not password:
-        parts = email_clean.split(":")
-        if len(parts) >= 2:
-            email_clean = parts[0].strip()
-            password = parts[1].strip()
-
-    if not email_clean or not password:
-        return {"ok": False, "error": "Vui lòng nhập đầy đủ Gmail/SĐT và Mật khẩu Discord (hoặc dán trực tiếp Token)!"}
-
-    seed_key = f"login:{email_clean.lower()}"
-    cached_ticket_info = _DISCORD_LOGIN_TICKETS.get(email_clean.lower())
-
-    clean_2fa = str(two_fa_code or "").strip().replace(" ", "").replace("-", "")
-    if clean_2fa and (twofa_type == "secret" or (len(clean_2fa) >= 12 and not clean_2fa.isdigit())):
-        totp_gen, _ = generate_totp_rfc6238(clean_2fa)
-        if totp_gen:
-            clean_2fa = totp_gen
-            twofa_type = "totp"
-
-    if clean_2fa and cached_ticket_info and (time.time() - cached_ticket_info["ts"] < 240):
-        s = cached_ticket_info["session"]
-        ticket = cached_ticket_info["ticket"]
-        login_inst_id = cached_ticket_info.get("login_instance_id")
-        ep_list = (
-            ["https://discord.com/api/v9/auth/mfa/backup", "https://discord.com/api/v9/auth/mfa/totp"]
-            if twofa_type == "backup"
-            else ["https://discord.com/api/v9/auth/mfa/totp", "https://discord.com/api/v9/auth/mfa/backup", "https://discord.com/api/v9/auth/mfa/sms"]
-        )
-        for mfa_ep in ep_list:
-            try:
-                r_mfa = s.post(
-                    mfa_ep,
-                    json={
-                        "code": clean_2fa,
-                        "ticket": ticket,
-                        "login_instance_id": login_inst_id,
-                        "login_source": None,
-                        "gift_code_sku_id": None,
-                    },
-                    timeout=15
-                )
-                d_mfa = r_mfa.json() if r_mfa.content else {}
-                if r_mfa.status_code == 200 and d_mfa.get("token"):
-                    tk = d_mfa["token"]
-                    _DISCORD_LOGIN_TICKETS.pop(email_clean.lower(), None)
-                    DiscordStealthAntiBanEngine.persist_real_cloudflare_cookies(tk, s.cookies)
-                    w_info = warmup_discord_stealth_token(tk)
-                    return {
-                        "ok": True,
-                        "token": tk,
-                        "profile": {"id": w_info.get("uid", ""), "username": w_info.get("username", "Discord User")}
-                    }
-            except Exception:
-                continue
-
-    pl = {
-        "login": email_clean,
-        "password": password,
-        "undelete": False,
-        "login_source": None,
-        "gift_code_sku_id": None,
-    }
-
-    # Tự động xoay qua dàn Proxy sạch (nếu có trong PRX) + Direct với vân tay trình duyệt Chrome 131 thật để vượt Captcha 100%!
-    proxy_candidates = ProxyPoolEngine.pick_proxy_candidates(seed_key=seed_key, max_candidates=3)
-    route_attempts = proxy_candidates + [None]
-    r = None
-    d = {}
-    s = None
-    fingerprint = ""
-    last_conn_err = ""
-
-    for px_try in route_attempts:
-        try:
-            s, fingerprint = DiscordImmortalRegTool.perform_clean_browser_pre_handshake(
-                f"{seed_key}:{px_try or 'direct'}", referer_url="https://discord.com/login", proxy_url=px_try
-            )
-            s.headers["X-Context-Properties"] = "eyJsb2NhdGlvbiI6IkxvZ2luIn0="
-            time.sleep(0.15)
-            r = s.post("https://discord.com/api/v9/auth/login", json=pl, timeout=10)
-            d = r.json() if r.content else {}
-            raw_d_str = json.dumps(d, ensure_ascii=False).lower()
-            if (d.get("captcha_key") or "captcha" in raw_d_str) and px_try is not None:
-                ProxyPoolEngine.report_proxy_bad(px_try, cooldown_sec=30.0)
-                continue
-            break
-        except Exception as e:
-            last_conn_err = str(e)
-            if px_try:
-                ProxyPoolEngine.report_proxy_bad(px_try, cooldown_sec=30.0)
-            continue
-
-    if r is None:
-        return {"ok": False, "error": f"Lỗi kết nối tới máy chủ Discord: {last_conn_err}"}
-
-    if r.status_code == 200 and d.get("token"):
-        tk = d["token"]
-        DiscordStealthAntiBanEngine.persist_real_cloudflare_cookies(tk, s.cookies)
-        w_info = warmup_discord_stealth_token(tk)
-        return {
-            "ok": True,
-            "token": tk,
-            "profile": {"id": w_info.get("uid", ""), "username": w_info.get("username", "Discord User")}
-        }
-
-    if d.get("mfa") and d.get("ticket"):
-        login_inst_id = d.get("login_instance_id")
-        _DISCORD_LOGIN_TICKETS[email_clean.lower()] = {
-            "ticket": d["ticket"],
-            "login_instance_id": login_inst_id,
-            "session": s,
-            "ts": time.time()
-        }
-        if d.get("sms") and not clean_2fa:
-            try:
-                s.post("https://discord.com/api/v9/auth/mfa/sms/send", json={"ticket": d["ticket"]}, timeout=10)
-            except Exception:
-                pass
-        if not clean_2fa:
-            return {
-                "ok": False,
-                "need_2fa": True,
-                "error": "Tài khoản có bật bảo mật 2 lớp (2FA). Hãy nhập Mã 6 số, Secret Key 2FA hoặc Backup Code rồi bấm lại nút Đăng Nhập!"
-            }
-        ep_list2 = (
-            ["https://discord.com/api/v9/auth/mfa/backup", "https://discord.com/api/v9/auth/mfa/totp"]
-            if twofa_type == "backup"
-            else ["https://discord.com/api/v9/auth/mfa/totp", "https://discord.com/api/v9/auth/mfa/backup", "https://discord.com/api/v9/auth/mfa/sms"]
-        )
-        for mfa_ep in ep_list2:
-            r_mfa = s.post(
-                mfa_ep,
-                json={
-                    "code": clean_2fa,
-                    "ticket": d["ticket"],
-                    "login_instance_id": login_inst_id,
-                    "login_source": None,
-                    "gift_code_sku_id": None,
-                },
-                timeout=15
-            )
-            d_mfa = r_mfa.json() if r_mfa.content else {}
-            if r_mfa.status_code == 200 and d_mfa.get("token"):
-                tk = d_mfa["token"]
-                _DISCORD_LOGIN_TICKETS.pop(email_clean.lower(), None)
-                DiscordStealthAntiBanEngine.persist_real_cloudflare_cookies(tk, s.cookies)
-                w_info = warmup_discord_stealth_token(tk)
-                return {
-                    "ok": True,
-                    "token": tk,
-                    "profile": {"id": w_info.get("uid", ""), "username": w_info.get("username", "Discord User")}
-                }
-        return {"ok": False, "error": "Mã xác thực 2FA/SMS không đúng hoặc đã hết hạn!"}
-
-    raw_err_str = json.dumps(d, ensure_ascii=False)
-    if "ACCOUNT_LOGIN_VERIFICATION_EMAIL" in raw_err_str or "New login location" in raw_err_str:
-        return {
-            "ok": False,
-            "error": "Discord vừa gửi Email xác nhận vị trí đăng nhập mới về hộp thư Gmail của bạn! Hãy mở Gmail bấm 'Verify Login' rồi bấm lại nút Đăng Nhập (hoặc dán trực tiếp Token vào tab Đúc Token)!"
-        }
-    if "INVALID_LOGIN" in raw_err_str:
-        return {"ok": False, "error": "Email hoặc mật khẩu Discord không chính xác!"}
-
-    if d.get("captcha_key") or "captcha" in raw_err_str.lower():
-        return {
-            "ok": False,
-            "captcha_blocked": True,
-            "error": "IP máy chủ Cloud đang bị Discord yêu cầu Captcha khi đăng nhập bằng mật khẩu. Hãy bấm nút 'Code Lấy Token' bên tab 'Đúc Token' rồi dán Token vào để khóa Siêu VIP 100% không cần mật khẩu!"
-        }
-
-    return {"ok": False, "error": d.get("message") or f"Không thể đăng nhập bằng mật khẩu (Mã {r.status_code})"}
+def login_discord_reg_session(*args, **kwargs):
+    raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 # CLIENT GIAO THỨC DISCORD Bảo Vệ Tự Động (ZERO-REST CHECK + ANTI-RESET-PASSWORD)
 class DiscordClient:
-    def __init__(self, token, is_bot=False):
-        raw_tok = str(token or "").strip()
-        if raw_tok.lower().startswith("bot "):
-            raw_tok = raw_tok[4:].strip()
-            is_bot = True
-        extracted = extract_discord_tokens_from_reg_or_raw(raw_tok)
-        if extracted:
-            raw_tok = extracted[0]
-        self.token = raw_tok
-        self.is_bot = bool(is_bot)
-        self.s = DiscordStealthAntiBanEngine.get_shared_session(self.token, is_bot=self.is_bot)
-        self.route_step = 0
-        self._apply_headers()
-        self.user_id = decode_discord_uid_offline(self.token) or None
-        self.username = None
-        self.display_name = None
-
-    def _apply_headers(self, channel_id=None):
-        self.s.headers.update(
-            DiscordStealthAntiBanEngine.build_stealth_headers(
-                self.token, is_bot=self.is_bot, channel_id=channel_id
-            )
-        )
-
-    def check(self, force_network=False):
-        if not force_network:
-            cached = DiscordStealthAntiBanEngine.get_cached_me(self.token)
-            if cached and cached.get("id"):
-                self.user_id = str(cached.get("id") or "")
-                self.username = cached.get("username") or f"Discord_{self.user_id[-4:]}"
-                self.display_name = cached.get("global_name") or self.username
-                OWNER_UIDS_CACHE.add(self.user_id)
-                GLOBAL_USER_NAME_CACHE[self.user_id] = self.display_name
-                return True
-            off_uid = decode_discord_uid_offline(self.token)
-            if off_uid:
-                self.user_id = off_uid
-                self.username = f"Discord_{off_uid[-4:]}"
-                self.display_name = self.username
-                DiscordStealthAntiBanEngine.set_cached_me(self.token, {
-                    "id": off_uid,
-                    "username": self.username,
-                    "global_name": self.display_name,
-                })
-                OWNER_UIDS_CACHE.add(off_uid)
-                return True
-
-        ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, "/users/@me", 0)
-        r = self.s.get(ep, timeout=12)
-        if r.status_code == 401 and self.is_bot:
-            self.is_bot = False
-            self._apply_headers()
-            r = self.s.get(ep, timeout=12)
-
-        if r.status_code == 200:
-            d = r.json()
-            DiscordStealthAntiBanEngine.set_cached_me(self.token, d)
-            self.user_id = str(d.get("id") or "")
-            self.username = d.get("username") or ""
-            self.display_name = d.get("global_name") or d.get("username") or "Discord User"
-            if self.user_id:
-                OWNER_UIDS_CACHE.add(self.user_id)
-                GLOBAL_USER_NAME_CACHE[self.user_id] = self.display_name
-            return True
-        return False
-
-    def get_dm_and_group_boxes(self):
-        out = []
-        try:
-            ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, "/users/@me/channels", 0)
-            r = self.s.get(ep, timeout=12)
-            if r.status_code == 200:
-                channels = r.json()
-                if isinstance(channels, list):
-                    channels.sort(key=lambda c: int(c.get("last_message_id") or 0), reverse=True)
-                    for c in channels:
-                        cid = str(c.get("id") or "")
-                        ctype = c.get("type")
-                        recipients = c.get("recipients") or []
-                        for rec in recipients:
-                            ruid = str(rec.get("id") or "")
-                            rname = rec.get("global_name") or rec.get("username") or ""
-                            if ruid and rname:
-                                GLOBAL_USER_NAME_CACHE[ruid] = rname
-
-                        if ctype == 3:
-                            g_name = c.get("name")
-                            if not g_name:
-                                r_names = [x.get("global_name") or x.get("username") or "User" for x in recipients]
-                                g_name = ", ".join(r_names[:4]) if r_names else f"Box Nhóm {cid[-5:]}"
-                            out.append({
-                                "id": cid,
-                                "name": f"[Box Nhóm] {g_name}",
-                                "type": "discord_channel",
-                                "sub_type": "group_dm",
-                                "members": len(recipients) + 1
-                            })
-                        elif ctype == 1:
-                            rec = recipients[0] if recipients else {}
-                            dm_name = rec.get("global_name") or rec.get("username") or f"User {cid[-5:]}"
-                            out.append({
-                                "id": cid,
-                                "name": f"[Chat Riêng] {dm_name}",
-                                "type": "discord_channel",
-                                "sub_type": "dm",
-                                "members": 2
-                            })
-        except Exception:
-            pass
-        return out
-
-    def get_guilds(self):
-        try:
-            ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, "/users/@me/guilds", 0)
-            r = self.s.get(ep, timeout=12)
-            if r.status_code == 200:
-                return [{"id": str(g["id"]), "name": g.get("name", "Server"), "type": "discord_guild"} for g in r.json()]
-        except Exception:
-            pass
-        return []
-
-    def get_channels(self, guild_id, guild_name=""):
-        try:
-            ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, f"/guilds/{guild_id}/channels", 0)
-            r = ProxyPoolEngine.request_with_fast_failover(self.s, "GET", ep, seed_key=f"{self.token[:12]}_{guild_id}", timeout=(2.0, 4.5))
-            if r.status_code == 200:
-                channels = r.json()
-                prefix = f"[{guild_name}] " if guild_name else ""
-                out_ch = []
-                if isinstance(channels, list):
-                    for c in channels:
-                        if not isinstance(c, dict):
-                            continue
-                        if c.get("type") in (0, 2, 5, 10, 11, 12):
-                            cid_s = str(c.get("id") or "")
-                            if not cid_s:
-                                continue
-                            DiscordStealthAntiBanEngine.register_channel_guild(cid_s, guild_id)
-                            out_ch.append({
-                                "id": cid_s,
-                                "name": f"{prefix}# {c.get('name', 'channel')}",
-                                "type": "discord_channel",
-                                "sub_type": "guild_channel",
-                                "guild_id": str(guild_id)
-                            })
-                return out_ch
-        except Exception:
-            pass
-        return []
-
-    def get_all_boxes(self, force_refresh=False):
-        """Soi tự động FULL 100% cuộc trò chuyện Discord (Mọi Box Nhóm DM, Chat Riêng, toàn bộ Server & Kênh Chat tớI 200-500+ Nhóm):"""
-        tkey = DiscordStealthAntiBanEngine._token_vault_key(self.token)
-        DiscordStealthAntiBanEngine._ensure_vault_record(self.token)
-
-        if not force_refresh:
-            with DiscordStealthAntiBanEngine._LOCK:
-                cached = DiscordStealthAntiBanEngine._BOXES_CACHE.get(tkey)
-                if cached and cached.get("boxes") and (time.time() - cached.get("ts", 0) < 600.0):
-                    return list(cached["boxes"])
-                passive = DiscordStealthAntiBanEngine._PASSIVE_READY_BOXES.get(tkey)
-                if passive and passive.get("boxes"):
-                    return list(passive["boxes"])
-
-        all_boxes = []
-        seen_ids = set()
-
-        # Ưu tiên nạp ngay các cuộc trò chuyện thu hoạch thụ động từ gói READY (nếu có)
-        with DiscordStealthAntiBanEngine._LOCK:
-            passive = DiscordStealthAntiBanEngine._PASSIVE_READY_BOXES.get(tkey)
-            if passive and passive.get("boxes"):
-                for pb in passive["boxes"]:
-                    cid = str(pb.get("id") or "")
-                    if cid and cid not in seen_ids:
-                        seen_ids.add(cid)
-                        all_boxes.append(dict(pb))
-
-        # Quét song song toàn bộ Box DM/Nhóm và toàn bộ Server (không giới hạn 12 server!) để lấy trọn vẹn 200+ nhóm
-        if not self.is_bot:
-            for b in self.get_dm_and_group_boxes():
-                cid = str(b.get("id") or "")
-                if cid and cid not in seen_ids:
-                    seen_ids.add(cid)
-                    all_boxes.append(b)
-
-        # ANTI-SCAN DISCORD: Chỉ quét nhẹ tối đa 5 Server tuần tự nếu chưa có gói READY từ Gateway
-        # (Tuyệt đối không bắn 16 luồng song song vào 120 Server làm Discord báo 'Tài khoản bị hack / Reset Password'!)
-        if not all_boxes or force_refresh:
-            guilds = self.get_guilds()
-            for g_obj in (guilds or [])[:5]:
-                for ch in (self.get_channels(g_obj["id"], g_obj.get("name", "")) or []):
-                    cid = str(ch.get("id") or "")
-                    if cid and cid not in seen_ids:
-                        seen_ids.add(cid)
-                        all_boxes.append(ch)
-                time.sleep(0.08)
-
-        if all_boxes:
-            with DiscordStealthAntiBanEngine._LOCK:
-                DiscordStealthAntiBanEngine._BOXES_CACHE[tkey] = {"ts": time.time(), "boxes": list(all_boxes)}
-                DiscordStealthAntiBanEngine._PASSIVE_READY_BOXES[tkey] = {"ts": time.time(), "boxes": list(all_boxes)}
-            try:
-                conn = db()
-                conn.execute(
-                    "UPDATE discord_token_vault SET boxes_json=?, updated_at=? WHERE token_key=?",
-                    (json.dumps(all_boxes, ensure_ascii=False), time.time(), tkey),
-                )
-                conn.commit()
-            except Exception:
-                pass
-        return all_boxes
-
-    def get_guild_channels(self, guild_id, guild_name=""):
-        return self.get_channels(guild_id, guild_name=guild_name)
-
-    def get_channel_recent_members(self, channel_id):
-        return self.get_box_members(channel_id)
-
-    _DISCORD_BOX_MEMBERS_CACHE = {}
-
-    def get_box_members(self, channel_id, use_cache=True):
-        cid_s = str(channel_id or "").strip()
-        if use_cache and cid_s in self._DISCORD_BOX_MEMBERS_CACHE:
-            c_entry = self._DISCORD_BOX_MEMBERS_CACHE[cid_s]
-            if time.time() - c_entry["ts"] < 180.0:
-                return list(c_entry["members"])
-        members = []
-        seen = set()
-        try:
-            ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, f"/channels/{channel_id}", 0)
-            r = self.s.get(ep, timeout=10)
-            if r.status_code == 200:
-                ch = r.json()
-                for rec in (ch.get("recipients") or []):
-                    uid = str(rec.get("id") or "")
-                    name = rec.get("global_name") or rec.get("username") or f"User_{uid[-4:]}"
-                    if uid and uid not in seen:
-                        seen.add(uid)
-                        GLOBAL_USER_NAME_CACHE[uid] = name
-                        members.append({"id": uid, "uid": uid, "name": name})
-        except Exception:
-            pass
-
-        try:
-            ep_m = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, f"/channels/{channel_id}/messages?limit=35", 0)
-            r_msgs = self.s.get(ep_m, timeout=10)
-            if r_msgs.status_code == 200 and isinstance(r_msgs.json(), list):
-                for m in r_msgs.json():
-                    auth = m.get("author") or {}
-                    uid = str(auth.get("id") or "")
-                    name = auth.get("global_name") or auth.get("username") or ""
-                    if uid and name and uid not in seen:
-                        seen.add(uid)
-                        GLOBAL_USER_NAME_CACHE[uid] = name
-                        members.append({"id": uid, "uid": uid, "name": name})
-        except Exception:
-            pass
-        if members and cid_s:
-            self._DISCORD_BOX_MEMBERS_CACHE[cid_s] = {"ts": time.time(), "members": list(members)}
-        return members
-
-    def send_typing(self, channel_id):
-        self._apply_headers(channel_id=channel_id)
-        ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, f"/channels/{channel_id}/typing", 0)
-        r = self.s.post(ep, timeout=8)
-        return r.status_code in (200, 204)
-
-    def add_reaction(self, channel_id, message_id, emoji="🔥"):
-        from urllib.parse import quote
-        self._apply_headers(channel_id=channel_id)
-        enc_em = quote(str(emoji or "🔥"))
-        ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(
-            self.token, f"/channels/{channel_id}/messages/{message_id}/reactions/{enc_em}/@me", 0
-        )
-        r = self.s.put(ep, timeout=8)
-        return r.status_code in (200, 204)
-
-    def set_custom_status(self, text, emoji_name="👑"):
-        self._apply_headers()
-        ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, "/users/@me/settings", 0)
-        pl = {"custom_status": {"text": str(text or "Hệ Thống"), "emoji_name": str(emoji_name or "👑")}}
-        r = self.s.patch(ep, json=pl, timeout=10)
-        return r.status_code == 200
-
-    def set_hypesquad(self, house_id=1):
-        self._apply_headers()
-        ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, "/hypesquad/online", 0)
-        r = self.s.post(ep, json={"house_id": int(house_id or 1)}, timeout=10)
-        return r.status_code in (200, 204)
-
-    def join_server(self, invite_code):
-        """Tham gia Server Discord bằng mã mời (Tích hợp từ 3app vip.zip/module/discord.py)."""
-        code = str(invite_code or "").strip().rstrip("/")
-        for pfx in ("https://discord.gg/", "http://discord.gg/", "https://discord.com/invite/", "discord.gg/"):
-            if code.lower().startswith(pfx):
-                code = code[len(pfx):].strip()
-        if not code:
-            return False, "Thiếu mã mời Discord"
-        self._apply_headers()
-        ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, f"/invites/{code}", 0)
-        r = self.s.post(ep, json={}, timeout=12)
-        if r.status_code in (200, 201, 204):
-            return True, f"Đã tham gia Server ({code})"
-        return False, f"Mã lỗi HTTP {r.status_code}"
-
-    def change_globalname(self, new_name):
-        """Đổi tên hiển thị (Global Name) cho Token Discord (Tích hợp từ 3app vip.zip/module/discord.py)."""
-        self._apply_headers()
-        ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, "/users/@me", 0)
-        r = self.s.patch(ep, json={"global_name": str(new_name or "NHK VIP")[:32]}, timeout=12)
-        return r.status_code == 200
-
-    def change_avatar(self, image_url_or_b64):
-        """Đổi ảnh đại diện (Avatar) cho Token Discord bằng URL hoặc Data URI Base64."""
-        raw_in = str(image_url_or_b64 or "").strip()
-        if not raw_in:
-            return False
-        data_uri = raw_in
-        if raw_in.startswith(("http://", "https://")):
-            try:
-                resp_img = requests.get(raw_in, timeout=10)
-                if resp_img.status_code == 200 and resp_img.content:
-                    mime = resp_img.headers.get("Content-Type") or "image/png"
-                    b64_img = base64.b64encode(resp_img.content).decode("utf-8")
-                    data_uri = f"data:{mime};base64,{b64_img}"
-            except Exception:
-                return False
-        elif not raw_in.startswith("data:image/"):
-            data_uri = f"data:image/png;base64,{raw_in}"
-        self._apply_headers()
-        ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, "/users/@me", 0)
-        r = self.s.patch(ep, json={"avatar": data_uri}, timeout=15)
-        return r.status_code == 200
-
-    def send_poll_discord(self, channel_id, question_text, options_list=None):
-        self._apply_headers(channel_id=channel_id)
-        opts = [str(x).strip() for x in (options_list or []) if str(x).strip()]
-        if len(opts) < 2:
-            opts = ["Đồng ý 100% 🔥", "Chuẩn VIP Quản Trị Viên 👑"]
-        answers = [{"poll_media": {"text": opt[:55]}} for opt in opts[:10]]
-        pl = {
-            "mobile_network_type": "unknown",
-            "content": "",
-            "nonce": DiscordStealthAntiBanEngine.generate_snowflake_nonce(),
-            "tts": False,
-            "flags": 0,
-            "poll": {
-                "question": {"text": str(question_text or "Bình chọn Quản Trị Viên")[:280]},
-                "answers": answers,
-                "allow_multiselect": True,
-                "duration": 24,
-                "layout_type": 1,
-            }
-        }
-        url = DiscordStealthAntiBanEngine.pick_stealth_endpoint(self.token, f"/channels/{channel_id}/messages", 0)
-        r = self.s.post(url, json=pl, timeout=12)
-        return r.status_code in (200, 201)
-
-    def format_unframed_discord_text(self, raw_text, is_heading=True, style_mode="rainbow"):
-        """Giữ nguyên 100% thụt dòng (indentation), xuống dòng và các ký hiệu Markdown (# >, >, -, *) của văn bản gốc!"""
-        raw_lines = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
-        out_lines = []
-        for r_ln in raw_lines:
-            if not r_ln.strip():
-                out_lines.append("")
-                continue
-            lead_len = len(r_ln) - len(r_ln.lstrip(" \t"))
-            lead_ws = r_ln[:lead_len]
-            body = r_ln[lead_len:].rstrip()
-            # Nếu người dùng đã tự định dạng Markdown (# >, >, #, ```) thì giữ nguyên cấu trúc đó
-            if body.startswith(("# >", "> ", "```", ">>>")):
-                out_lines.append(lead_ws + body)
-                continue
-            clean_ln = re.sub(r"^#+\s*", "", body).strip()
-            if is_heading:
-                out_lines.append(f"{lead_ws}# **{clean_ln}**" if not lead_ws else f"{lead_ws}**{clean_ln}**")
-            elif style_mode != "none":
-                out_lines.append(f"{lead_ws}**{clean_ln}**")
-            else:
-                out_lines.append(f"{lead_ws}{clean_ln}")
-        return "\n".join(out_lines)
-
-    _DISCORD_MSG_FORMAT_CACHE = {}
-
-    def send_message(self, channel_id, content, color_mode="rainbow", fixed_color=None,
-                     antiband=True, mentions=None, tag_all=False, strip_line_num=False,
-                     is_heading=True, stop_ev=None, start_global_epoch=None, start_box_epoch=None,
-                     priority_bypass=False):
-        if not priority_bypass and is_task_stopped_fast(stop_ev, start_global_epoch, start_box_epoch, channel_id):
-            return None
-        self.route_step = (self.route_step + 1) & 0xFFFF
-        req_headers = DiscordStealthAntiBanEngine.build_stealth_headers(
-            self.token, is_bot=self.is_bot, channel_id=channel_id
-        )
-
-        m_sig = tuple((str(m.get("uid") or m.get("id") or ""), bool(m.get("is_role"))) for m in (mentions or []))
-        cache_k = (content, color_mode, bool(is_heading), bool(strip_line_num), bool(tag_all), m_sig)
-        cached_pair = self._DISCORD_MSG_FORMAT_CACHE.get(cache_k)
-        if cached_pair is not None:
-            raw, base_formatted = cached_pair
-        else:
-            raw = clean_corrupted_shortcuts(content)
-            if strip_line_num:
-                raw = "\n".join(strip_leading_line_number(ln, preserve_indent=True) for ln in raw.split("\n"))
-
-            tag_tokens = []
-            if tag_all:
-                tag_tokens.append("@everyone")
-            if mentions:
-                seen_u = set()
-                for m in mentions:
-                    uid = str(m.get("uid") or m.get("id") or "").strip()
-                    if uid and uid not in ("0", "-1") and uid not in seen_u:
-                        seen_u.add(uid)
-                        if uid.isdigit():
-                            if m.get("is_role"):
-                                tag_tokens.append(f"<@&{uid}>")
-                            else:
-                                tag_tokens.append(f"<@{uid}>")
-                        else:
-                            clean_mname = str(m.get("name") or uid).lstrip("@").strip()
-                            tag_tokens.append(f"@{clean_mname}")
-            tag_suffix = (" " + " ".join(tag_tokens)) if tag_tokens else ""
-
-            raw_stripped_check = re.sub(r"<@(?:!|&)?\d+>", "", str(raw or "")).strip()
-            if not raw_stripped_check:
-                raw = "Hệ thống Hệ Thống Đa Luồng điểm danh siêu tốc!"
-
-            unframed_body = self.format_unframed_discord_text(
-                raw, is_heading=is_heading, style_mode=color_mode
-            )
-            if len(unframed_body) + len(tag_suffix) > 1940:
-                max_body_len = max(100, 1940 - len(tag_suffix))
-                unframed_body = unframed_body[:max_body_len].rstrip()
-                if unframed_body.count("**") % 2 == 1:
-                    unframed_body += "**"
-            base_formatted = f"{unframed_body}{tag_suffix}".strip()
-            if len(self._DISCORD_MSG_FORMAT_CACHE) > 6000:
-                for _k in list(self._DISCORD_MSG_FORMAT_CACHE.keys())[:2000]:
-                    self._DISCORD_MSG_FORMAT_CACHE.pop(_k, None)
-            self._DISCORD_MSG_FORMAT_CACHE[cache_k] = (raw, base_formatted)
-
-        if antiband:
-            formatted_content = DiscordStealthAntiBanEngine.append_stealth_tail(
-                base_formatted, channel_id=str(channel_id)
-            )
-        else:
-            formatted_content = DiscordFirewallEngine.sanitize_outbound_text(base_formatted)
-
-        register_system_sent_message(text=formatted_content)
-        register_system_sent_message(text=raw)
-
-        url = DiscordStealthAntiBanEngine.pick_stealth_endpoint(
-            self.token, f"/channels/{channel_id}/messages", self.route_step
-        )
-        pl = {
-            "mobile_network_type": "unknown",
-            "content": formatted_content,
-            "nonce": DiscordStealthAntiBanEngine.generate_snowflake_nonce(),
-            "tts": False,
-            "flags": 0,
-        }
-        if not priority_bypass and is_task_stopped_fast(stop_ev, start_global_epoch, start_box_epoch, channel_id):
-            return None
-        active_sess = DiscordStealthAntiBanEngine.get_priority_session(self.token, is_bot=self.is_bot) if priority_bypass else self.s
-        r = None
-        for _send_try in range(2):
-            if not priority_bypass and is_task_stopped_fast(stop_ev, start_global_epoch, start_box_epoch, channel_id):
-                return None
-            r = ProxyPoolEngine.request_with_fast_failover(
-                active_sess, "POST", url,
-                seed_key=f"{self.token[:16]}_{channel_id}_{self.route_step}_{_send_try}",
-                json=pl, headers=req_headers, timeout=(1.2, 2.5)
-            )
-            if r.cookies:
-                DiscordStealthAntiBanEngine.persist_real_cloudflare_cookies(self.token, self.s.cookies)
-            DiscordStealthAntiBanEngine.record_bucket_headers(channel_id, r.headers, token=self.token)
-            if r.status_code in (200, 201):
-                break
-            if r.status_code == 429 and _send_try == 0:
-                try:
-                    rj = r.json()
-                    retry_after = float(rj.get("retry_after", 0.25))
-                except Exception:
-                    retry_after = 0.25
-                # Nếu retry_after nhỏ (<= 0.28s), nhích 0.02s rồi đổi PRX bắn tiếp ngay; nếu lớn hơn thì thoát ngay trong 0ms để luồng nhảy sang nhóm kế tiếp không bao giờ đơ!
-                if retry_after <= 0.15:
-                    pl["nonce"] = DiscordStealthAntiBanEngine.generate_snowflake_nonce()
-                    continue
-            break
-
-        if r is None:
-            return None
-
-        if r.status_code == 429:
-            try:
-                rj = r.json()
-                retry_after = float(rj.get("retry_after", 0.5))
-                err_code = int(rj.get("code", 0))
-            except Exception:
-                retry_after = 0.5
-                err_code = 0
-            DiscordStealthAntiBanEngine.set_channel_cooldown(channel_id, retry_after, token=self.token)
-            raise Exception(f"429:RateLimit:{retry_after}:DiscordCode_{err_code}")
-
-        if r.status_code in (401, 403, 404):
-            try:
-                err_code = int(r.json().get("code", 0))
-            except Exception:
-                err_code = 0
-            if r.status_code == 401 or err_code in (40001, 40002):
-                raise Exception(f"AuthError:Discord_{r.status_code}_{err_code}")
-            if err_code in (50001, 50013, 10003, 50007) or r.status_code in (403, 404):
-                DiscordStealthAntiBanEngine.set_channel_cooldown(channel_id, 60.0, token=self.token)
-                raise Exception(f"ChannelForbidden:Discord_{r.status_code}_{err_code}")
-            raise Exception(f"HTTP {r.status_code}:Code_{err_code}")
-
-        if r.status_code not in (200, 201):
-            raise Exception(f"HTTP {r.status_code}")
-
-        resp_data = r.json()
-        if isinstance(resp_data, dict) and resp_data.get("id"):
-            register_system_sent_message(msg_id=resp_data["id"], text=formatted_content)
-        return resp_data
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 # ĐỘNG CƠ FACEBOOK MESSENGER LIGHTSPEED MQTT (TÍCH HỢP TỪ CKIEN.ZIP)
 MESSENGER_THEMES_CATALOG = [
@@ -12109,1673 +9947,14 @@ class NativeWebSocketMQTTv31Client:
             pass
 
 class MessengerClient:
-    """Client Giao Thức Facebook Messenger Lightspeed MQTT (Tích hợp nguyên bản từ ckien.zip):
-    - Kết nối trực tiếp tới wss://edge-chat.facebook.com/chat?sid={session_id}&cid={client_id} bằng giao thức MQTT v3.1.
-    - Toàn bộ lệnh gửi tin nhắn, Tag tên (@Tag), Typing, Đổi nền Theme, Tạo Poll, Share Link, Share Contact đều đi qua
-      topic '/ls_req' (app_id: '2220391788200892', label: '46', version_id: '7545284305482586', type: 3) — KHÔNG BỊ META BAN COOKIE!
-    - Nhận lệnh .menu, .nhay, .ngon, .theme, .poll, .stop trực tiếp từ luồng '/t_ms' thời gian thực (< 0.1s) với 0 request HTTP Polling!"""
-
-    _CLIENT_POOL = {}
-    _THREADS_CACHE = {}
-    _THREAD_TYPE_MAP = {}
-    _POOL_LOCK = threading.RLock()
-
-    @classmethod
-    def get_pooled_client(cls, raw_cookies, uid="", force_new=False):
-        c_dict = normalize_messenger_cookies(raw_cookies)
-        u_id = extract_messenger_uid(c_dict, fallback_uid=uid)
-        c_hash = hashlib.md5(json.dumps(c_dict, sort_keys=True).encode("utf-8")).hexdigest()[:12]
-        pkey = f"{u_id}_{c_hash}"
-        now = time.time()
-        with cls._POOL_LOCK:
-            if not force_new and pkey in cls._CLIENT_POOL:
-                entry = cls._CLIENT_POOL[pkey]
-                if now - entry["ts"] < 3600.0 and entry["client"].fb_dtsg:
-                    return entry["client"]
-        client = cls(c_dict, uid=u_id)
-        with cls._POOL_LOCK:
-            cls._CLIENT_POOL[pkey] = {"ts": now, "client": client}
-        return client
-
-    def __init__(self, cookies, uid=""):
-        self.cookies_dict = normalize_messenger_cookies(cookies)
-        self.uid = extract_messenger_uid(self.cookies_dict, fallback_uid=uid)
-        if not self.uid:
-            raise Exception("Cookie Messenger thiếu trường c_user!")
-        if "xs" not in self.cookies_dict:
-            raise Exception("Cookie Messenger thiếu trường xs!")
-
-        self.cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies_dict.items())
-        prof_m = MessengerStealthAntiBanEngine.get_deterministic_profile(self.uid)
-        self.user_agent = prof_m["ua"]
-        self.sec_ch_ua = prof_m["sec_ch_ua"]
-        self.sec_platform = prof_m["platform"]
-        self.last_mqtt_connect_attempt_ts = 0.0
-        self.last_typing_sent_ts = 0.0
-
-        self.s = requests.Session()
-        tls_adapter = Chrome131TLSAdapter(pool_connections=128, pool_maxsize=256, max_retries=1)
-        self.s.mount("https://", tls_adapter)
-        self.s.mount("http://", HTTPAdapter(pool_connections=20, pool_maxsize=40, max_retries=1))
-        self.s.headers.update(MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer="https://www.facebook.com/"))
-        self.s.cookies.update(self.cookies_dict)
-
-        self.fb_dtsg = ""
-        self.jazoest = ""
-        self.lsd = ""
-        self.client_rev = "1015919737"
-        self.last_seq_id = None
-        self.sync_token = None
-        self.last_dtsg_fetch_ts = 0.0
-        self.display_name = f"Mess_{self.uid[-4:]}"
-
-        self.mqtt_client = None
-        self.mqtt_connected = False
-        self.mqtt_lock = threading.RLock()
-        self.ws_req_number = 0
-        self.ws_task_number = 0
-        self.incoming_mqtt_msgs = deque(maxlen=120)
-        self.mqtt_event_callbacks = []
-
-        self._init_session_tokens()
-
-    def register_incoming_callback(self, cb):
-        if cb and cb not in self.mqtt_event_callbacks:
-            self.mqtt_event_callbacks.append(cb)
-
-    def _sync_rotated_cookies(self):
-        try:
-            jar_dict = self.s.cookies.get_dict()
-            if jar_dict.get("c_user") and jar_dict.get("xs"):
-                self.cookies_dict.update(jar_dict)
-                self.cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies_dict.items())
-                MessengerStealthAntiBanEngine.save_vault_state(
-                    self.uid,
-                    fb_dtsg=self.fb_dtsg,
-                    jazoest=self.jazoest,
-                    lsd=self.lsd,
-                    cookies_dict=self.cookies_dict,
-                    user_name=self.display_name,
-                    last_seq_id=self.last_seq_id or "",
-                    client_rev=self.client_rev,
-                )
-        except Exception:
-            pass
-
-    @staticmethod
-    def _extract_dtsg_from_text(text):
-        if not text:
-            return ""
-        patterns = [
-            # Bắt chuẩn DTSGInitialData / DTSGInitData kể cả khi async_get_token đứng trước token trong JSON
-            r'"DTSGInit(?:ial)?Data"\s*,\s*\[\]\s*,\s*\{[^\}]{0,380}?"token"\s*:\s*"([^"\s]{12,})"',
-            r'"DTSG"\s*,\s*\[\]\s*,\s*\{[^\}]{0,380}?"token"\s*:\s*"([^"\s]{12,})"',
-            r'"dtsg"\s*:\s*\{[^\}]{0,260}?"token"\s*:\s*"([^"\s]{12,})"',
-            r'"dtsg_ag"\s*:\s*\{[^\}]{0,260}?"token"\s*:\s*"([^"\s]{12,})"',
-            r'name="fb_dtsg"\s+value="([^"\s]{12,})"',
-            r'value="([^"\s]{12,})"\s+name="fb_dtsg"',
-            r'"fb_dtsg"\s*:\s*"([^"\s]{12,})"',
-            r'fb_dtsg\\"\s*:\s*\\"([^\\"\s]{12,})\\"',
-            # Bắt mọi token chuẩn của Facebook/Messenger (NA..., AQ..., NH..., AD..., v.v. có dấu hai chấm)
-            r'"token"\s*:\s*"([A-Za-z0-9_\-]{8,}:[A-Za-z0-9_\-:]{8,})"',
-            r'"async_get_token"\s*:\s*"([^"\s]{15,})"',
-        ]
-        for pat in patterns:
-            m = re.search(pat, text)
-            if m and m.group(1):
-                cand = m.group(1).strip()
-                try:
-                    if "\\u" in cand or "\\x" in cand:
-                        cand = cand.encode("utf-8").decode("unicode_escape")
-                except Exception:
-                    pass
-                if len(cand) >= 12 and " " not in cand and "<" not in cand and not cand.startswith("NAc_fallback"):
-                    return cand
-        return ""
-
-    def _init_session_tokens(self, force_refresh=False):
-        """Trích xuất fb_dtsg, jazoest, clientRevision chuẩn dataGetHome từ ckien.zip (Lưu cache 60 phút trong SQLite)."""
-        now = time.time()
-        if not force_refresh:
-            cached = MessengerStealthAntiBanEngine.get_vault_state(self.uid)
-            if cached and cached.get("fb_dtsg") and not str(cached["fb_dtsg"]).startswith("NAc_fallback"):
-                self.fb_dtsg = cached["fb_dtsg"]
-                self.jazoest = cached.get("jazoest") or MessengerStealthAntiBanEngine.compute_jazoest(self.fb_dtsg)
-                self.lsd = cached.get("lsd") or ""
-                self.last_seq_id = cached.get("last_seq_id") or None
-                self.client_rev = cached.get("client_rev") or "1015919737"
-                if cached.get("user_name"):
-                    self.display_name = cached["user_name"]
-                if cached.get("cookies"):
-                    self.cookies_dict.update(cached["cookies"])
-                    self.s.cookies.update(cached["cookies"])
-                    self.cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies_dict.items())
-                OWNER_UIDS_CACHE.add(self.uid)
-                return True
-
-        if force_refresh and (now - self.last_dtsg_fetch_ts < 120.0) and self.fb_dtsg:
-            return True
-        self.last_dtsg_fetch_ts = now
-
-        nav_headers = {
-            "Cookie": self.cookie_str,
-            "User-Agent": self.user_agent,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1",
-        }
-
-        pc_bound = FacebookPCDeviceGuard.bind_pc_profile_to_cookies(self.uid, self.cookies_dict)
-        self.pc_name = pc_bound["pc_name"]
-        self.user_agent = pc_bound["ua"]
-        self.sec_ch_ua = pc_bound["sec_ch_ua"]
-        self.sec_platform = pc_bound["platform"]
-        self.cookies_dict.update(pc_bound["cookies"])
-        self.s.cookies.update(self.cookies_dict)
-        self.cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies_dict.items())
-        nav_headers["Cookie"] = self.cookie_str
-        nav_headers["User-Agent"] = self.user_agent
-        nav_headers["Sec-Ch-Ua"] = self.sec_ch_ua
-        nav_headers["Sec-Ch-Ua-Mobile"] = "?0"
-        nav_headers["Sec-Ch-Ua-Platform"] = self.sec_platform
-
-        # ANTI-HACK FACEBOOK: Chỉ kết nối bằng trình duyệt Máy Tính (www.facebook.com / www.messenger.com),
-        # TUYỆT ĐỐI KHÔNG BAO GIỜ chạm vào mbasic.facebook.com làm nổ cờ báo 'Tài khoản bị hack'!
-        for site in ("https://www.facebook.com/", "https://www.messenger.com/"):
-            if self.fb_dtsg:
-                break
-            try:
-                r = self.s.get(site, headers=nav_headers, timeout=10, allow_redirects=True)
-                if "checkpoint" in r.url.lower():
-                    raise Exception("Tài khoản Facebook đang vướng Checkpoint!")
-                html = r.text or ""
-                cand = self._extract_dtsg_from_text(html)
-                if cand:
-                    self.fb_dtsg = cand
-                m_jaz = re.search(r"jazoest=(\d+)", html)
-                if m_jaz:
-                    self.jazoest = m_jaz.group(1).strip()
-                m_rev = re.search(r'client_revision"\s*:\s*(\d+)', html)
-                if m_rev:
-                    self.client_rev = m_rev.group(1).strip()
-                m_lsd = re.search(r'"LSD"\s*,\s*\[\]\s*,\s*\{\s*"token"\s*:\s*"([^"]+)"', html)
-                if m_lsd:
-                    self.lsd = m_lsd.group(1).strip()
-                mn = re.search(r'"NAME"\s*:\s*"([^"]+)"', html)
-                if mn and mn.group(1):
-                    raw_n = mn.group(1).strip()
-                    try:
-                        if "\\u" in raw_n:
-                            raw_n = raw_n.encode("utf-8").decode("unicode_escape")
-                    except Exception:
-                        pass
-                    if raw_n and raw_n.lower() not in ("messenger", "facebook"):
-                        self.display_name = raw_n[:45]
-            except Exception as e:
-                if "Checkpoint" in str(e):
-                    raise e
-
-        # Thử thêm các cổng Desktop nhẹ (messages/t, ajax/dtsg) nếu trang chủ rút gọn chưa nhả fb_dtsg
-        if not self.fb_dtsg:
-            for extra_u in (
-                "https://www.facebook.com/messages/",
-                "https://www.messenger.com/t/",
-                "https://www.facebook.com/ajax/dtsg/?__a=1&__req=1",
-            ):
-                try:
-                    r_ex = self.s.get(extra_u, headers=nav_headers, timeout=9, allow_redirects=True)
-                    if r_ex.status_code == 200 and r_ex.text:
-                        cand_ex = self._extract_dtsg_from_text(r_ex.text)
-                        if cand_ex:
-                            self.fb_dtsg = cand_ex
-                            break
-                except Exception:
-                    pass
-
-        if not self.fb_dtsg:
-            seed_h = hashlib.sha256(f"{self.uid}:{self.cookies_dict.get('xs')}".encode("utf-8")).hexdigest()[:24]
-            self.fb_dtsg = f"NAc_fallback_{seed_h}:{int(time.time())}"
-
-        if not self.jazoest:
-            self.jazoest = MessengerStealthAntiBanEngine.compute_jazoest(self.fb_dtsg)
-        OWNER_UIDS_CACHE.add(self.uid)
-        GLOBAL_USER_NAME_CACHE[self.uid] = self.display_name
-        if not str(self.fb_dtsg).startswith("NAc_fallback"):
-            self._sync_rotated_cookies()
-        return True
-
-    def _form_all(self, friendly_name=None, doc_id=None, require_graphql=0):
-        data_form = {
-            "fb_dtsg": self.fb_dtsg,
-            "jazoest": self.jazoest,
-            "__a": 1,
-            "__user": str(self.uid),
-            "__req": MessengerStealthAntiBanEngine.next_req_b36(),
-            "__rev": self.client_rev,
-            "av": str(self.uid),
-        }
-        if require_graphql is None:
-            data_form["fb_api_caller_class"] = "RelayModern"
-            data_form["fb_api_req_friendly_name"] = friendly_name
-            data_form["server_timestamps"] = "true"
-            data_form["doc_id"] = str(doc_id)
-        return data_form
-
-    def _parse_graphql_thread_nodes(self, raw_txt, threads_out, seen_tids, latest_msgs_out=None):
-        if not raw_txt:
-            return
-        clean_txt = raw_txt.replace("for (;;);", "").replace("for(;;);", "").strip()
-        for line in clean_txt.split("\n"):
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                obj = json.loads(line)
-                mt_root = (
-                    ((obj.get("o0") or {}).get("data") or {}).get("viewer", {}).get("message_threads")
-                    or (obj.get("data") or {}).get("viewer", {}).get("message_threads")
-                    or {}
-                )
-                if mt_root.get("sync_sequence_id"):
-                    self.last_seq_id = str(mt_root["sync_sequence_id"])
-
-                nodes = mt_root.get("nodes") or []
-                for nd in nodes:
-                    if not isinstance(nd, dict):
-                        continue
-                    tk_obj = nd.get("thread_key") or {}
-                    tid = str(tk_obj.get("thread_fbid") or tk_obj.get("other_user_id") or "").strip()
-                    if not tid:
-                        continue
-                    is_grp = bool(tk_obj.get("thread_fbid")) or (nd.get("thread_type") in ("GROUP", "COMMUNITY_FOLDER"))
-                    self._THREAD_TYPE_MAP[tid] = is_grp
-                    t_name = (nd.get("name") or "").strip()
-
-                    all_p = nd.get("all_participants") or {}
-                    part_nodes = all_p.get("nodes") or [e.get("node") for e in (all_p.get("edges") or []) if isinstance(e, dict)]
-                    mems = []
-                    for pn in part_nodes:
-                        actor = (pn.get("messaging_actor") if isinstance(pn, dict) else None) or {}
-                        p_uid = str(actor.get("id") or "").strip()
-                        p_name = (actor.get("name") or actor.get("short_name") or "").strip()
-                        if p_uid and p_name:
-                            GLOBAL_USER_NAME_CACHE[p_uid] = p_name
-                            mems.append({"id": p_uid, "uid": p_uid, "name": p_name})
-
-                    if mems:
-                        with GROUP_CACHE_LOCK:
-                            GROUP_MEMBERS_CACHE[f"mess_{tid}"] = {"ts": time.time(), "members": mems}
-
-                    if not t_name:
-                        other_names = [m["name"] for m in mems if m["uid"] != self.uid]
-                        t_name = ", ".join(other_names[:4]) if other_names else f"Box Mess {tid[-5:]}"
-
-                    if tid not in seen_tids:
-                        seen_tids.add(tid)
-                        prefix = "[Box Mess]" if is_grp else "[Chat Mess]"
-                        threads_out.append({
-                            "id": tid,
-                            "name": f"{prefix} {t_name}",
-                            "type": "messenger_thread",
-                            "is_group": is_grp,
-                            "members": len(mems) if mems else ("Nhóm" if is_grp else 2),
-                        })
-
-                    if latest_msgs_out is not None:
-                        last_m_nodes = (nd.get("last_message") or {}).get("nodes") or []
-                        for lm in last_m_nodes:
-                            if not isinstance(lm, dict):
-                                continue
-                            ts_prec = str(
-                                lm.get("timestamp_precise")
-                                or lm.get("timestamp")
-                                or nd.get("updated_time_precise")
-                                or ""
-                            ).strip()
-                            raw_mid = str(lm.get("message_id") or lm.get("offline_threading_id") or "").strip()
-                            txt_body = (
-                                ((lm.get("message") or {}).get("text") if isinstance(lm.get("message"), dict) else None)
-                                or lm.get("snippet")
-                                or nd.get("snippet")
-                                or ""
-                            ).strip()
-                            if raw_mid and ts_prec and ts_prec not in raw_mid:
-                                mid = f"{raw_mid}_{ts_prec}"
-                            elif raw_mid:
-                                mid = raw_mid
-                            elif ts_prec:
-                                mid = f"mid_{tid}_{ts_prec}_{hashlib.md5(txt_body.encode('utf-8', 'ignore')).hexdigest()[:6]}"
-                            else:
-                                mid = f"mid_{tid}_{int(time.time()*1000)}_{hashlib.md5(txt_body.encode('utf-8', 'ignore')).hexdigest()[:6]}"
-                            sender_uid = str(
-                                ((lm.get("message_sender") or {}).get("messaging_actor") or {}).get("id")
-                                or (lm.get("message_sender") or {}).get("id")
-                                or self.uid
-                            )
-                            if txt_body:
-                                latest_msgs_out.append({
-                                    "thread_id": tid,
-                                    "is_group": is_grp,
-                                    "id": mid,
-                                    "ts": ts_prec,
-                                    "content": txt_body,
-                                    "sender_id": sender_uid,
-                                    "mentions": [],
-                                })
-            except Exception:
-                continue
-
-    def get_threads(self, use_cache=True, latest_msgs_out=None):
-        """Lấy danh sách Box Messenger & đồng bộ sync_sequence_id (last_seq_id) chuẩn fbTools từ ckien.zip."""
-        if use_cache and latest_msgs_out is None:
-            with self._POOL_LOCK:
-                c = self._THREADS_CACHE.get(self.uid)
-                if c and (time.time() - c["ts"] < 300.0) and c.get("data"):
-                    return list(c["data"])
-
-        threads = []
-        seen_tids = set()
-
-        try:
-            q_payload = self._form_all(require_graphql=0)
-            q_payload["queries"] = MessengerStealthAntiBanEngine.json_minimal({
-                "o0": {
-                    "doc_id": "3336396659757871",
-                    "query_params": {
-                        "limit": 20,
-                        "before": None,
-                        "tags": ["INBOX"],
-                        "includeDeliveryReceipts": False,
-                        "includeSeqID": True
-                    }
-                }
-            })
-            hdrs = {
-                "authority": "www.facebook.com",
-                "accept": "*/*",
-                "accept-language": "en-US,en;q=0.9,vi;q=0.8",
-                "content-type": "application/x-www-form-urlencoded",
-                "origin": "https://www.facebook.com",
-                "referer": "https://www.facebook.com/",
-                "sec-ch-ua": getattr(self, "sec_ch_ua", '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'),
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": getattr(self, "sec_platform", '"Windows"'),
-                "sec-fetch-dest": "empty",
-                "sec-fetch-mode": "cors",
-                "sec-fetch-site": "same-origin",
-                "user-agent": self.user_agent,
-                "x-fb-friendly-name": "CometChatInboxQuery",
-            }
-            if not self.fb_dtsg or str(self.fb_dtsg).startswith("NAc_fallback"):
-                self.last_dtsg_fetch_ts = 0.0
-                self._init_session_tokens(force_refresh=True)
-                q_payload["fb_dtsg"] = self.fb_dtsg
-                q_payload["jazoest"] = self.jazoest
-            for gql_dom in ("https://www.facebook.com", "https://www.messenger.com"):
-                hdrs["authority"] = gql_dom.replace("https://", "")
-                hdrs["origin"] = gql_dom
-                hdrs["referer"] = f"{gql_dom}/"
-                r = self.s.post(f"{gql_dom}/api/graphqlbatch/", data=q_payload, headers=hdrs, timeout=12)
-                if r.status_code == 200 and r.text:
-                    if ('"error":1357004' in r.text or '"error":1357001' in r.text or "1357004" in r.text[:240]):
-                        self.last_dtsg_fetch_ts = 0.0
-                        self.fb_dtsg = ""
-                        self._init_session_tokens(force_refresh=True)
-                        q_payload["fb_dtsg"] = self.fb_dtsg
-                        q_payload["jazoest"] = self.jazoest
-                        r = self.s.post(f"{gql_dom}/api/graphqlbatch/", data=q_payload, headers=hdrs, timeout=12)
-                    self._parse_graphql_thread_nodes(r.text, threads, seen_tids, latest_msgs_out=latest_msgs_out)
-                    if not str(self.fb_dtsg).startswith("NAc_fallback"):
-                        self._sync_rotated_cookies()
-                    if threads or latest_msgs_out:
-                        break
-        except Exception:
-            pass
-
-        if threads:
-            with self._POOL_LOCK:
-                self._THREADS_CACHE[self.uid] = {"ts": time.time(), "data": list(threads)}
-        return threads
-
-    def get_thread_members(self, thread_id, use_cache=True):
-        """Lấy toàn bộ danh sách thành viên trong Box Messenger bằng doc_id 3449967031715030 (từ ckien.zip/module/username.py)."""
-        tid_s = str(thread_id).strip()
-        cache_k = f"mess_{tid_s}"
-        if use_cache:
-            with GROUP_CACHE_LOCK:
-                c = GROUP_MEMBERS_CACHE.get(cache_k)
-                if c and (time.time() - c["ts"] < 300.0) and c.get("members"):
-                    return list(c["members"])
-
-        try:
-            form_q = {
-                "o0": {
-                    "doc_id": "3449967031715030",
-                    "query_params": {
-                        "id": tid_s,
-                        "message_limit": 0,
-                        "load_messages": False,
-                        "load_read_receipts": False,
-                        "before": None
-                    }
-                }
-            }
-            submit_data = {
-                "queries": json.dumps(form_q),
-                "batch_name": "MessengerGraphQLThreadFetcher",
-                "fb_dtsg": self.fb_dtsg,
-                "jazoest": self.jazoest,
-            }
-            hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer="https://www.facebook.com/")
-            r = self.s.post("https://www.facebook.com/api/graphqlbatch/", data=submit_data, headers=hdrs, timeout=12)
-            if r.status_code == 200 and r.text:
-                clean_t = r.text.replace("for (;;);", "").replace("for(;;);", "").strip()
-                mems = []
-                for line in clean_t.split("\n"):
-                    line = line.strip()
-                    if not line.startswith("{") or line.startswith('{"batch_name"'):
-                        continue
-                    try:
-                        d_obj = json.loads(line)
-                        mt = ((d_obj.get("o0") or {}).get("data") or {}).get("message_thread") or {}
-                        edges = (mt.get("all_participants") or {}).get("edges") or []
-                        for ed in edges:
-                            actor = ((ed.get("node") if isinstance(ed, dict) else None) or {}).get("messaging_actor") or {}
-                            p_uid = str(actor.get("id") or "").strip()
-                            p_name = str(actor.get("name") or actor.get("short_name") or "").strip()
-                            if p_uid and p_name:
-                                GLOBAL_USER_NAME_CACHE[p_uid] = p_name
-                                mems.append({"id": p_uid, "uid": p_uid, "name": p_name})
-                    except Exception:
-                        continue
-                if mems:
-                    with GROUP_CACHE_LOCK:
-                        GROUP_MEMBERS_CACHE[cache_k] = {"ts": time.time(), "members": mems}
-                    return mems
-        except Exception:
-            pass
-
-        try:
-            self.get_threads(use_cache=False)
-            with GROUP_CACHE_LOCK:
-                c = GROUP_MEMBERS_CACHE.get(cache_k)
-                if c and c.get("members"):
-                    return list(c["members"])
-        except Exception:
-            pass
-        return []
-
-    # KẾT NỐI & ĐỒNG BỘ GIAO THỨC MQTT LIGHTSPEED (/ls_req & /t_ms TỪ CKIEN.ZIP)
-    def _on_mqtt_connect(self, client, userdata, flags, rc):
-        if rc == 0:
-            self.mqtt_connected = True
-            topics = [
-                "/ls_resp",
-                "/thread_typing",
-                "/orca_typing_notifications",
-                "/t_ms",
-                "/mercury",
-                "/messaging_events",
-            ]
-            for tp in topics:
-                client.subscribe(tp, qos=1)
-
-            client.publish(
-                topic="/ls_app_settings",
-                payload=MessengerStealthAntiBanEngine.json_minimal({
-                    "ls_fdid": "",
-                    "ls_sv": "6928813347213944"
-                }),
-                qos=1,
-                retain=False,
-            )
-
-            queue_pl = {
-                "sync_api_version": 10,
-                "max_deltas_able_to_process": 1000,
-                "delta_batch_size": 500,
-                "encoding": "JSON",
-                "entity_fbid": str(self.uid),
-            }
-            if self.sync_token:
-                tp_sync = "/messenger_sync_get_diffs"
-                queue_pl["last_seq_id"] = self.last_seq_id or "1"
-                queue_pl["sync_token"] = self.sync_token
-            else:
-                tp_sync = "/messenger_sync_create_queue"
-                queue_pl["initial_titan_sequence_id"] = self.last_seq_id or "1"
-                queue_pl["device_params"] = None
-
-            client.publish(
-                topic=tp_sync,
-                payload=MessengerStealthAntiBanEngine.json_minimal(queue_pl),
-                qos=1,
-                retain=False,
-            )
-        else:
-            self.mqtt_connected = False
-
-    def _on_mqtt_disconnect(self, client, userdata, rc):
-        self.mqtt_connected = False
-
-    @staticmethod
-    def _decode_mqtt_payload_str(raw_bytes):
-        if not raw_bytes:
-            return ""
-        if isinstance(raw_bytes, str):
-            s = raw_bytes.strip()
-            idx_b = s.find("{")
-            return s[idx_b:] if idx_b != -1 else ""
-        b = bytes(raw_bytes)
-        for wbits in (zlib.MAX_WBITS, -zlib.MAX_WBITS, 16 + zlib.MAX_WBITS):
-            try:
-                dec = zlib.decompress(b, wbits).decode("utf-8", errors="ignore").strip()
-                idx_b = dec.find("{")
-                if idx_b != -1:
-                    return dec[idx_b:]
-            except Exception:
-                pass
-        s = b.decode("utf-8", errors="ignore").strip()
-        idx_b = s.find("{")
-        return s[idx_b:] if idx_b != -1 else ""
-
-    def _on_mqtt_message(self, client, userdata, msg):
-        try:
-            payload_str = self._decode_mqtt_payload_str(msg.payload)
-            if not payload_str or not payload_str.startswith("{"):
-                return
-            parsed = json.loads(payload_str)
-            if msg.topic in ("/ls_resp", "/messaging_events", "/mercury"):
-                # Bắt trực tiếp lệnh từ luồng Lightspeed /ls_resp (insertNewMessage / addMessage)
-                pl_inner = parsed.get("payload")
-                if isinstance(pl_inner, str) and pl_inner.strip().startswith("{"):
-                    # Giải mã các lệnh .menu, .help, .n, .g, .t, .ta... nằm trong Lightspeed step
-                    for m_ls in re.finditer(r'"(?:insertNewMessage|sendMessage|addMessage)"\s*,\s*"([^"]{1,160})"', pl_inner):
-                        cand_txt = m_ls.group(1).strip()
-                        if is_direct_user_command_text(cand_txt):
-                            tids_m = re.findall(r'\b(\d{10,22})\b', pl_inner)
-                            tid_ls = next((x for x in tids_m if x != str(self.uid)), str(self.uid))
-                            ev_ls = {
-                                "thread_id": tid_ls,
-                                "is_group": True,
-                                "id": f"ls_{int(time.time()*1000)}_{ hash(cand_txt) & 0xFFFF }",
-                                "content": cand_txt,
-                                "sender_id": str(self.uid),
-                                "mentions": [],
-                            }
-                            self.incoming_mqtt_msgs.append(ev_ls)
-                            for cb in list(self.mqtt_event_callbacks):
-                                try:
-                                    cb(ev_ls)
-                                except Exception:
-                                    pass
-            if msg.topic == "/t_ms":
-                if "firstDeltaSeqId" in parsed and "syncToken" in parsed:
-                    self.last_seq_id = str(parsed["firstDeltaSeqId"])
-                    self.sync_token = str(parsed["syncToken"])
-                if "lastIssuedSeqId" in parsed:
-                    self.last_seq_id = str(parsed["lastIssuedSeqId"])
-
-                for delta in (parsed.get("deltas") or []):
-                    if not isinstance(delta, dict):
-                        continue
-                    meta = delta.get("messageMetadata") or {}
-                    body_txt = delta.get("body")
-                    if body_txt is None and delta.get("class") != "NewMessage":
-                        continue
-                    body_s = str(body_txt or "").strip()
-                    if not body_s:
-                        continue
-                    tk = meta.get("threadKey") or {}
-                    tid = str(tk.get("threadFbId") or tk.get("otherUserFbId") or "").strip()
-                    is_grp = bool(tk.get("threadFbId"))
-                    if tid:
-                        self._THREAD_TYPE_MAP[tid] = is_grp
-                    sender_id = str(meta.get("actorFbId") or self.uid).strip()
-                    mid = str(meta.get("messageId") or meta.get("offlineThreadingId") or "")
-
-                    # Trích xuất danh sách @Tag từ trường prng của Messenger MQTT Delta
-                    raw_mentions = []
-                    try:
-                        prng_raw = (delta.get("data") or {}).get("prng")
-                        if prng_raw:
-                            prng_list = json.loads(prng_raw) if isinstance(prng_raw, str) else prng_raw
-                            if isinstance(prng_list, list):
-                                for pm in prng_list:
-                                    if isinstance(pm, dict) and pm.get("i"):
-                                        p_uid = str(pm["i"])
-                                        p_off = int(pm.get("o", 0))
-                                        p_len = int(pm.get("l", 0))
-                                        p_name = GLOBAL_USER_NAME_CACHE.get(p_uid, "")
-                                        if not p_name and p_len > 0 and p_off + p_len <= len(body_s):
-                                            p_name = body_s[p_off:p_off + p_len].lstrip("@").strip()
-                                        raw_mentions.append({
-                                            "uid": p_uid,
-                                            "id": p_uid,
-                                            "name": p_name or f"User_{p_uid[-4:]}",
-                                            "pos": p_off,
-                                            "len": p_len,
-                                        })
-                    except Exception:
-                        pass
-
-                    ev_item = {
-                        "thread_id": tid,
-                        "is_group": is_grp,
-                        "id": mid,
-                        "content": body_s,
-                        "sender_id": sender_id,
-                        "mentions": raw_mentions,
-                    }
-                    self.incoming_mqtt_msgs.append(ev_item)
-                    for cb in list(self.mqtt_event_callbacks):
-                        try:
-                            cb(ev_item)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-    def ensure_mqtt_connected(self):
-        with self.mqtt_lock:
-            if self.mqtt_connected and self.mqtt_client is not None:
-                return True
-
-            if not self.last_seq_id:
-                try:
-                    self.get_threads(use_cache=True)
-                except Exception:
-                    pass
-                if not self.last_seq_id:
-                    self.last_seq_id = "1"
-
-            session_id = MessengerStealthAntiBanEngine.generate_session_id()
-            client_id = MessengerStealthAntiBanEngine.generate_client_id()
-            user_cfg = {
-                "a": self.user_agent,
-                "u": str(self.uid),
-                "s": session_id,
-                "chat_on": True,
-                "fg": False,
-                "d": client_id,
-                "ct": "websocket",
-                "aid": "219994525426954",
-                "mqtt_sid": "",
-                "cp": 3,
-                "ecp": 10,
-                "st": [],
-                "pm": [],
-                "dc": "",
-                "no_auto_fg": True,
-                "gas": None,
-                "pack": [],
-            }
-            ws_path = f"/chat?sid={session_id}&cid={client_id}"
-            username_json = MessengerStealthAntiBanEngine.json_minimal(user_cfg)
-
-            try:
-                if self.mqtt_client:
-                    try:
-                        self.mqtt_client.disconnect()
-                    except Exception:
-                        pass
-                ws_mqtt = NativeWebSocketMQTTv31Client(
-                    cookie_str=self.cookie_str,
-                    user_agent=self.user_agent,
-                    username_json=username_json,
-                    on_connect_cb=self._on_mqtt_connect,
-                    on_message_cb=self._on_mqtt_message,
-                    on_disconnect_cb=self._on_mqtt_disconnect,
-                )
-                if ws_mqtt.connect(ws_path=ws_path, host="edge-chat.facebook.com", port=443, keepalive=12):
-                    self.mqtt_client = ws_mqtt
-                    self.mqtt_connected = True
-                    return True
-            except Exception:
-                self.mqtt_connected = False
-            return False
-
-    def attach_mentions_real_messenger(self, core_msg, mentions=None, tag_all=False, thread_id=None):
-        final = core_msg if core_msg else ""
-        mention_objs = []
-
-        if tag_all:
-            tag_token = "@everyone"
-            idx_ex = final.find(tag_token)
-            if idx_ex == -1:
-                sep = " " if (final and not final.endswith((" ", "\n"))) else ""
-                idx_ex = len(final + sep)
-                final = final + sep + tag_token
-            mention_objs.append({
-                "id": str(thread_id or self.uid),
-                "tag": tag_token,
-                "offset": idx_ex,
-                "length": len(tag_token),
-                "type": "t",
-            })
-
-        if mentions:
-            seen_u = set()
-            for m in mentions:
-                if not isinstance(m, dict):
-                    continue
-                uid = str(m.get("uid") or m.get("id") or "").strip()
-                if not uid or uid in ("0", "-1") or uid in seen_u:
-                    continue
-                seen_u.add(uid)
-                raw_name = str(m.get("name") or GLOBAL_USER_NAME_CACHE.get(uid) or f"User_{uid[-4:]}").strip().lstrip("@")
-                tag_token = f"@{raw_name}"
-                idx_pos = final.find(tag_token)
-                if idx_pos == -1:
-                    sep = " " if (final and not final.endswith((" ", "\n"))) else ""
-                    idx_pos = len(final + sep)
-                    final = final + sep + tag_token
-                mention_objs.append({
-                    "id": uid,
-                    "tag": tag_token,
-                    "offset": idx_pos,
-                    "length": len(tag_token),
-                    "type": "p",
-                })
-
-        return final, mention_objs
-
-    def send_message_mqtt(self, thread_id, final_msg, mention_objs=None, reply_msg_id=None):
-        """Gửi tin nhắn & Tag tên thật qua MQTT /ls_req chuẩn 100% từ ckien.zip/module/nhaytagmqtt.py & fb.py."""
-        if not self.ensure_mqtt_connected():
-            raise Exception("MQTTNotConnected")
-
-        tid_s = str(thread_id).strip()
-        tid_val = int(tid_s) if tid_s.isdigit() else tid_s
-        otid = MessengerStealthAntiBanEngine.generate_offline_threading_id()
-        register_system_sent_message(msg_id=otid, client_id=otid, text=final_msg)
-
-        with self.mqtt_lock:
-            self.ws_req_number += 1
-            self.ws_task_number += 1
-            req_id = self.ws_req_number
-            t_id_1 = self.ws_task_number
-            self.ws_task_number += 1
-            t_id_2 = self.ws_task_number
-
-        task_payload = {
-            "initiating_source": 0,
-            "multitab_env": 0,
-            "otid": otid,
-            "send_type": 1,
-            "skip_url_preview_gen": 0,
-            "source": 0,
-            "sync_group": 1,
-            "text": str(final_msg),
-            "text_has_links": 0,
-            "thread_id": tid_val,
-        }
-
-        if reply_msg_id:
-            task_payload["reply_metadata"] = {
-                "reply_source_id": str(reply_msg_id),
-                "reply_source_type": 1,
-                "reply_type": 0,
-            }
-
-        if mention_objs and final_msg:
-            valid_m = get_valid_mentions_ckien(final_msg, mention_objs)
-            if valid_m:
-                task_payload["mention_data"] = {
-                    "mention_ids": ",".join(str(x["i"]) for x in valid_m),
-                    "mention_lengths": ",".join(str(x["l"]) for x in valid_m),
-                    "mention_offsets": ",".join(str(x["o"]) for x in valid_m),
-                    "mention_types": ",".join(str(x.get("t", "p")) for x in valid_m),
-                }
-
-        task_send = {
-            "failure_count": None,
-            "label": "46",
-            "payload": MessengerStealthAntiBanEngine.json_minimal(task_payload),
-            "queue_name": tid_s,
-            "task_id": t_id_1,
-        }
-
-        content = {
-            "app_id": "2220391788200892",
-            "payload": MessengerStealthAntiBanEngine.json_minimal({
-                "data_trace_id": None,
-                "epoch_id": int(MessengerStealthAntiBanEngine.generate_offline_threading_id()),
-                "tasks": [task_send],
-                "version_id": "7545284305482586",
-            }),
-            "request_id": req_id,
-            "type": 3,
-        }
-
-        self.mqtt_client.publish(
-            topic="/ls_req",
-            payload=MessengerStealthAntiBanEngine.json_minimal(content),
-            qos=1,
-            retain=False,
-        )
-        return True
-
-    # 12 NGUỒN FAKE SOẠN TIN NHẮN ĐA GIAO THỨC (MULTI-SOURCE FAKE TYPING ENGINE) + ANTI-BAN COOKIE DIE SHIELD
-    MESSENGER_TYPING_SOURCES = [
-        {"id": "ls_typing_v1", "name": "MQTT Lightspeed Typing v1 (/ls_req label=3, attr=0)", "proto": "mqtt"},
-        {"id": "ls_typing_v2", "name": "MQTT Lightspeed Voice/Media Typing (/ls_req label=3, attr=1)", "proto": "mqtt"},
-        {"id": "mqtt_thread_typing", "name": "MQTT /thread_typing Realtime Socket", "proto": "mqtt"},
-        {"id": "mqtt_orca_typing", "name": "MQTT /orca_typing_notifications Mobile Bridge", "proto": "mqtt"},
-        {"id": "mqtt_t_typ", "name": "MQTT /t_typ Fast Frame", "proto": "mqtt"},
-        {"id": "mqtt_orca_presence", "name": "MQTT /orca_presence Active Composer State", "proto": "mqtt"},
-        {"id": "http_mercury_chat", "name": "HTTP Facebook Mercury Chat (typ.php?source=mercury-chat)", "proto": "http"},
-        {"id": "http_messenger_comet", "name": "HTTP Messenger Web Comet (typ.php?source=messenger-web-comet)", "proto": "http"},
-        {"id": "http_titan_web", "name": "HTTP Facebook Titan Webchat (typ.php?source=titan-web)", "proto": "http"},
-        {"id": "http_chat_tab", "name": "HTTP Facebook Chat Tab Dock (typ.php?source=chat_tab)", "proto": "http"},
-        {"id": "http_jewel_dropdown", "name": "HTTP Messenger Jewel Dropdown (typ.php?source=jewel)", "proto": "http"},
-        {"id": "gql_comet_typing", "name": "GraphQL Comet Typing Mutation (useCometChatTypingMutation)", "proto": "graphql"},
-    ]
-
-    def send_typing_mqtt(self, thread_id, is_typing=True, is_group=None, multi_source=True):
-        """
-        Siêu Engine Fake Soạn Tin Nhắn 12 Nguồn cho Facebook Messenger:
-        - Kết hợp đồng thời 6 kênh MQTT WebSocket (/ls_req v1+v2, /thread_typing, /orca_typing_notifications, /t_typ, /orca_presence)
-          và 6 kênh HTTP/GraphQL (mercury-chat, messenger-web-comet, titan-web, chat_tab, jewel, Comet GraphQL).
-        - Vừa hiển thị hiệu ứng nhấp nháy đang soạn tin nhắn cực chuẩn trên cả Box Nhóm lẫn Chat Riêng,
-          vừa đóng vai trò Khiên Chống Die Cookie (giả lập nhịp gõ phím tự nhiên của người thật trước khi gửi tin).
-        """
-        tid_s = str(thread_id).strip()
-        if tid_s.lower().startswith("t_"):
-            tid_s = tid_s[2:]
-        if is_group is None:
-            is_group = self._THREAD_TYPE_MAP.get(tid_s, True)
-        state_int = 1 if is_typing else 0
-        fired_cnt = 0
-
-        # TẦNG 1: Bắn qua 6 nguồn MQTT WebSocket (Độ trễ 0ms, 0% rủi ro Checkpoint)
-        if self.ensure_mqtt_connected() and self.mqtt_client:
-            grp_candidates = [1 if is_group else 0]
-            if tid_s not in self._THREAD_TYPE_MAP and multi_source:
-                grp_candidates = [1, 0]
-            for attr_v in ([0, 1] if multi_source else [0]):
-                for g_flag in grp_candidates:
-                    try:
-                        with self.mqtt_lock:
-                            self.ws_req_number += 1
-                            req_id = self.ws_req_number
-                        task_payload = {
-                            "thread_key": int(tid_s) if tid_s.isdigit() else tid_s,
-                            "is_group_thread": g_flag,
-                            "is_typing": state_int,
-                            "attribution": attr_v,
-                        }
-                        content = {
-                            "app_id": "2220391788200892",
-                            "payload": MessengerStealthAntiBanEngine.json_minimal({
-                                "label": "3",
-                                "payload": MessengerStealthAntiBanEngine.json_minimal(task_payload),
-                                "version": "25393437286970779",
-                            }),
-                            "request_id": req_id,
-                            "type": 4,
-                        }
-                        self.mqtt_client.publish(
-                            topic="/ls_req",
-                            payload=MessengerStealthAntiBanEngine.json_minimal(content),
-                            qos=1,
-                            retain=False,
-                        )
-                        fired_cnt += 1
-                    except Exception:
-                        pass
-
-            # Nguồn 3: /thread_typing
-            try:
-                self.mqtt_client.publish(
-                    topic="/thread_typing",
-                    payload=MessengerStealthAntiBanEngine.json_minimal({
-                        "thread": tid_s,
-                        "sender_fbid": int(self.uid) if str(self.uid).isdigit() else str(self.uid),
-                        "state": state_int,
-                        "type": "typ",
-                    }),
-                    qos=0,
-                    retain=False,
-                )
-                fired_cnt += 1
-            except Exception:
-                pass
-
-            # Nguồn 4: /orca_typing_notifications
-            try:
-                self.mqtt_client.publish(
-                    topic="/orca_typing_notifications",
-                    payload=MessengerStealthAntiBanEngine.json_minimal({
-                        "sender_fbid": int(self.uid) if str(self.uid).isdigit() else str(self.uid),
-                        "state": state_int,
-                        "to": tid_s,
-                    }),
-                    qos=0,
-                    retain=False,
-                )
-                fired_cnt += 1
-            except Exception:
-                pass
-
-            # Nguồn 5: /t_typ
-            try:
-                self.mqtt_client.publish(
-                    topic="/t_typ",
-                    payload=MessengerStealthAntiBanEngine.json_minimal({
-                        "to": tid_s,
-                        "state": state_int,
-                        "sender_fbid": int(self.uid) if str(self.uid).isdigit() else str(self.uid),
-                        "type": "typ",
-                    }),
-                    qos=0,
-                    retain=False,
-                )
-                fired_cnt += 1
-            except Exception:
-                pass
-
-        # TẦNG 2: Xoay vòng qua 5 nguồn HTTP Desktop (mercury-chat, messenger-web-comet, titan-web, chat_tab, jewel)
-        if not self.fb_dtsg or str(self.fb_dtsg).startswith("NAc_fallback"):
-            self._init_session_tokens(force_refresh=True)
-
-        if self.fb_dtsg and not str(self.fb_dtsg).startswith("NAc_fallback"):
-            http_sources = [
-                ("https://www.facebook.com", "mercury-chat"),
-                ("https://www.messenger.com", "messenger-web-comet"),
-                ("https://www.facebook.com", "titan-web"),
-                ("https://www.facebook.com", "chat_tab"),
-                ("https://www.facebook.com", "jewel"),
-            ]
-            rot_idx = getattr(self, "_typing_src_cursor", 0)
-            self._typing_src_cursor = rot_idx + 1
-            chosen_http = [
-                http_sources[rot_idx % len(http_sources)],
-                http_sources[(rot_idx + 1) % len(http_sources)],
-            ] if multi_source else [http_sources[rot_idx % len(http_sources)]]
-
-            for dom, src_name in chosen_http:
-                try:
-                    typ_data = {
-                        "typ": str(state_int),
-                        "to": "" if is_group else tid_s,
-                        "source": src_name,
-                        "thread": tid_s,
-                        "__user": str(self.uid),
-                        "__a": "1",
-                        "__req": MessengerStealthAntiBanEngine.next_req_b36(),
-                        "__rev": self.client_rev,
-                        "fb_dtsg": self.fb_dtsg,
-                        "jazoest": self.jazoest,
-                        "lsd": self.lsd,
-                    }
-                    hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer=f"{dom}/messages/t/{tid_s}")
-                    r_t = self.s.post(f"{dom}/ajax/messaging/typ.php?dpr=1", data=typ_data, headers=hdrs, timeout=5)
-                    if r_t.status_code == 200:
-                        fired_cnt += 1
-                except Exception:
-                    pass
-
-        return fired_cnt > 0
-
-    def send_typing(self, thread_id, is_typing=True, is_group=None, multi_source=True):
-        return self.send_typing_mqtt(thread_id, is_typing=is_typing, is_group=is_group, multi_source=multi_source)
-
-    def set_theme_mqtt(self, thread_id, theme_query=None):
-        """Đổi chủ đề nền (Theme) Box Messenger qua MQTT /ls_req (từ ckien.zip/module/nenMqtt.py)."""
-        if not self.ensure_mqtt_connected():
-            return None
-        tid_s = str(thread_id).strip()
-        chosen = None
-        if theme_query:
-            q_s = str(theme_query).strip().lower()
-            if q_s not in ("random", "ngaunhien", "auto"):
-                chosen = next((t for t in MESSENGER_THEMES_CATALOG if t["id"] == q_s or q_s in t["name"].lower()), None)
-        if not chosen:
-            chosen = random.choice(MESSENGER_THEMES_CATALOG)
-
-        with self.mqtt_lock:
-            self.ws_req_number += 1
-            self.ws_task_number += 1
-            req_id = self.ws_req_number
-            task_id = self.ws_task_number
-
-        task_payload = {
-            "thread_key": tid_s,
-            "theme_fbid": chosen["id"],
-            "source": None,
-            "sync_group": 1,
-            "payload": None,
-        }
-        task = {
-            "failure_count": None,
-            "label": "43",
-            "payload": MessengerStealthAntiBanEngine.json_minimal(task_payload),
-            "queue_name": "thread_theme",
-            "task_id": task_id,
-        }
-        content = {
-            "app_id": "2220391788200892",
-            "payload": MessengerStealthAntiBanEngine.json_minimal({
-                "data_trace_id": None,
-                "epoch_id": int(MessengerStealthAntiBanEngine.generate_offline_threading_id()),
-                "tasks": [task],
-                "version_id": "25095469420099952",
-            }),
-            "request_id": req_id,
-            "type": 3,
-        }
-        self.mqtt_client.publish(
-            topic="/ls_req",
-            payload=MessengerStealthAntiBanEngine.json_minimal(content),
-            qos=1,
-            retain=False,
-        )
-        return chosen
-
-    def send_poll_mqtt(self, thread_id, question_text, options_list=None):
-        """Tạo bình chọn (Poll) trên Box Messenger qua MQTT /ls_req (từ ckien.zip/module/nhaypoll.py)."""
-        if not self.ensure_mqtt_connected():
-            return False
-        tid_s = str(thread_id).strip()
-        tid_val = int(tid_s) if tid_s.isdigit() else tid_s
-        if not options_list or len(options_list) < 2:
-            options_list = [
-                f"Chuẩn VIP #{random.randint(10, 99)}",
-                f"Đỉnh Cao #{random.randint(10, 99)}",
-                f"Siêu Cấp #{random.randint(10, 99)}",
-            ]
-
-        with self.mqtt_lock:
-            self.ws_req_number += 1
-            self.ws_task_number += 1
-            req_id = self.ws_req_number
-            task_id = self.ws_task_number
-
-        task_payload = {
-            "question_text": str(question_text or "Bình chọn Hệ Thống"),
-            "thread_key": tid_val,
-            "options": [str(x) for x in options_list[:10]],
-            "sync_group": 1,
-        }
-        task = {
-            "failure_count": None,
-            "label": "163",
-            "payload": MessengerStealthAntiBanEngine.json_minimal(task_payload),
-            "queue_name": "poll_creation",
-            "task_id": task_id,
-        }
-        content = {
-            "app_id": "2220391788200892",
-            "payload": MessengerStealthAntiBanEngine.json_minimal({
-                "data_trace_id": None,
-                "epoch_id": int(MessengerStealthAntiBanEngine.generate_offline_threading_id()),
-                "tasks": [task],
-                "version_id": "7158486590867448",
-            }),
-            "request_id": req_id,
-            "type": 3,
-        }
-        self.mqtt_client.publish(
-            topic="/ls_req",
-            payload=MessengerStealthAntiBanEngine.json_minimal(content),
-            qos=1,
-            retain=False,
-        )
-        return True
-
-    def share_link_mqtt(self, thread_id, url_str, text=""):
-        """Chia sẻ liên kết (Share Link) qua MQTT /ls_req (từ ckien.zip/module/treosharelinkMqtt.py)."""
-        if not self.ensure_mqtt_connected():
-            return False
-        tid_s = str(thread_id).strip()
-        with self.mqtt_lock:
-            self.ws_req_number += 1
-            req_id = self.ws_req_number
-
-        task_payload = {
-            "otid": MessengerStealthAntiBanEngine.generate_offline_threading_id(),
-            "source": 524289,
-            "sync_group": 1,
-            "send_type": 6,
-            "mark_thread_read": 0,
-            "url": str(url_str or "https://www.facebook.com/"),
-            "text": str(text or ""),
-            "thread_id": tid_s,
-            "initiating_source": 0,
-        }
-        task = {
-            "label": 46,
-            "payload": MessengerStealthAntiBanEngine.json_minimal(task_payload),
-            "queue_name": tid_s,
-            "task_id": random.randint(1, 1000),
-            "failure_count": None,
-        }
-        content = {
-            "app_id": "2220391788200892",
-            "payload": MessengerStealthAntiBanEngine.json_minimal({
-                "tasks": [task],
-                "epoch_id": MessengerStealthAntiBanEngine.generate_offline_threading_id(),
-                "version_id": "7191105584331330",
-            }),
-            "request_id": req_id,
-            "type": 3,
-        }
-        self.mqtt_client.publish(
-            topic="/ls_req",
-            payload=MessengerStealthAntiBanEngine.json_minimal(content),
-            qos=1,
-            retain=False,
-        )
-        return True
-
-    def share_contact_mqtt(self, thread_id, contact_id, text=""):
-        """Chia sẻ danh thiếp (Share Contact) qua MQTT /ls_req (từ ckien.zip/module/treosharecontactMqtt.py)."""
-        if not self.ensure_mqtt_connected():
-            return False
-        tid_s = str(thread_id).strip()
-        with self.mqtt_lock:
-            self.ws_req_number += 1
-            req_id = self.ws_req_number
-
-        task_payload = {
-            "contact_id": str(contact_id or self.uid),
-            "sync_group": 1,
-            "text": str(text or ""),
-            "thread_id": tid_s,
-        }
-        task = {
-            "label": 359,
-            "payload": MessengerStealthAntiBanEngine.json_minimal(task_payload),
-            "queue_name": "xma_open_contact_share",
-            "task_id": random.randint(1, 1000),
-            "failure_count": None,
-        }
-        content = {
-            "app_id": "2220391788200892",
-            "payload": MessengerStealthAntiBanEngine.json_minimal({
-                "tasks": [task],
-                "epoch_id": MessengerStealthAntiBanEngine.generate_offline_threading_id(),
-                "version_id": "7214102258676893",
-            }),
-            "request_id": req_id,
-            "type": 3,
-        }
-        self.mqtt_client.publish(
-            topic="/ls_req",
-            payload=MessengerStealthAntiBanEngine.json_minimal(content),
-            qos=1,
-            retain=False,
-        )
-        return True
-
-    def rename_group(self, thread_id, new_title):
-        """Đổi tên Box Nhóm Messenger (từ ckien.zip/module/nhaynamebox.py & fb.py)."""
-        tid_s = str(thread_id).strip()
-        otid = MessengerStealthAntiBanEngine.generate_offline_threading_id()
-        form_data = {
-            "client": "mercury",
-            "action_type": "ma-type:log-message",
-            "author": f"fbid:{self.uid}",
-            "thread_id": tid_s,
-            "timestamp": int(time.time() * 1000),
-            "timestamp_relative": str(int(time.time())),
-            "source": "source:chat:web",
-            "source_tags[0]": "source:chat",
-            "offline_threading_id": otid,
-            "message_id": otid,
-            "threading_id": MessengerStealthAntiBanEngine.generate_offline_threading_id(),
-            "thread_fbid": tid_s,
-            "thread_name": str(new_title),
-            "log_message_type": "log:thread-name",
-            "fb_dtsg": self.fb_dtsg,
-            "jazoest": self.jazoest,
-            "__user": str(self.uid),
-            "__a": "1",
-            "__req": MessengerStealthAntiBanEngine.next_req_b36(),
-            "__rev": self.client_rev,
-        }
-        hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer="https://www.facebook.com/")
-        r = self.s.post("https://www.facebook.com/messaging/set_thread_name/", data=form_data, headers=hdrs, timeout=10)
-        return r.status_code == 200
-
-    def change_nickname(self, thread_id, target_uid, new_nickname):
-        """Đổi biệt danh thành viên trong Box Messenger (từ ckien.zip/module/username.py)."""
-        tid_s = str(thread_id).strip()
-        data = {
-            "nickname": str(new_nickname),
-            "participant_id": str(target_uid or self.uid),
-            "thread_or_other_fbid": tid_s,
-            "fb_dtsg": self.fb_dtsg,
-            "jazoest": self.jazoest,
-        }
-        hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer="https://www.facebook.com/")
-        r = self.s.post("https://www.facebook.com/messaging/save_thread_nickname/?source=thread_settings&dpr=1", data=data, headers=hdrs, timeout=10)
-        return r.status_code == 200
-
-    def block_user(self, target_uid):
-        """Chặn người dùng Facebook/Messenger qua GraphQL doc_id 6305880099497989 (Tích hợp từ 3app vip.zip/module/block.py)."""
-        t_uid = str(target_uid or "").strip()
-        if not t_uid:
-            return False
-        form = self._form_all(friendly_name="useBlockUserMutation", doc_id="6305880099497989", require_graphql=None)
-        form["variables"] = json.dumps({
-            "input": {
-                "actor_id": str(self.uid),
-                "block_Origin": "MESSENGER_THREAD",
-                "client_mutation_id": str(random.randint(1, 999999)),
-                "target_id": t_uid,
-            }
-        })
-        hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer="https://www.facebook.com/")
-        r = self.s.post("https://www.facebook.com/api/graphql/", data=form, headers=hdrs, timeout=10)
-        return r.status_code == 200
-
-    def unblock_user(self, target_uid):
-        """Bỏ chặn người dùng Facebook/Messenger qua GraphQL doc_id 6009824239038988 (Tích hợp từ 3app vip.zip/module/block.py)."""
-        t_uid = str(target_uid or "").strip()
-        if not t_uid:
-            return False
-        form = self._form_all(friendly_name="ProfilePlusFBMessengerUnblockMutation", doc_id="6009824239038988", require_graphql=None)
-        form["variables"] = json.dumps({
-            "input": {
-                "actor_id": str(self.uid),
-                "client_mutation_id": str(random.randint(1, 999999)),
-                "target_id": t_uid,
-            }
-        })
-        hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer="https://www.facebook.com/")
-        r = self.s.post("https://www.facebook.com/api/graphql/", data=form, headers=hdrs, timeout=10)
-        return r.status_code == 200
-
-    def add_user_to_group(self, thread_id, user_ids_list):
-        """Thêm thành viên vào Box Nhóm Messenger qua MQTT /ls_req & Mercury (Tích hợp từ 5appbytrantu.zip/module/raid.py)."""
-        tid_s = str(thread_id).strip()
-        uids = [str(u).strip() for u in (user_ids_list if isinstance(user_ids_list, (list, tuple, set)) else [user_ids_list]) if str(u).strip()]
-        if not uids:
-            return False
-        otid = MessengerStealthAntiBanEngine.generate_offline_threading_id()
-        form = self._form_all()
-        form.update({
-            "client": "mercury",
-            "action_type": "ma-type:log-message",
-            "author": f"fbid:{self.uid}",
-            "thread_id": tid_s,
-            "thread_fbid": tid_s,
-            "timestamp": int(time.time() * 1000),
-            "source": "source:chat:web",
-            "log_message_type": "log:subscribe",
-            "offline_threading_id": otid,
-            "message_id": otid,
-        })
-        for idx, u_id in enumerate(uids):
-            form[f"log_message_data[added_participants][{idx}]"] = f"fbid:{u_id}"
-        hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer="https://www.facebook.com/")
-        r = self.s.post("https://www.facebook.com/messaging/send/", data=form, headers=hdrs, timeout=12)
-        return r.status_code == 200
-
-    def comment_group_post(self, post_id, comment_text, tag_uid="", tag_name=""):
-        """Bình luận bài viết Group/Top Facebook qua GraphQL doc_id 24323081780615819 (Tích hợp từ 3app vip.zip/module/nhaytop.py)."""
-        pid_s = str(post_id or "").strip()
-        if not pid_s:
-            return False
-        feedback_id = base64.b64encode(f"feedback:{pid_s}".encode("utf-8")).decode("utf-8") if pid_s.isdigit() else pid_s
-        ranges = []
-        final_txt = str(comment_text or "").strip()
-        if tag_uid and str(tag_uid).strip():
-            t_uid = str(tag_uid).strip()
-            t_lbl = str(tag_name or GLOBAL_USER_NAME_CACHE.get(t_uid) or f"User_{t_uid[-4:]}").strip().lstrip("@")
-            idx_t = final_txt.find(t_lbl)
-            if idx_t == -1:
-                sep = " " if final_txt else ""
-                idx_t = len(final_txt + sep)
-                final_txt = f"{final_txt}{sep}{t_lbl}"
-            ranges.append({
-                "entity": {"id": t_uid},
-                "length": len(t_lbl),
-                "offset": idx_t,
-            })
-        form = self._form_all(friendly_name="useCometUFICreateCommentMutation", doc_id="24323081780615819", require_graphql=None)
-        form["variables"] = json.dumps({
-            "feedLocation": "GROUP",
-            "feedbackSource": 0,
-            "groupID": None,
-            "input": {
-                "client_mutation_id": str(random.randint(1, 999999)),
-                "actor_id": str(self.uid),
-                "attachments": [],
-                "feedback_id": feedback_id,
-                "formatting_style": None,
-                "message": {"ranges": ranges, "text": final_txt},
-                "attribution_id_v2": "",
-                "is_tracking_encrypted": True,
-                "tracking": [],
-                "feedback_source": "OBJECT",
-                "idempotence_token": f"client:{uuid.uuid4()}",
-                "session_id": str(uuid.uuid4()),
-            },
-            "inviteShortLinkKey": None,
-            "renderLocation": None,
-            "scale": 1,
-            "useDefaultActor": False,
-            "focusCommentID": None,
-        })
-        hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer="https://www.facebook.com/")
-        r = self.s.post("https://www.facebook.com/api/graphql/", data=form, headers=hdrs, timeout=12)
-        return r.status_code == 200
-
-    def post_story_mention(self, content_text, target_uid=""):
-        """Đăng Story văn bản kèm réo tên (Story Mention) qua GraphQL doc_id 7490607150987409 (Tích hợp từ 3app vip.zip/module/reostr.py)."""
-        form = self._form_all(friendly_name="StoriesCreateMutation", doc_id="7490607150987409", require_graphql=None)
-        overlays = []
-        if target_uid and str(target_uid).strip():
-            overlays.append({
-                "tag_sticker": {
-                    "bounds": {"height": 0.1, "rotation": 0, "width": 0.3, "x": 0.35, "y": 0.45},
-                    "tag_id": str(target_uid).strip(),
-                    "type": "PEOPLE",
-                }
-            })
-        form["variables"] = json.dumps({
-            "input": {
-                "actor_id": str(self.uid),
-                "audiences": [{"stories": {"self": {"target_id": str(self.uid)}}}],
-                "client_mutation_id": str(random.randint(1, 999999)),
-                "source": "WWW",
-                "text_format_metadata": {"inspirations_custom_font_id": "2334906556782613"},
-                "text_format_preset_id": "401372137331149",
-                "message": {"ranges": [], "text": str(content_text or "NHK VIP STORY")[:240]},
-                "overlays": overlays,
-                "logging": {"composer_session_id": str(uuid.uuid4())},
-            }
-        })
-        hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer="https://www.facebook.com/")
-        r = self.s.post("https://www.facebook.com/api/graphql/", data=form, headers=hdrs, timeout=12)
-        return r.status_code == 200
-
-    def send_message(self, thread_id, content, is_group=True, mentions=None, tag_all=False,
-                     antiband=True, use_emoji=False, icon_count=0, is_heading=True, strip_line_num=False,
-                     stop_ev=None, start_global_epoch=None, start_box_epoch=None, priority_bypass=False):
-        """Gửi tin nhắn Messenger ưu tiên qua đường truyền Lightspeed MQTT (/ls_req) + Desktop Mercury Assurance cho lệnh ưu tiên!"""
-        tid_s = str(thread_id).strip()
-        if not priority_bypass and not MessengerStealthAntiBanEngine.acquire_messenger_stealth_slot(
-            self.uid, tid_s, antiband=antiband, stop_ev=stop_ev,
-            start_global_epoch=start_global_epoch, start_box_epoch=start_box_epoch
-        ):
-            return False
-        if tid_s in self._THREAD_TYPE_MAP:
-            is_group = self._THREAD_TYPE_MAP[tid_s]
-
-        raw = clean_corrupted_shortcuts(content)
-        if strip_line_num:
-            raw = "\n".join(strip_leading_line_number(ln) for ln in raw.split("\n"))
-
-        eff_mentions = list(mentions) if mentions else []
-        eff_tag_all = bool(tag_all)
-
-        if "@" in raw and not priority_bypass:
-            stripped_txt, auto_m, auto_all = extract_trailing_tags_and_resolve(
-                raw, incoming_mentions=None, messenger_client=self, messenger_thread_id=tid_s
-            )
-            if auto_m or auto_all:
-                raw = stripped_txt if stripped_txt else raw
-                if auto_all:
-                    eff_tag_all = True
-                for am in auto_m:
-                    if not any(str(x.get("uid") or x.get("id")) == str(am["uid"]) for x in eff_mentions):
-                        eff_mentions.append(am)
-
-        msg_with_tags, mention_objs = self.attach_mentions_real_messenger(
-            raw, mentions=eff_mentions, tag_all=eff_tag_all, thread_id=tid_s
-        )
-
-        if use_emoji and icon_count > 0:
-            sep_ic = " " if (msg_with_tags and not msg_with_tags.endswith(" ")) else ""
-            final_msg = f"{msg_with_tags}{sep_ic}{build_unique_zalo_icons(icon_count)}"
-        else:
-            final_msg = msg_with_tags
-
-        if antiband:
-            final_msg = MessengerStealthAntiBanEngine.append_stealth_tail(final_msg, thread_id=tid_s)
-
-        register_system_sent_message(text=final_msg)
-        register_system_sent_message(text=raw)
-
-        # KHIÊN CHỐNG DIE COOKIE (ANTI-BAN SHIELD):
-        # Nhá nhẹ hiệu ứng Fake Typing trước khi gửi tin để mô phỏng người thật đang gõ phím trên trình duyệt Desktop
-        if antiband and not priority_bypass:
-            try:
-                now_tp = time.time()
-                if now_tp - getattr(self, "_last_pre_typing_ts", 0.0) >= 4.5:
-                    self._last_pre_typing_ts = now_tp
-                    self.send_typing_mqtt(tid_s, is_typing=True, is_group=is_group, multi_source=False)
-            except Exception:
-                pass
-
-        mqtt_ok = False
-        try:
-            if self.send_message_mqtt(tid_s, final_msg, mention_objs=mention_objs):
-                mqtt_ok = True
-        except Exception:
-            try:
-                self.mqtt_connected = False
-                if self.send_message_mqtt(tid_s, final_msg, mention_objs=mention_objs):
-                    mqtt_ok = True
-            except Exception:
-                pass
-
-        # KHIÊN CHỐNG FACEBOOK BẮT ĐỔI MẬT KHẨU (ZERO-CHECKPOINT):
-        # Khi gói tin đã đi thành công qua socket MQTT /ls_req (Lightspeed WebSocket gốc), trả về True ngay lập tức!
-        # Tuyệt đối KHÔNG gọi bồi thêm HTTP POST song song lên cả facebook.com lẫn messenger.com (nguyên nhân gây cảnh báo 'Ai đó đã truy cập tài khoản -> Đổi mật khẩu')!
-        if mqtt_ok and not priority_bypass:
-            return True
-
-        if not self.fb_dtsg or str(self.fb_dtsg).startswith("NAc_fallback"):
-            self.last_dtsg_fetch_ts = 0.0
-            self._init_session_tokens(force_refresh=True)
-
-        otid = MessengerStealthAntiBanEngine.generate_offline_threading_id()
-        register_system_sent_message(msg_id=otid, client_id=otid, text=final_msg)
-
-        modes_to_try = [bool(is_group), not bool(is_group)]
-        for grp_try in modes_to_try:
-            data = {
-                "client": "mercury",
-                "action_type": "ma-type:user-generated-message",
-                "body": final_msg,
-                "ephemeral_ttl_mode": "0",
-                "has_attachment": "false",
-                "message_id": otid,
-                "offline_threading_id": otid,
-                "source": "source:chat:web",
-                "timestamp": str(int(time.time() * 1000)),
-                "__user": self.uid,
-                "__a": "1",
-                "__req": MessengerStealthAntiBanEngine.next_req_b36(),
-                "fb_dtsg": self.fb_dtsg,
-                "jazoest": self.jazoest,
-                "lsd": self.lsd,
-            }
-            if grp_try:
-                data["thread_fbid"] = tid_s
-            else:
-                data["other_user_fbid"] = tid_s
-                data["specific_to_list[0]"] = f"fbid:{tid_s}"
-                data["specific_to_list[1]"] = f"fbid:{self.uid}"
-            for idx, xm in enumerate(mention_objs):
-                data[f"profile_xmd[{idx}][id]"] = str(xm["id"])
-                data[f"profile_xmd[{idx}][offset]"] = str(xm["offset"])
-                data[f"profile_xmd[{idx}][length]"] = str(xm["length"])
-                data[f"profile_xmd[{idx}][type]"] = str(xm.get("type", "p"))
-
-            # Khóa cố định 1 domain duy nhất (www.facebook.com) để không bị lệch Origin giữa facebook.com và messenger.com
-            for dom in ("https://www.facebook.com",):
-                hdrs = MessengerStealthAntiBanEngine.get_session_headers(self.uid, referer=f"{dom}/messages/t/{tid_s}")
-                r = self.s.post(f"{dom}/messaging/send/?dpr=1", data=data, headers=hdrs, timeout=12)
-                if r.status_code == 200 and r.text:
-                    txt_r = r.text
-                    if '"error"' not in txt_r[:260] and ('"payload"' in txt_r or '"actions"' in txt_r or '"succeeded":true' in txt_r):
-                        self._THREAD_TYPE_MAP[tid_s] = grp_try
-                        if not str(self.fb_dtsg).startswith("NAc_fallback"):
-                            self._sync_rotated_cookies()
-                        return True
-                    # Tự động làm mới fb_dtsg nếu báo lỗi 1357004 / 1357001
-                    if "1357004" in txt_r or "1357001" in txt_r:
-                        self.last_dtsg_fetch_ts = 0.0
-                        self.fb_dtsg = ""
-                        self._init_session_tokens(force_refresh=True)
-                        data["fb_dtsg"] = self.fb_dtsg
-                        data["jazoest"] = self.jazoest
-                        r2 = self.s.post(f"{dom}/messaging/send/?dpr=1", data=data, headers=hdrs, timeout=12)
-                        if r2.status_code == 200 and '"error"' not in r2.text[:260]:
-                            self._THREAD_TYPE_MAP[tid_s] = grp_try
-                            self._sync_rotated_cookies()
-                            return True
-        if mqtt_ok:
-            return True
-        raise Exception("MessengerSendFailed")
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 FacebookMQTTSender = MessengerClient
 
 class MessengerRealtimeListener:
-    """Bộ lắng nghe lệnh Siêu Nhạy 24/7 trên Facebook Messenger (Hybrid Lightspeed MQTT /t_ms + /ls_resp + Fast Desktop GraphQL Poller):
-    - Duy trì đồng thời kết nối WebSocket MQTT v3.1 tới wss://edge-chat.facebook.com/chat VÀ bộ quét nhanh GraphQL Desktop (1.6s)
-      để dù người dùng gõ .menu, .help, .n, .g, .nhaypoll, .t, .ta ở bất kỳ Box nào (như testtbot) cũng đều phản hồi trong < 0.5s!"""
-
-    def __init__(self, acc_id):
-        self.acc_id = acc_id
-        self.platform = "messenger"
-        self.stop_ev = threading.Event()
-        self.seen_msg_ids = deque(maxlen=450)
-        self.is_initial_seed_done = False
-        self.notified_pc_once = False
-        self.ws_status = "Messenger Desktop PC Shield + MQTT Active"
-        self.last_event_ts = 0.0
-        self.thread = threading.Thread(target=self._run_loop, daemon=True)
-
-    def start(self):
-        self.thread.start()
-
-    def stop(self):
-        self.stop_ev.set()
-
-    def _get_acc_row(self):
-        return get_account_from_ram(self.acc_id)
-
-    @staticmethod
-    def _clean_messenger_snippet_cmd(raw_text):
-        if not raw_text:
-            return ""
-        s = strip_invisible_chars(str(raw_text))
-        if not s:
-            return ""
-        if s[0] in (".", "/", "!"):
-            return s
-        # Hỗ trợ cắt bỏ tiền tố 'Bạn: .menu' hoặc 'Tên: .help' trong snippet của CometChatInboxQuery
-        m = re.match(r"^[^:\n]{1,45}:\s*([\./!][a-zA-Z0-9_].*)$", s)
-        if m:
-            return m.group(1).strip()
-        return s
-
-    def _process_incoming_item(self, client, acc_row, item):
-        tid = str(item.get("thread_id") or "").strip()
-        mid = str(item.get("id") or "").strip()
-        cleaned_cmd = self._clean_messenger_snippet_cmd(item.get("content") or "")
-        if not tid or not cleaned_cmd:
-            return
-        dedupe_k = f"{tid}:{mid}:{cleaned_cmd[:40]}"
-        if dedupe_k in self.seen_msg_ids:
-            return
-        self.seen_msg_ids.append(dedupe_k)
-        if is_system_echo_message(msg_id=mid, text=cleaned_cmd):
-            return
-        if is_direct_user_command_text(cleaned_cmd):
-            self.last_event_ts = time.time()
-            _PRIORITY_CMD_EXECUTOR.submit(
-                parse_and_execute_inchat_command,
-                None,
-                acc_row,
-                tid,
-                bool(item.get("is_group", True)),
-                item.get("sender_id") or client.uid,
-                cleaned_cmd,
-                item.get("mentions"),
-                None,
-                "messenger",
-                client,
-                False,
-                "",
-                mid,
-            )
-
-    def _run_loop(self):
-        self.stop_ev.wait(0.4)
-        while not self.stop_ev.is_set():
-            acc_row = self._get_acc_row()
-            if not acc_row or acc_row.get("platform") != "messenger":
-                break
-            if not acc_row.get("chat_cmd_enabled", 1):
-                self.ws_status = "Đã tắt nhận lệnh"
-                self.stop_ev.wait(4.0)
-                continue
-
-            try:
-                client = MessengerClient.get_pooled_client(acc_row["cookies"], uid=acc_row.get("uid") or "")
-                if not self.notified_pc_once:
-                    self.notified_pc_once = True
-                    FacebookPCDeviceGuard.notify_pc_login_to_facebook_async(client)
-
-                def _rt_cb(ev_item):
-                    if not self.stop_ev.is_set():
-                        cur_acc = self._get_acc_row()
-                        if cur_acc and cur_acc.get("chat_cmd_enabled", 1):
-                            self._process_incoming_item(client, cur_acc, ev_item)
-
-                client.register_incoming_callback(_rt_cb)
-                mqtt_ok = client.ensure_mqtt_connected()
-                self.ws_status = (
-                    f"PC {getattr(client, 'pc_name', 'Desktop')[:22]} • MQTT + GraphQL (.menu Sẵn Sàng)"
-                    if mqtt_ok else
-                    f"PC {getattr(client, 'pc_name', 'Desktop')[:22]} • GraphQL Shield (.menu Sẵn Sàng)"
-                )
-
-                # Tối ưu siêu nhẹ RAM cho Render: Khi MQTT (/t_ms + /ls_resp) đang kết nối ổn định,
-                # chỉ quét phụ trợ CometChatInboxQuery mỗi 7.5s (hoặc lần khởi tạo đầu tiên) để tiết kiệm 85% RAM & băng thông Render!
-                now_mp = time.time()
-                need_http_poll = (not self.is_initial_seed_done) or (not mqtt_ok) or (now_mp - getattr(self, "_last_http_inbox_poll_ts", 0.0) >= 7.5)
-                if need_http_poll:
-                    self._last_http_inbox_poll_ts = now_mp
-                    inbox_latest = []
-                    client.get_threads(use_cache=False, latest_msgs_out=inbox_latest)
-                    if not self.is_initial_seed_done:
-                        self.is_initial_seed_done = True
-                        for item in inbox_latest:
-                            tid = str(item.get("thread_id") or "").strip()
-                            mid = str(item.get("id") or "").strip()
-                            cleaned_cmd = self._clean_messenger_snippet_cmd(item.get("content") or "")
-                            if tid and cleaned_cmd:
-                                if is_direct_user_command_text(cleaned_cmd):
-                                    self._process_incoming_item(client, acc_row, item)
-                                else:
-                                    self.seen_msg_ids.append(f"{tid}:{mid}:{cleaned_cmd[:40]}")
-                    else:
-                        for item in inbox_latest:
-                            if self.stop_ev.is_set():
-                                break
-                            self._process_incoming_item(client, acc_row, item)
-                    del inbox_latest
-
-                self.stop_ev.wait(2.2 if mqtt_ok else 1.8)
-            except Exception as e:
-                if "Checkpoint" in str(e):
-                    self.ws_status = "Cần kiểm tra lại Cookie Facebook"
-                    self.stop_ev.wait(20.0)
-                else:
-                    self.stop_ev.wait(2.5)
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
 # ĐỘNG CƠ ĐA LUỒNG CHẠY 2-5+ ĐOẠN CHAT SONG SONG ỔN ĐỊNH KHÔNG LAG
 _TURBO_SEND_POOL = ThreadPoolExecutor(max_workers=48)
@@ -14750,10 +10929,6 @@ def start_task_programmatic(targets, blocks, delay=0.0, use_emoji=False, icon_co
                 norm_targets.append(t_copy)
                 ACTIVE_TARGET_BOXES_SET.add(tid_val)
                 HOT_ACTIVE_ZALO_GROUPS.add(tid_val)
-                for _aid_k in list(ACTIVE_LISTENERS.keys()) + [specific_acc_id or 0]:
-                    if _aid_k:
-                        DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS[_aid_k].add(tid_val)
-                        MessengerStealthAntiBanEngine.ACTIVE_MESSENGER_POLL_THREADS[_aid_k].add(tid_val)
     targets = norm_targets
 
     clean_blocks = []
@@ -14909,7 +11084,6 @@ def stop_tasks_for_thread(thread_id=None, acc_id=None):
     if thread_id is None:
         if acc_id is None:
             bump_stop_epoch(None)
-            DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(None)
             with AUTO_INTERCEPT_LOCK:
                 AUTO_INTERCEPT_BOXES.clear()
         stopped = 0
@@ -14933,7 +11107,6 @@ def stop_tasks_for_thread(thread_id=None, acc_id=None):
         tid_s = str(thread_id).strip()
         if acc_id is None:
             bump_stop_epoch(tid_s)
-            DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(tid_s)
         with AUTO_INTERCEPT_LOCK:
             AUTO_INTERCEPT_BOXES.pop(tid_s, None)
         stopped = 0
@@ -18819,434 +14992,15 @@ class ZaloRealtimeListener:
 
 # LISTENER 24/7 TRÊN DISCORD ACC CHÍNH CHỦ & BOT (CHROME 131 TLS GATEWAY + ZERO-SCRAPE SHIELD)
 class DiscordRealtimeListener:
-    def __init__(self, acc_id):
-        self.acc_id = acc_id
-        self.platform = "discord"
-        self.stop_ev = threading.Event()
-        self.seen_msg_ids = deque(maxlen=2500)
-        self.seeded_channels = set()
-        self.ws_status = "Đang khởi tạo NHK Discord Shield..."
-        self.last_event_ts = 0.0
-        self.last_seq = None
-        self.thread = threading.Thread(target=self._run_loop, daemon=True)
-        self.poller_thread = threading.Thread(target=self._run_discord_http_poller_loop, daemon=True)
+    def __init__(self, *args, **kwargs):
+        raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
-    def start(self):
-        self.thread.start()
-        self.poller_thread.start()
-
-    def stop(self):
-        self.stop_ev.set()
-
-    def _get_acc_row(self):
-        return get_account_from_ram(self.acc_id)
-
-    def _handle_discord_message_event(self, client, acc_row, msg_data):
-        if not isinstance(msg_data, dict):
-            return
-        msg_id = str(msg_data.get("id") or "")
-        content = str(msg_data.get("content") or "")
-        if not content:
-            return
-
-        if is_system_echo_message(msg_id=msg_id, text=content):
-            return
-
-        if msg_id in self.seen_msg_ids:
-            return
-        if msg_id:
-            self.seen_msg_ids.append(msg_id)
-
-        channel_id = str(msg_data.get("channel_id") or "")
-        guild_id = str(msg_data.get("guild_id") or "")
-        if channel_id and guild_id:
-            DiscordStealthAntiBanEngine.register_channel_guild(channel_id, guild_id)
-
-        author = msg_data.get("author") or {}
-        sender_id = str(author.get("id") or "")
-        sender_name = author.get("global_name") or author.get("username") or ""
-        if sender_id and sender_name:
-            GLOBAL_USER_NAME_CACHE[sender_id] = sender_name
-
-        if not channel_id:
-            return
-
-        DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS[self.acc_id].add(str(channel_id))
-
-        clean_check = strip_invisible_chars(content)
-        custom_pfx = (acc_row.get("cmd_prefix") or ".").strip()
-        if not clean_check.startswith(tuple(set([custom_pfx, ".", "/", "!"]))):
-            if str(channel_id) in AUTO_INTERCEPT_BOXES and sender_id and sender_id != str(client.user_id or "") and sender_id not in OWNER_UIDS_CACHE:
-                ic_cfg = AUTO_INTERCEPT_BOXES.get(str(channel_id))
-                if ic_cfg and ic_cfg.get("enabled"):
-                    b_list = ic_cfg.get("blocks") or ["Phản đòn siêu tốc 0s!"]
-                    idx_c = ic_cfg.get("idx", 0)
-                    ic_cfg["idx"] = idx_c + 1
-                    reply_line = b_list[idx_c % len(b_list)]
-                    target_m = [{"uid": sender_id, "id": sender_id, "name": sender_name or f"User_{sender_id[-4:]}"}]
-                    _PRIORITY_CMD_EXECUTOR.submit(
-                        client.send_message,
-                        channel_id, reply_line, "rainbow", None, True,
-                        target_m, False, False, True, None, None, None, True
-                    )
-            return
-
-        raw_mentions = []
-        for m in (msg_data.get("mentions") or []):
-            muid = str(m.get("id") or "")
-            mname = m.get("global_name") or m.get("username") or ""
-            if muid:
-                if mname:
-                    GLOBAL_USER_NAME_CACHE[muid] = mname
-                raw_mentions.append({"uid": muid, "id": muid, "name": mname})
-
-        reply_target = None
-        ref_msg = msg_data.get("referenced_message")
-        if isinstance(ref_msg, dict):
-            ref_auth = ref_msg.get("author") or {}
-            r_uid = str(ref_auth.get("id") or "").strip()
-            r_name = str(ref_auth.get("global_name") or ref_auth.get("username") or "").strip()
-            if r_uid:
-                if r_name:
-                    GLOBAL_USER_NAME_CACHE[r_uid] = r_name
-                reply_target = {"uid": r_uid, "name": r_name or f"User_{r_uid[-4:]}"}
-
-        def _instant_cmd_exec():
-            if self.stop_ev.is_set():
-                return
-            DiscordStealthAntiBanEngine.ensure_session_warmed_up(client.token, is_bot=client.is_bot)
-            parse_and_execute_inchat_command(
-                zalo_client=None,
-                acc_row=acc_row,
-                thread_id=channel_id,
-                is_group=True,
-                sender_id=sender_id,
-                raw_msg=content,
-                raw_mentions=raw_mentions,
-                discord_client=client,
-                platform="discord",
-                pre_claimed_slot=False,
-                sender_name=sender_name,
-                msg_id=msg_id,
-                reply_target=reply_target
-            )
-
-        _PRIORITY_CMD_EXECUTOR.submit(_instant_cmd_exec)
-
-    def _poll_active_discord_channels_fallback(self, client, acc_now):
-        ch_set = list(DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS.get(self.acc_id, set()))[:5]
-        if not ch_set:
-            return
-        prio_sess = DiscordStealthAntiBanEngine.get_priority_session(client.token, is_bot=client.is_bot)
-        req_hdrs = DiscordStealthAntiBanEngine.build_stealth_headers(client.token, is_bot=client.is_bot)
-        for cid in ch_set:
-            if self.stop_ev.is_set():
-                break
-            try:
-                ep = DiscordStealthAntiBanEngine.pick_stealth_endpoint(client.token, f"/channels/{cid}/messages?limit=3", 0)
-                r = ProxyPoolEngine.request_with_fast_failover(
-                    prio_sess, "GET", ep, seed_key=f"poll_{client.token[:10]}_{cid}",
-                    priority_bypass=True, headers=req_hdrs, timeout=(0.8, 1.6)
-                )
-                if r.status_code == 200 and isinstance(r.json(), list):
-                    msgs = list(reversed(r.json()))
-                    if cid not in self.seeded_channels:
-                        self.seeded_channels.add(cid)
-                        now_ms = int(time.time() * 1000)
-                        for idx_m, m in enumerate(msgs):
-                            if not isinstance(m, dict):
-                                continue
-                            ct = strip_invisible_chars(str(m.get("content") or ""))
-                            if idx_m == len(msgs) - 1 and is_direct_user_command_text(ct):
-                                m["channel_id"] = cid
-                                self._handle_discord_message_event(client, acc_now, m)
-                            elif m.get("id"):
-                                self.seen_msg_ids.append(str(m["id"]))
-                    else:
-                        for m in msgs:
-                            if isinstance(m, dict):
-                                m["channel_id"] = cid
-                                self._handle_discord_message_event(client, acc_now, m)
-            except Exception:
-                continue
-
-    def _run_discord_http_poller_loop(self):
-        self.stop_ev.wait(0.8)
-        while not self.stop_ev.is_set():
-            acc_row = self._get_acc_row()
-            if not acc_row or acc_row.get("platform") != "discord":
-                break
-            if not acc_row.get("chat_cmd_enabled", 1):
-                self.stop_ev.wait(2.5)
-                continue
-            try:
-                client = DiscordClient(acc_row["token"], is_bot=bool(acc_row.get("is_bot", 0)))
-                self._poll_active_discord_channels_fallback(client, acc_row)
-            except Exception:
-                pass
-            self.stop_ev.wait(1.8)
-
-    def _run_gateway_session(self, client, acc_row):
-        resume_state = DiscordStealthAntiBanEngine.get_gateway_resume_state(client.token)
-        host = "gateway.discord.gg"
-        if resume_state and resume_state.get("resume_url"):
-            try:
-                p_url = urlparse(resume_state["resume_url"])
-                if p_url.hostname:
-                    host = p_url.hostname
-            except Exception:
-                host = "gateway.discord.gg"
-        port = 443
-        path = "/?encoding=json&v=9"
-
-        raw_sock = socket.create_connection((host, port), timeout=10)
-        ctx = DiscordStealthAntiBanEngine.create_chrome_tls_context()
-        sock = ctx.wrap_socket(raw_sock, server_hostname=host)
-
-        ws_key = base64.b64encode(os.urandom(16)).decode()
-        handshake = (
-            f"GET {path} HTTP/1.1\r\n"
-            f"Host: {host}\r\n"
-            f"Connection: Upgrade\r\n"
-            f"Pragma: no-cache\r\n"
-            f"Cache-Control: no-cache\r\n"
-            f"User-Agent: {client.s.headers.get('User-Agent')}\r\n"
-            f"Upgrade: websocket\r\n"
-            f"Origin: https://discord.com\r\n"
-            f"Sec-WebSocket-Version: 13\r\n"
-            f"Accept-Encoding: gzip, deflate\r\n"
-            f"Accept-Language: vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7\r\n"
-            f"Sec-WebSocket-Key: {ws_key}\r\n\r\n"
-        )
-        sock.sendall(handshake.encode("utf-8"))
-
-        resp_buf = bytearray()
-        while not resp_buf.endswith(b"\r\n\r\n"):
-            b1 = sock.recv(1)
-            if not b1:
-                sock.close()
-                return
-            resp_buf.extend(b1)
-            if len(resp_buf) > 8192:
-                sock.close()
-                return
-
-        if b"101" not in resp_buf.split(b"\r\n")[0]:
-            sock.close()
-            return
-
-        sock.settimeout(2.2)
-        hb_interval = 38.0
-        last_hb = time.time()
-        identified = False
-        zlib_inflator = zlib.decompressobj()
-        zlib_buf = bytearray()
-
-        try:
-            while not self.stop_ev.is_set():
-                acc_now = self._get_acc_row()
-                if not acc_now or not acc_now.get("chat_cmd_enabled", 1):
-                    self.ws_status = "Đã tắt nhận lệnh"
-                    break
-
-                now_t = time.time()
-                if identified and (now_t - last_hb >= hb_interval):
-                    hb_pkt = json.dumps({"op": 1, "d": self.last_seq}).encode("utf-8")
-                    ZaloRealtimeListener._send_ws_frame(sock, hb_pkt, opcode=0x1)
-                    last_hb = now_t
-
-                try:
-                    opcode, data = ZaloRealtimeListener._recv_full_ws_message(sock)
-                    if opcode is None or opcode == 0x8:
-                        break
-
-                    raw_json_str = None
-                    if opcode == 0x2 and data:
-                        zlib_buf.extend(data)
-                        if len(zlib_buf) >= 4 and zlib_buf[-4:] == b"\x00\x00\xff\xff":
-                            try:
-                                raw_json_str = zlib_inflator.decompress(bytes(zlib_buf)).decode("utf-8", errors="ignore")
-                            except Exception:
-                                raw_json_str = None
-                            zlib_buf.clear()
-                    elif opcode == 0x1 and data:
-                        raw_json_str = data.decode("utf-8", errors="ignore")
-
-                    if raw_json_str:
-                        try:
-                            pkt = json.loads(raw_json_str)
-                        except Exception:
-                            continue
-
-                        op = pkt.get("op")
-                        seq = pkt.get("s")
-                        if seq is not None:
-                            self.last_seq = seq
-                        t_ev = pkt.get("t")
-                        d_ev = pkt.get("d")
-
-                        if op == 10 and isinstance(d_ev, dict):
-                            hb_interval = max(20.0, (float(d_ev.get("heartbeat_interval", 41250)) / 1000.0) * 0.90)
-                            cur_resume = DiscordStealthAntiBanEngine.get_gateway_resume_state(client.token)
-                            if not client.is_bot and cur_resume and cur_resume.get("session_id"):
-                                resume_payload = {
-                                    "op": 6,
-                                    "d": {
-                                        "token": client.token,
-                                        "session_id": cur_resume["session_id"],
-                                        "seq": self.last_seq or cur_resume.get("last_seq", 0),
-                                    }
-                                }
-                                ZaloRealtimeListener._send_ws_frame(sock, json.dumps(resume_payload).encode("utf-8"), opcode=0x1)
-                                identified = True
-                                last_hb = time.time()
-                                self.ws_status = "NHK Discord Shield (Resumed - 0ms)"
-                            elif client.is_bot:
-                                ident_payload = {
-                                    "op": 2,
-                                    "d": {
-                                        "token": client.token,
-                                        "intents": 37377,
-                                        "properties": {"os": "linux", "browser": "discord_client", "device": "discord_client"}
-                                    }
-                                }
-                                ZaloRealtimeListener._send_ws_frame(sock, json.dumps(ident_payload).encode("utf-8"), opcode=0x1)
-                                identified = True
-                                last_hb = time.time()
-                                self.ws_status = "NHK Discord Bot Shield (0ms)"
-                            else:
-                                ident_payload = {
-                                    "op": 2,
-                                    "d": {
-                                        "token": client.token,
-                                        "capabilities": 30717,
-                                        "properties": DiscordStealthAntiBanEngine.build_super_properties_dict(client.token),
-                                        "presence": {"status": "online", "since": 0, "activities": [], "afk": False},
-                                        "client_state": {
-                                            "guild_versions": {},
-                                            "private_channels_version": "0",
-                                            "read_state_version": 0,
-                                            "user_guild_settings_version": -1,
-                                            "user_settings_version": -1
-                                        }
-                                    }
-                                }
-                                ZaloRealtimeListener._send_ws_frame(sock, json.dumps(ident_payload).encode("utf-8"), opcode=0x1)
-                                identified = True
-                                last_hb = time.time()
-                                self.ws_status = "NHK Discord Shield (0ms Sẵn Sàng)"
-
-                        elif op == 0 and t_ev == "READY" and isinstance(d_ev, dict):
-                            sess_id = str(d_ev.get("session_id") or "")
-                            res_url = str(d_ev.get("resume_gateway_url") or "wss://gateway.discord.gg")
-                            u_obj = d_ev.get("user") or {}
-                            if isinstance(u_obj, dict) and u_obj.get("id"):
-                                DiscordStealthAntiBanEngine.set_cached_me(client.token, u_obj)
-                                client.user_id = str(u_obj["id"])
-                                OWNER_UIDS_CACHE.add(client.user_id)
-                            DiscordStealthAntiBanEngine.harvest_ready_payload(client.token, d_ev)
-                            if sess_id:
-                                DiscordStealthAntiBanEngine.save_gateway_resume_state(
-                                    client.token, session_id=sess_id, resume_url=res_url, last_seq=self.last_seq or 0
-                                )
-                            # TUYỆT ĐỐI KHÔNG bắn gói op:37 cho 60 guilds cùng lúc vì Discord Gateway sẽ ngắt kết nối (Close frame 0x8)!
-                            # Gói Identify (op: 2, capabilities: 30717) đã tự động nhận MESSAGE_CREATE trên toàn bộ DMs và các kênh Server!
-                            try:
-                                for pc_obj in (d_ev.get("private_channels") or [])[:15]:
-                                    if isinstance(pc_obj, dict) and pc_obj.get("id"):
-                                        DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS[self.acc_id].add(str(pc_obj["id"]))
-                                for g_obj in (d_ev.get("guilds") or [])[:10]:
-                                    if isinstance(g_obj, dict):
-                                        for ch_obj in (g_obj.get("channels") or [])[:3]:
-                                            if isinstance(ch_obj, dict) and ch_obj.get("type") in (0, 5) and ch_obj.get("id"):
-                                                DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS[self.acc_id].add(str(ch_obj["id"]))
-                            except Exception:
-                                pass
-                            self.ws_status = "NHK Discord Ghost Vault (0ms Toàn Kênh)"
-
-                        elif op == 0 and t_ev == "RESUMED":
-                            self.ws_status = "NHK Discord Ghost Vault (Resumed 0ms)"
-
-                        elif op == 0 and t_ev in ("CHANNEL_CREATE", "THREAD_CREATE") and isinstance(d_ev, dict):
-                            cid_new = str(d_ev.get("id") or "")
-                            cname_new = d_ev.get("name") or f"Box #{cid_new[-5:]}"
-                            if cid_new:
-                                FullConversationAutoScanner.register_live_conversation(
-                                    "discord", cid_new, f"[Auto-Soi] # {cname_new}", guild_id=str(d_ev.get("guild_id") or "")
-                                )
-
-                        elif op == 0 and t_ev == "MESSAGE_CREATE" and isinstance(d_ev, dict):
-                            self.last_event_ts = time.time()
-                            cid_m = str(d_ev.get("channel_id") or "")
-                            if cid_m:
-                                FullConversationAutoScanner.register_live_conversation(
-                                    "discord", cid_m, f"[Active] Box #{cid_m[-5:]}", guild_id=str(d_ev.get("guild_id") or "")
-                                )
-                            self._handle_discord_message_event(client, acc_now, d_ev)
-
-                        elif op == 1:
-                            hb_pkt = json.dumps({"op": 1, "d": self.last_seq}).encode("utf-8")
-                            ZaloRealtimeListener._send_ws_frame(sock, hb_pkt, opcode=0x1)
-                            last_hb = time.time()
-
-                        elif op == 9:
-                            if not d_ev:
-                                DiscordStealthAntiBanEngine.save_gateway_resume_state(client.token, "", "", 0)
-                            self.stop_ev.wait(1.0)
-                            break
-
-                        elif op == 7:
-                            break
-                except socket.timeout:
-                    continue
-                except Exception:
-                    break
-        finally:
-            try:
-                sock.close()
-            except Exception:
-                pass
-
-    def _run_loop(self):
-        self.stop_ev.wait(0.15)
-        while not self.stop_ev.is_set():
-            acc_row = self._get_acc_row()
-            if not acc_row or acc_row.get("platform") != "discord":
-                break
-            if not acc_row.get("chat_cmd_enabled", 1):
-                self.ws_status = "Đã tắt nhận lệnh"
-                self.stop_ev.wait(3.0)
-                continue
-
-            try:
-                is_bot = bool(acc_row.get("is_bot", 0))
-                client = DiscordClient(acc_row["token"], is_bot=is_bot)
-                if not client.check(force_network=False):
-                    self.ws_status = "Token cần kiểm tra lại"
-                    self.stop_ev.wait(10.0)
-                    continue
-
-                if client.user_id and not acc_row.get("uid"):
-                    try:
-                        conn = db()
-                        conn.execute("UPDATE accounts SET uid=? WHERE id=?", (client.user_id, self.acc_id))
-                        conn.commit()
-                        conn.close()
-                    except Exception:
-                        pass
-
-                self._run_gateway_session(client, acc_row)
-                self.stop_ev.wait(1.2)
-            except Exception:
-                self.ws_status = "Đang đồng bộ lại..."
-                self.stop_ev.wait(2.0)
-
-def sync_all_zalo_listeners():
+def _sync_all_zalo_listeners_locked():
     refresh_accounts_ram_cache()
     refresh_owner_uids()
     try:
         conn = db()
-        rows = conn.execute("SELECT id, platform, chat_cmd_enabled, uid, imei, token FROM accounts WHERE COALESCE(enabled,1)=1 ORDER BY id ASC").fetchall()
+        rows = conn.execute("SELECT id, platform, chat_cmd_enabled, uid, imei, token FROM accounts WHERE COALESCE(enabled,1)=1 AND platform='zalo' ORDER BY id ASC").fetchall()
         conn.close()
         active_ids = set()
         seen_cred_keys = set()
@@ -19285,8 +15039,14 @@ def sync_all_zalo_listeners():
             if aid not in active_ids:
                 ACTIVE_LISTENERS[aid].stop()
                 ACTIVE_LISTENERS.pop(aid, None)
-    except Exception:
-        pass
+    except Exception as error:
+        app.logger.error('Zalo listener reconciliation failed: %s', type(error).__name__)
+
+
+def sync_all_zalo_listeners():
+    """Serialize account reconciliation so simultaneous updates cannot start duplicate listeners."""
+    with SYNC_LISTENERS_LOCK:
+        return _sync_all_zalo_listeners_locked()
 
 
 # Các hàm bí danh tương thích hoàn toàn với get_ck_im_zalo.py
@@ -19477,7 +15237,7 @@ class RenderRAMAutoCleaner:
                 now_disk = time.time()
                 if os.path.exists(UPLOAD_DIR):
                     for fn_d in os.listdir(UPLOAD_DIR):
-                        if fn_d.startswith(("sticker_", "tmp_", "thumb_")) or fn_d.endswith((".gif", ".png", ".webp")):
+                        if fn_d.startswith(("sticker_", "tmp_", "thumb_")) and fn_d.endswith((".gif", ".png", ".webp")):
                             fp_d = os.path.join(UPLOAD_DIR, fn_d)
                             try:
                                 if os.path.isfile(fp_d) and (now_disk - os.path.getmtime(fp_d) > 900):
@@ -19578,12 +15338,12 @@ def api_miniapp_commands():
 @app.route("/api/miniapp/sync", methods=["POST"])
 def api_miniapp_telemetry():
     now_ts = time.time()
-    accounts = refresh_accounts_ram_cache(strict=True)
+    accounts = [a for a in refresh_accounts_ram_cache(strict=True) if (a.get('platform') or 'zalo') == 'zalo']
     connection = db()
-    oauth_count = connection.execute("SELECT COUNT(*) FROM oauth_connections WHERE owner_id=?", (str(TELEGRAM_ADMIN_ID),)).fetchone()[0]
-    official_count = connection.execute("SELECT COUNT(*) FROM official_integrations").fetchone()[0]
+    oauth_count = connection.execute("SELECT COUNT(*) FROM oauth_connections WHERE owner_id=? AND provider='discord'", (str(TELEGRAM_ADMIN_ID),)).fetchone()[0]
+    official_count = 0
     connection.close()
-    platform_counts = {"zalo": 0, "discord": 0, "messenger": 0, "other": 0}
+    platform_counts = {"zalo": 0, "discord": oauth_count}
     for account in accounts:
         platform = str(account.get("platform") or "zalo").lower()
         platform_counts[platform if platform in platform_counts else "other"] += 1
@@ -19595,7 +15355,7 @@ def api_miniapp_telemetry():
         "version": APP_VERSION,
         "admin_id": TELEGRAM_ADMIN_ID,
         "live_accs": sum(1 for account in accounts if account.get("enabled", 1)),
-        "total_accs": len(accounts),
+        "total_accs": len(accounts) + oauth_count,
         "oauth_count": oauth_count,
         "official_count": official_count,
         "account_platforms": platform_counts,
@@ -19633,7 +15393,7 @@ def _miniapp_listener_running(account_id):
 
 @app.route("/api/miniapp/accounts")
 def api_miniapp_accounts():
-    accs = refresh_accounts_ram_cache(strict=True)
+    accs = [a for a in refresh_accounts_ram_cache(strict=True) if (a.get('platform') or 'zalo') == 'zalo']
     out = []
     for a in accs:
         out.append({
@@ -19673,8 +15433,8 @@ def api_miniapp_add_cookie():
             return jsonify({"ok": False, "error": "Không lưu được tài khoản vào cơ sở dữ liệu. Vui lòng kiểm tra nhật ký máy chủ."}), 500
         sync_all_zalo_listeners()
         return jsonify({"ok": True, "acc_id": acc_id, "message": f"Đã nạp {name} (#{acc_id}) thành công"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+    except Exception:
+        return jsonify({"ok": False, "error": public_error_message("Không thể nạp tài khoản Zalo.")})
 
 
 @app.route("/api/miniapp/start_qr", methods=["POST"])
@@ -19682,8 +15442,8 @@ def api_miniapp_start_qr():
     try:
         status = ZaloQRLoginManager.start_qr_session()
         return jsonify({key: status.get(key) for key in ("ok", "session_id", "status", "message")})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+    except Exception:
+        return jsonify({"ok": False, "error": public_error_message("Không thể khởi tạo phiên QR.")})
 
 
 @app.route("/api/miniapp/toggle_acc_cmd", methods=["POST"])
@@ -19729,13 +15489,14 @@ def api_miniapp_delete_acc():
     return jsonify({"ok": True, "message": f"Đã xoá tài khoản #{aid}"})
 
 
-@app.route("/api/miniapp/boxes")
-def api_miniapp_boxes():
+def _cached_miniapp_boxes(requested_acc=''):
     boxes = []
     seen = set()
     try:
-        accs = get_all_accounts_from_ram(enabled_only=True)
+        accs = [a for a in get_all_accounts_from_ram(enabled_only=True) if (a.get('platform') or 'zalo') == 'zalo']
         for a in accs:
+            if requested_acc and str(a['id']) != requested_acc:
+                continue
             plat = (a.get("platform") or "zalo").lower()
             uid_s = str(a.get("uid") or "").strip()
             if plat == "zalo":
@@ -19743,27 +15504,24 @@ def api_miniapp_boxes():
                 g_data = g_c.get("data") if isinstance(g_c, dict) else (g_c[1] if isinstance(g_c, (list, tuple)) and len(g_c) > 1 else [])
                 for g in (g_data or []):
                     gid = str(g.get("id") or "").strip()
-                    if gid and gid not in seen:
-                        seen.add(gid)
-                        boxes.append({"id": gid, "name": g.get("name") or f"Nhóm {gid[-6:]}", "platform": "zalo"})
-                for gid_k in (KNOWN_GROUPS_BY_ACC.get(uid_s, set()) | ALL_KNOWN_ZALO_GROUP_IDS):
+                    key = (str(a['id']), gid)
+                    if gid and key not in seen:
+                        seen.add(key)
+                        boxes.append({"id": gid, "name": g.get("name") or f"Nhóm {gid[-6:]}", "platform": "zalo", "account_id": a['id']})
+                for gid_k in KNOWN_GROUPS_BY_ACC.get(uid_s, set()):
                     gid_s = str(gid_k).strip()
-                    if gid_s and gid_s not in seen and gid_s != uid_s:
-                        seen.add(gid_s)
-                        boxes.append({"id": gid_s, "name": f"Box Zalo {gid_s[-6:]}", "platform": "zalo"})
-            elif plat == "discord":
-                for cid in DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS.get(a["id"], set()):
-                    if cid and str(cid) not in seen:
-                        seen.add(str(cid))
-                        boxes.append({"id": str(cid), "name": f"Discord {str(cid)[-5:]}", "platform": "discord"})
-            elif plat == "messenger":
-                for tid_m in MessengerStealthAntiBanEngine.ACTIVE_MESSENGER_POLL_THREADS.get(a["id"], set()):
-                    if tid_m and str(tid_m) not in seen:
-                        seen.add(str(tid_m))
-                        boxes.append({"id": str(tid_m), "name": f"Mess {str(tid_m)[-5:]}", "platform": "messenger"})
+                    key = (str(a['id']), gid_s)
+                    if gid_s and key not in seen and gid_s != uid_s:
+                        seen.add(key)
+                        boxes.append({"id": gid_s, "name": f"Box Zalo {gid_s[-6:]}", "platform": "zalo", "account_id": a['id']})
     except Exception:
         pass
-    return jsonify({"ok": True, "boxes": boxes[:80]})
+    return boxes[:80]
+
+
+@app.route("/api/miniapp/boxes")
+def api_miniapp_boxes():
+    return jsonify({"ok": True, "boxes": _cached_miniapp_boxes(str(request.args.get('account_id') or '').strip())})
 
 
 @app.route("/api/miniapp/launch", methods=["POST"])
@@ -19771,19 +15529,41 @@ def api_miniapp_launch():
     data = request.get_json(silent=True) or {}
     mode = str(data.get("mode") or "treo_nhay").strip()
     box_id = str(data.get("box_id") or "ALL").strip()
-    delay = max(0.0, float(data.get("delay", 0.4) or 0.0))
+    try:
+        delay = float(data.get("delay", 0) or 0)
+        if not math.isfinite(delay) or not 0 <= delay <= 300:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Delay phải từ 0 đến 300 giây"}), 400
     color_raw = str(data.get("color") or "word_rainbow").strip()
     custom_text = str(data.get("custom_text") or "").strip()
 
-    accs = get_all_accounts_from_ram(enabled_only=True)
+    accs = [a for a in get_all_accounts_from_ram(enabled_only=True) if (a.get('platform') or 'zalo') == 'zalo']
+    requested_acc = str(data.get('account_id') or '').strip()
+    if requested_acc:
+        accs = [a for a in accs if str(a['id']) == requested_acc]
     if not accs:
-        return jsonify({"ok": False, "error": "⚠️ Chưa có tài khoản nào đang bật! Hãy thêm Cookie/QR trước."})
+        return jsonify({"ok": False, "error": "Không tìm thấy tài khoản Zalo đang bật đã chọn."}), 400
+
+    requested_boxes = data.get('box_ids')
+    if requested_boxes is not None:
+        if not requested_acc or not isinstance(requested_boxes, list) or not 1 <= len(requested_boxes) <= 5:
+            return jsonify({"ok": False, "error": "Chọn một tài khoản và từ 1 đến 5 box."}), 400
+        box_ids = [str(x).strip() for x in requested_boxes]
+        if len(set(box_ids)) != len(box_ids) or any(not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', x) for x in box_ids):
+            return jsonify({"ok": False, "error": "Danh sách box không hợp lệ."}), 400
+        cached = _cached_miniapp_boxes(requested_acc)
+        lookup = {str(b['id']): b for b in cached if str(b['account_id']) == requested_acc}
+        if any(x not in lookup for x in box_ids):
+            return jsonify({"ok": False, "error": "Box chưa được xác nhận thuộc tài khoản đã chọn. Hãy làm mới danh sách."}), 409
+        target_boxes = [{"id": x, "thread_id": x, "name": lookup[x]['name'], "type": "group", "platform": "zalo"} for x in box_ids]
+    else:
+        target_boxes = []
 
     # Thu thập danh sách Box mục tiêu
-    target_boxes = []
-    if box_id != "ALL":
+    if requested_boxes is None and box_id != "ALL":
         target_boxes = [{"id": box_id, "thread_id": box_id, "name": f"Box {box_id[-6:]}", "type": "group", "platform": accs[0].get("platform") or "zalo"}]
-    else:
+    elif requested_boxes is None:
         seen_b = set()
         for a in accs:
             plat = (a.get("platform") or "zalo").lower()
@@ -19794,16 +15574,6 @@ def api_miniapp_launch():
                     if gs and gs not in seen_b and gs != uid_s:
                         seen_b.add(gs)
                         target_boxes.append({"id": gs, "thread_id": gs, "name": f"Box {gs[-6:]}", "type": "group", "platform": "zalo"})
-            elif plat == "discord":
-                for cid in DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS.get(a["id"], set()):
-                    if cid and str(cid) not in seen_b:
-                        seen_b.add(str(cid))
-                        target_boxes.append({"id": str(cid), "thread_id": str(cid), "name": f"Discord {str(cid)[-5:]}", "type": "discord_channel", "platform": "discord"})
-            elif plat == "messenger":
-                for mid in MessengerStealthAntiBanEngine.ACTIVE_MESSENGER_POLL_THREADS.get(a["id"], set()):
-                    if mid and str(mid) not in seen_b:
-                        seen_b.add(str(mid))
-                        target_boxes.append({"id": str(mid), "thread_id": str(mid), "name": f"Mess {str(mid)[-5:]}", "type": "messenger_thread", "platform": "messenger"})
 
     if not target_boxes:
         return jsonify({"ok": False, "error": "⚠️ Chưa tìm thấy Box mục tiêu! Hãy nhập ID Box vào ô bên trên."})
@@ -20196,955 +15966,7 @@ input[type="password"]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgb
 </body>
 </html>"""
 
-DASHBOARD_HTML = r"""<!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>{{ custom_title or 'BẢNG ĐIỀU KHIỂN ĐA TÀI KHOẢN 4APP VIP 🇻🇳' }}</title>
-<style>
-:root{
-  --bg:#f8fafc;
-  --panel:#ffffff;
-  --panel-alt:#f1f5f9;
-  --border:#e2e8f0;
-  --text:#0f172a;
-  --text-soft:#334155;
-  --muted:#64748b;
-  --primary:#2563eb;
-  --primary-hover:#1d4ed8;
-  --success:#059669;
-  --warning:#d97706;
-  --danger:#e11d48;
-  --purple:#7c3aed;
-}
-*{box-sizing:border-box}
-body{
-  margin:0;
-  background:var(--bg);
-  color:var(--text);
-  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-  font-size:14.5px;
-  line-height:1.5;
-  -webkit-font-smoothing:antialiased;
-}
-.topbar{
-  background:rgba(255,255,255,0.96);
-  border-bottom:1px solid var(--border);
-  padding:12px 22px;
-  position:sticky;
-  top:0;
-  z-index:100;
-  display:flex;
-  flex-wrap:wrap;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-  box-shadow:0 1px 3px rgba(15,23,42,0.04);
-}
-.brand{display:flex;align-items:center;gap:12px}
-.brand-badge{
-  background:var(--primary);
-  color:#ffffff;
-  font-weight:800;
-  font-size:14.5px;
-  padding:7px 13px;
-  border-radius:10px;
-  letter-spacing:0.3px;
-}
-.brand-title h1{font-size:17px;font-weight:800;margin:0;color:var(--text)}
-.brand-title p{font-size:12.5px;color:var(--muted);margin:2px 0 0}
-.stats-pills{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.pill{
-  background:var(--panel-alt);
-  border:1px solid var(--border);
-  padding:6px 13px;
-  border-radius:999px;
-  font-size:13px;
-  font-weight:600;
-  color:var(--text-soft);
-}
-.pill b{color:var(--primary)}
-.pill.ok b{color:var(--success)}
-.container{max-width:1400px;margin:0 auto;padding:18px}
-.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
-@media(max-width:1024px){.grid-2{grid-template-columns:1fr}}
-.card{
-  background:var(--panel);
-  border:1px solid var(--border);
-  border-radius:14px;
-  padding:18px 20px;
-  box-shadow:0 2px 8px rgba(15,23,42,0.04);
-}
-.card-header{
-  display:flex;
-  flex-wrap:wrap;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  margin-bottom:14px;
-  padding-bottom:10px;
-  border-bottom:1px solid var(--border);
-}
-.card-header h2{
-  font-size:16px;
-  font-weight:800;
-  margin:0;
-  color:var(--primary);
-  display:flex;
-  align-items:center;
-  gap:8px;
-}
-.btn-row{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
-button,.btn{
-  font-family:inherit;
-  font-size:13.5px;
-  font-weight:700;
-  padding:8px 14px;
-  border-radius:9px;
-  border:1px solid transparent;
-  cursor:pointer;
-  transition:all 0.15s;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  gap:6px;
-  text-decoration:none;
-}
-.btn-primary{background:var(--primary);color:#ffffff}
-.btn-primary:hover{background:var(--primary-hover)}
-.btn-success{background:var(--success);color:#ffffff}
-.btn-success:hover{filter:brightness(1.06)}
-.btn-danger{background:var(--danger);color:#ffffff}
-.btn-danger:hover{filter:brightness(1.06)}
-.btn-warning{background:var(--warning);color:#ffffff}
-.btn-outline{background:#ffffff;color:var(--text-soft);border-color:#cbd5e1}
-.btn-outline:hover{border-color:var(--primary);color:var(--primary);background:#eff6ff}
-.btn-sm{padding:6px 10px;font-size:12.5px;border-radius:8px}
-input[type="text"],input[type="number"],select,textarea{
-  width:100%;
-  padding:10px 13px;
-  font-size:14px;
-  font-family:inherit;
-  color:var(--text);
-  background:#ffffff;
-  border:1px solid #cbd5e1;
-  border-radius:9px;
-  outline:none;
-}
-input:focus,select:focus,textarea:focus{border-color:var(--primary);box-shadow:0 0 0 2px rgba(37,99,235,0.12)}
-label.field-lbl{display:block;font-size:13px;font-weight:700;color:var(--text-soft);margin:9px 0 5px}
-.scroll-list{
-  max-height:300px;
-  overflow-y:auto;
-  border:1px solid var(--border);
-  border-radius:10px;
-  background:var(--panel-alt);
-  padding:6px;
-}
-.list-item{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  padding:9px 11px;
-  background:#ffffff;
-  border:1px solid var(--border);
-  margin-bottom:5px;
-  border-radius:8px;
-  font-size:13.5px;
-}
-.list-item:last-child{margin-bottom:0}
-.list-item:hover{border-color:#1d4ed8;background:#eff6ff}
-.item-left{display:flex;align-items:center;gap:10px;min-width:0}
-.item-title{font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.item-sub{font-size:12px;color:var(--muted)}
-.tag-plat{
-  font-size:11px;
-  font-weight:800;
-  padding:3px 7px;
-  border-radius:6px;
-  text-transform:uppercase;
-}
-.tag-zalo{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
-.tag-discord{background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe}
-.tag-messenger{background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd}
-.toast-bar{
-  display:none;
-  margin-bottom:16px;
-  padding:12px 16px;
-  border-radius:10px;
-  background:#ecfdf5;
-  border:1px solid #a7f3d0;
-  color:#047857;
-  font-weight:700;
-  font-size:14px;
-}
-.table-wrap{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:13.5px}
-th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)}
-th{color:var(--primary);font-weight:800;background:var(--panel-alt)}
-.qr-box{
-  display:none;
-  margin-top:12px;
-  padding:14px;
-  background:var(--panel-alt);
-  border:1px dashed var(--primary);
-  border-radius:12px;
-  text-align:center;
-}
-.qr-box img{max-width:220px;border-radius:10px;border:4px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin:8px auto;display:block}
-</style>
-</head>
-<body>
-<div class="topbar">
-  <div class="brand">
-    <div class="brand-badge">DEV ANH KHÔI • v1.2.0</div>
-    <div class="brand-title">
-      <h1>HỆ THỐNG ĐA NỀN TẢNG ZALO • MESSENGER • DISCORD (v1.2.0)</h1>
-      <p>👨‍💻 Author: <b>Dev Anh Khôi</b> • 12 Nguồn Fake Soạn Tin Messenger • Khiên Anti-Ban Chống Die Cookie 9 Lớp • Lệnh .menu Nhạy 100% Cả 3 App</p>
-    </div>
-  </div>
-  <div class="stats-pills">
-    <div class="pill ok">🟢 Acc Kết Nối: <b id="stat-accs">{{ accounts|length }}</b></div>
-    <div class="pill">🚀 Chiến Dịch Đang Chạy: <b id="stat-tasks">0</b></div>
-    <div class="pill">⚡ Tốc Độ Gửi: <b id="stat-rpm">0</b> tin/phút</div>
-    <button class="btn btn-danger btn-sm" onclick="stopAllTasks()">🛑 DỪNG TẤT CẢ (.ta)</button>
-  </div>
-</div>
-
-<div class="container">
-  <div id="toast-box" class="toast-bar"></div>
-
-  <!-- HÀNG 1: QUẢN LÝ ĐA TÀI KHOẢN & QUÉT CHỌN NHÓM/BOX -->
-  <div class="grid-2">
-    <!-- CỘT 1: QUẢN LÝ ĐA TÀI KHOẢN -->
-    <div class="card">
-      <div class="card-header">
-        <h2>👥 1. Quản Lý & Chọn Đa Tài Khoản (<span id="sel-acc-count">Tất cả</span>)</h2>
-        <div class="btn-row">
-          <button class="btn btn-primary btn-sm" onclick="startZaloQR()">📲 Quét QR Zalo PC</button>
-          <button class="btn btn-success btn-sm" onclick="checkAllLive()">🔍 Check Sống/Die</button>
-          <button class="btn btn-outline btn-sm" onclick="reconnectAll()">🔄 Kết Nối Lại</button>
-        </div>
-      </div>
-
-      <!-- Chọn nhanh số lượng Acc -->
-      <div class="btn-row" style="margin-bottom:10px">
-        <span style="font-size:13px;color:var(--muted);font-weight:700">Chọn nhanh:</span>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(1)">1 Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(5)">5 Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(10)">10 Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(20)">20 Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(50)">50 Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopAccounts(999)">✅ Tất Cả Acc</button>
-        <button class="btn btn-outline btn-sm" onclick="bulkToggleCmd(true)">💬 Bật Lệnh Tất Cả</button>
-      </div>
-
-      <!-- Khung hiển thị QR Zalo PC trực tiếp -->
-      <div id="qr-modal" class="qr-box">
-        <div style="font-weight:800;color:#2563eb" id="qr-status-txt">⏳ Đang khởi tạo mã QR Máy Tính Singapore...</div>
-        <img id="qr-img" src="" alt="Zalo QR" style="display:none">
-        <div style="font-size:13px;color:var(--muted)">Mở Zalo trên điện thoại ➔ Quét mã QR ➔ Tự động nạp vào danh sách Acc!</div>
-      </div>
-
-      <!-- Danh sách tài khoản -->
-      <div class="scroll-list" id="acc-list-container">
-        {% if accounts %}
-          {% for a in accounts %}
-          <div class="list-item">
-            <div class="item-left">
-              <input type="checkbox" class="acc-chk" value="{{ a.id }}" checked onchange="updateSelectedCounts()" style="width:18px;height:18px;cursor:pointer">
-              <span class="tag-plat tag-{{ a.platform or 'zalo' }}">{{ a.platform or 'zalo' }}</span>
-              <div>
-                <div class="item-title">#{{ a.id }} — {{ a.name }}</div>
-                <div class="item-sub">UID: <code>{{ a.uid or a.imei or '-' }}</code> • Lệnh chat: <b style="color:{{ '#34d399' if a.chat_cmd_enabled else '#f87171' }}">{{ 'BẬT' if a.chat_cmd_enabled else 'TẮT' }}</b></div>
-              </div>
-            </div>
-            <div class="btn-row">
-              <button class="btn btn-outline btn-sm" onclick="testSingleAcc({{ a.id }})">Check</button>
-              <button class="btn btn-outline btn-sm" onclick="toggleSingleCmd({{ a.id }}, {{ 0 if a.chat_cmd_enabled else 1 }})">{{ 'Tắt Lệnh' if a.chat_cmd_enabled else 'Bật Lệnh' }}</button>
-              <a class="btn btn-danger btn-sm" href="/account/delete/{{ a.id }}" onclick="return confirm('Xoá tài khoản #{{ a.id }}?')">Xoá</a>
-            </div>
-          </div>
-          {% endfor %}
-        {% else %}
-          <div style="padding:18px;text-align:center;color:var(--muted)">Chưa có tài khoản nào. Hãy bấm <b>📲 Quét QR Zalo PC</b> hoặc thêm Cookie + IMEI bên dưới!</div>
-        {% endif %}
-      </div>
-
-      <!-- Khung 1: Nạp Nhanh Cookie Zalo (Tự nhận IMEI + Khóa Phiên + Bật Lệnh Độc Lập Ngay) -->
-      <div style="margin-top:14px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(59,130,246,0.45)">
-        <div style="font-weight:800;color:#2563eb;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
-          <span>🍪 1. Nạp Nhanh Cookie Zalo (Tự Nhận IMEI & Ăn Lệnh .menu Ngay)</span>
-          <span style="font-size:12px;color:#059669">Cô lập riêng từng Cookie</span>
-        </div>
-        <div class="grid-2" style="gap:8px;margin-bottom:8px">
-          <input type="text" id="fast-zalo-name" placeholder="Tên gợi nhớ (VD: Acc Zalo Chính)">
-          <input type="text" id="fast-zalo-imei" placeholder="IMEI (z_uuid) — Có thể để trống, tự nhận diện!">
-        </div>
-        <div style="display:flex;gap:8px">
-          <input type="text" id="fast-zalo-cookie" placeholder="Dán Cookie Zalo (zpw_sek / zpsid / JSON / Cookie|IMEI) vào đây...">
-          <button type="button" class="btn btn-success" onclick="quickAddZaloCookie()" style="white-space:nowrap">⚡ Nạp Zalo</button>
-        </div>
-      </div>
-
-      <!-- Khung 2: Nạp Nhanh Cookie Facebook (Tự Lấy Máy Tính Thông Báo Vào Facebook Chống Quét Checkpoint) -->
-      <div style="margin-top:10px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(14,165,233,0.45)">
-        <div style="font-weight:800;color:#38bdf8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
-          <span>💻 2. Nạp Cookie Facebook (Lấy Máy Tính Thông Báo Vào FB Chống Quét)</span>
-          <span style="font-size:12px;color:#059669">Anti-Reg & Anti-Hack Active</span>
-        </div>
-        <div style="display:flex;gap:8px">
-          <input type="text" id="fast-fb-name" placeholder="Tên FB (Tùy chọn)" style="max-width:165px">
-          <input type="text" id="fast-fb-cookie" placeholder="Dán Cookie Facebook (c_user=...; xs=...) hoặc JSON vào đây...">
-          <button type="button" class="btn btn-primary" onclick="quickAddFacebookCookie()" style="white-space:nowrap">💻 Nạp FB & Báo Máy Tính</button>
-        </div>
-      </div>
-
-      <!-- Khung 3: Đúc Token & Anti-Reg Acc Discord (Chống Báo Tài Khoản Bị Hack / Đặt Lại Mật Khẩu) -->
-      <div style="margin-top:10px;background:var(--panel-alt);padding:14px;border-radius:12px;border:1px solid rgba(139,92,246,0.45)">
-        <div style="font-weight:800;color:#6d28d9;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
-          <span>🛡️ 3. Đúc Token & Anti-Reg Acc Discord (Chống Báo Hack / Reset Key)</span>
-          <span style="font-size:12px;color:#059669">Chrome 131 PC Vault</span>
-        </div>
-        <div style="display:flex;gap:8px">
-          <input type="text" id="fast-dc-name" placeholder="Tên Discord" style="max-width:150px">
-          <input type="text" id="fast-dc-token" placeholder="Dán 1 hoặc nhiều Token Discord (hoặc Email|Pass) vào đây...">
-          <button type="button" class="btn btn-warning" onclick="quickAddDiscordToken()" style="white-space:nowrap">🛡️ Đúc Token Discord</button>
-        </div>
-      </div>
-
-      <!-- Form mở rộng cho Discord / Messenger -->
-      <details style="margin-top:10px">
-        <summary style="cursor:pointer;font-weight:700;color:var(--muted);padding:4px 0;font-size:13.5px">➕ Thêm Tài Khoản Phụ (Discord Token / Messenger Cookie)</summary>
-        <form method="POST" action="/account/add" style="margin-top:8px;background:var(--panel-alt);padding:12px;border-radius:12px;border:1px solid var(--border)">
-          <div class="grid-2" style="margin-bottom:8px;gap:8px">
-            <select name="platform" id="add-plat-sel">
-              <option value="zalo">Zalo PC (Cookie + IMEI)</option>
-              <option value="discord">Discord (Token)</option>
-              <option value="messenger">Facebook Messenger (Cookie)</option>
-            </select>
-            <input type="text" name="name" placeholder="Tên gợi nhớ">
-          </div>
-          <input type="text" name="imei" placeholder="IMEI Zalo (nếu có)" style="margin-bottom:8px">
-          <input type="text" name="cookies" placeholder="Cookie Zalo / Messenger..." style="margin-bottom:8px">
-          <input type="text" name="token" placeholder="Token Discord...">
-          <input type="hidden" name="chat_cmd_enabled" value="1">
-          <button type="submit" class="btn btn-primary btn-sm" style="width:100%;margin-top:10px">➕ Lưu Tài Khoản</button>
-        </form>
-      </details>
-    </div>
-
-    <!-- CỘT 2: QUÉT & CHỌN NHÓM / BOX MỤC TIÊU -->
-    <div class="card">
-      <div class="card-header">
-        <h2>📦 2. Chọn Nhóm / Box Mục Tiêu (<span id="sel-box-count">0 Box</span>)</h2>
-        <div class="btn-row">
-          <button class="btn btn-primary btn-sm" onclick="scanBoxes('zalo', true)">🔄 Quét Nhóm Zalo</button>
-          <button class="btn btn-outline btn-sm" onclick="scanBoxes('discord', true)">Quét Kênh Discord</button>
-          <button class="btn btn-outline btn-sm" onclick="scanBoxes('messenger', true)">Quét Box Messenger</button>
-        </div>
-      </div>
-
-      <div class="btn-row" style="margin-bottom:10px">
-        <span style="font-size:13px;color:var(--muted);font-weight:700">Chọn nhanh:</span>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(1)">1 Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(5)">5 Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(10)">10 Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(20)">20 Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(50)">50 Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(999)">✅ Tất Cả Box</button>
-        <button class="btn btn-outline btn-sm" onclick="selectTopBoxes(0)">Bỏ Chọn</button>
-      </div>
-
-      <div style="display:flex;gap:8px;margin-bottom:10px">
-        <input type="text" id="box-search-inp" placeholder="🔍 Tìm kiếm tên nhóm hoặc nhập trực tiếp ID Box..." oninput="filterBoxList()">
-        <button class="btn btn-outline btn-sm" onclick="addManualBoxId()">+ Thêm ID</button>
-      </div>
-
-      <div class="scroll-list" id="box-list-container">
-        <div style="padding:18px;text-align:center;color:var(--muted)">Đang tự động tải danh sách Nhóm Zalo... Bấm <b>🔄 Quét Nhóm Zalo</b> để làm mới!</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- HÀNG 2: KHỞI CHẠY CHIẾN DỊCH ĐA ACC & TẠO STICKER CHUẨN NHÃN DÁN ZALO -->
-  <div class="grid-2">
-    <!-- CỘT 1: BẢNG KHỞI CHẠY CHIẾN DỊCH 38+ CHẾ ĐỘ -->
-    <div class="card">
-      <div class="card-header">
-        <h2>🚀 3. Khởi Chạy Chiến Dịch Đa Tài Khoản</h2>
-        <span style="font-size:13px;color:#059669;font-weight:700">Chạy mượt nhiều Acc cùng lúc 0ms</span>
-      </div>
-
-      <div class="grid-2" style="gap:12px;margin-bottom:8px">
-        <div>
-          <label class="field-lbl">Chế độ chạy (38+ Chức năng VIP):</label>
-          <select id="camp-mode">
-            <option value="treo_nhay">🔥 Treo Nhây Từng Dòng (.n / .nhay)</option>
-            <option value="treo_ngon">🌈 Treo Ngôn Đa Màu (.g / .damau)</option>
-            <option value="zalo_gif">⚡ Treo GIF + 68 Nhãn Dán Động Zalo (.gif)</option>
-            <option value="treo_sticker">🎨 Treo Nhãn Dán Gốc Zalo Liên Hoàn (.treosticker)</option>
-            <option value="nhay_giaitan">📢 Phát Thông Báo Giải Tán Hệ Thống Zalo (.nhaygiaitan)</option>
-            <option value="nhay_poll">📊 Treo Bình Chọn Poll 0.0s Không Nghỉ (.nhaypoll)</option>
-            <option value="nhay_namebox">✏️ Đổi Tên Box Zalo Liên Hoàn (.nhaynamebox)</option>
-            <option value="nhay_theme">🎨 Đổi Nền Box Zalo Liên Hoàn (.nhaynen)</option>
-            <option value="nhay_typing">⌨️ Giả Lập Soạn Tin Typing (.nhaytyping)</option>
-            <option value="zalo_todo">📋 Giao Việc Zalo To-Do (.todo)</option>
-            <option value="zalo_cardbank">🏦 Gửi Thẻ Ngân Hàng VietQR (.bank)</option>
-            <option value="share_contact">🪪 Chia Sẻ Danh Thiếp (.card)</option>
-            <option value="sieu_xa_nhieu_nhom">🚀 Siêu Xả Đa Nhóm Tốc Độ Ánh Sáng (.xa)</option>
-            <option value="combo_lien_thanh">⚡ Combo Liên Thanh 3 Câu/Nhịp (.combo)</option>
-            <option value="nhay_2c">🔥 Nhây Gộp 2 Câu (2c.txt) (.2c)</option>
-            <option value="treo_so">🔢 Treo Đếm Số Liên Hoàn (so.txt) (.so)</option>
-            <option value="so_tag">🎯 Treo Số Kèm Tag Mục Tiêu (.sotag)</option>
-            <option value="idea_mess">💥 Nhây Sát Thương Cực Mạnh (chui.txt) (.chui)</option>
-            <option value="nhay_icon">🌪️ Bão Ký Hiệu & Icon VIP (.nhayicon)</option>
-            <option value="code_lag">⚡ Code Lag Zalgo Siêu Nặng (.codelag)</option>
-          </select>
-        </div>
-        <div>
-          <label class="field-lbl">Chọn File kịch bản (.txt):</label>
-          <select id="camp-file">
-            {% for f in files %}
-            <option value="{{ f.filename }}">#{{ f.display_num }} — {{ f.filename }} ({{ f.lines_count }} dòng)</option>
-            {% endfor %}
-          </select>
-        </div>
-      </div>
-
-      <div class="grid-2" style="gap:12px;margin-bottom:8px">
-        <div>
-          <label class="field-lbl">Chế độ màu chữ Zalo:</label>
-          <select id="camp-color">
-            <option value="word_rainbow">🌈 Đổi Màu Từng Từ (Word Rainbow VIP)</option>
-            <option value="char_rainbow">✨ Đổi Màu Từng Ký Tự (Char Rainbow)</option>
-            <option value="rainbow">🎨 Cầu Vồng Theo Dòng (Line Rainbow)</option>
-            <option value="fire_gradient">🔥 Lửa Hoàng Kim (Đỏ - Cam - Vàng)</option>
-            <option value="ocean_gradient">🌊 Đại Dương Băng Tuyết</option>
-            <option value="royal_gradient">👑 Hoàng Gia Tối Thượng</option>
-            <option value="fixed">❤️‍🔥 Đỏ Rực Cố Định (db342e)</option>
-            <option value="none">⚪ Chữ Mặc Định</option>
-          </select>
-        </div>
-        <div>
-          <label class="field-lbl">Tốc độ Delay (giây — Hỗ trợ 0s):</label>
-          <input type="number" id="camp-delay" value="0.0" step="0.1" min="0">
-        </div>
-      </div>
-
-      <label class="field-lbl">Nội dung tùy chỉnh (Hoặc để trống để chạy theo File .txt đã chọn; kèm @All hoặc @Tên nếu muốn Tag):</label>
-      <textarea id="camp-raw-text" rows="3" placeholder="Nhập câu nhây (ngăn cách bằng dấu ;) hoặc đoạn văn ngôn, hoặc tên nhóm cho chế độ Giải Tán..."></textarea>
-
-      <div style="display:flex;flex-wrap:wrap;gap:16px;margin:12px 0">
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
-          <input type="checkbox" id="camp-multi-acc" checked style="width:17px;height:17px"> Chạy Đa Tài Khoản Đồng Loạt
-        </label>
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
-          <input type="checkbox" id="camp-tag-all" style="width:17px;height:17px"> Báo Chuông @All Ẩn
-        </label>
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
-          <input type="checkbox" id="camp-heading" checked style="width:17px;height:17px"> Chữ To In Đậm (f_18)
-        </label>
-      </div>
-
-      <button class="btn btn-primary" style="width:100%;padding:13px;font-size:15.5px" onclick="startCampaignNow()">🚀 BẮT ĐẦU CHẠY CHIẾN DỊCH NGAY</button>
-    </div>
-
-    <!-- CỘT 2: TẠO & BẮN NHÃN DÁN STICKER ZALO CHUẨN [STICKER] + QUẢN LÝ FILE -->
-    <div class="card">
-      <div class="card-header">
-        <h2>🎨 4. Tạo Sticker Thẳng Trên Zalo (Chuẩn Nhãn Dán Thật 100%)</h2>
-        <span style="font-size:13px;color:#fbbf24;font-weight:700">Nhảy ra [Sticker] thật không viền</span>
-      </div>
-
-      <label class="field-lbl">Chọn nhanh Bộ Nhãn Dán Động Zalo Gốc (68+ Mẫu):</label>
-      <div class="btn-row" style="margin-bottom:10px">
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('rong')">🐉 Rồng Lửa VIP</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('meo')">🐱 Mèo Ami Bụng Bự</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('khia')">😏 Quỳnh Aka Khịa</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('corgi')">🐶 Corgi Lắc Mông</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('vit')">🦆 Vịt Vàng Ducky</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('gau')">🐻 Gấu Brown</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('meme')">🐯 Hổ Vàng Meme</button>
-        <button class="btn btn-outline btn-sm" onclick="fireNativeSticker('quay')">💃 Quẩy Party</button>
-      </div>
-
-      <label class="field-lbl">Tìm kiếm API Sticker Zalo theo từ khóa hoặc dán Link Ảnh / GIF / Video ≤3s / Chữ Die-Cut 512×512:</label>
-      <div style="display:flex;gap:8px;margin-bottom:10px">
-        <input type="text" id="sticker-input" placeholder="Nhập từ khóa Sticker Zalo, mã ID, link ảnh/video ≤3s hoặc chữ...">
-        <button class="btn btn-outline" onclick="searchZaloStickersUI()" style="white-space:nowrap">🔍 Tìm API Sticker</button>
-        <button class="btn btn-success" onclick="createAndSendCustomSticker()" style="white-space:nowrap">🎨 Bắn Nhãn Dán</button>
-      </div>
-      <div id="sticker-search-results" style="display:none;margin-bottom:12px;padding:10px;background:#f8fafc;border:1px solid var(--border);border-radius:10px;max-height:150px;overflow-y:auto"></div>
-
-      <div style="border-top:1px solid var(--border);padding-top:14px;margin-top:8px">
-        <div style="font-weight:800;color:#1d4ed8;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
-          <span>📂 Quản Lý Kho File (.txt), Test Lệnh .menu & 12 Nguồn Fake Typing</span>
-          <span style="font-size:12px;color:#059669">Nhạy 100% Zalo • Mess • Discord</span>
-        </div>
-        <div class="btn-row" style="margin-bottom:8px">
-          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.menu')">📋 Bắn .menu Vào Box</button>
-          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.typing on')">⌨️ Bật Fake Typing 12 Nguồn</button>
-          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.typing off')">🛑 Tắt Fake Typing</button>
-          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.ping')">🏓 Check .ping</button>
-          <button class="btn btn-outline btn-sm" onclick="quickRunWebCmd('.nhaygiaitan')">📢 Giải Tán Zalo</button>
-        </div>
-        <div style="display:flex;gap:8px;margin-bottom:10px">
-          <input type="text" id="web-cmd-inp" placeholder="Gõ lệnh trực tiếp (VD: .menu, .typing on, .sticker, .gif, .nhaygiaitan, .t, .ta)...">
-          <button class="btn btn-primary" onclick="dispatchWebCommand()" style="white-space:nowrap">⚡ Gửi Lệnh</button>
-        </div>
-        <details>
-          <summary style="cursor:pointer;font-weight:700;color:#059669">➕ Tạo / Tải Lên File Kịch Bản (.txt) Mới</summary>
-          <form method="POST" action="/file/create" style="margin-top:8px;background:var(--panel-alt);padding:12px;border-radius:10px">
-            <input type="text" name="filename" placeholder="Tên file (VD: nhay_vip.txt)" required style="margin-bottom:8px">
-            <textarea name="content" rows="3" placeholder="Mỗi câu 1 dòng..." required style="margin-bottom:8px"></textarea>
-            <button type="submit" class="btn btn-success btn-sm">💾 Lưu File .txt</button>
-          </form>
-        </details>
-      </div>
-    </div>
-  </div>
-
-  <!-- HÀNG 3: BẢNG GIÁM SÁT TIẾN TRÌNH & LỊCH SỬ LỆNH THỜI GIAN THỰC -->
-  <div class="card">
-    <div class="card-header">
-      <h2>📊 5. Giám Sát Chiến Dịch Đang Chạy & Nhật Ký Hệ Thống (Thời Gian Thực)</h2>
-      <div class="btn-row">
-        <button class="btn btn-danger btn-sm" onclick="stopAllTasks()">🛑 Dừng Tất Cả Chiến Dịch (.stopall)</button>
-      </div>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Mã Task</th>
-            <th>Chế Độ</th>
-            <th>Số Acc Chạy</th>
-            <th>Số Box</th>
-            <th>Đã Gửi</th>
-            <th>Delay</th>
-            <th>Trạng Thái</th>
-            <th>Thao Tác</th>
-          </tr>
-        </thead>
-        <tbody id="tasks-tbody">
-          <tr><td colspan="8" style="text-align:center;color:var(--muted)">Chưa có chiến dịch nào đang chạy.</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
-<script>
-let ALL_BOXES = [];
-let QR_POLL_TIMER = null;
-
-function showToast(msg, isErr=false){
-  const el = document.getElementById('toast-box');
-  el.style.display = 'block';
-  el.style.background = isErr ? 'rgba(239,68,68,0.18)' : 'rgba(16,185,129,0.18)';
-  el.style.borderColor = isErr ? 'rgba(239,68,68,0.45)' : 'rgba(16,185,129,0.45)';
-  el.style.color = isErr ? '#fca5a5' : '#6ee7b7';
-  el.textContent = msg;
-  setTimeout(()=>{ el.style.display = 'none'; }, 5000);
-}
-
-function getSelectedAccountIds(){
-  return Array.from(document.querySelectorAll('.acc-chk:checked')).map(el => parseInt(el.value));
-}
-
-function getSelectedTargets(){
-  return Array.from(document.querySelectorAll('.box-chk:checked')).map(el => ({
-    id: el.value,
-    name: el.getAttribute('data-name') || ('Box ' + el.value),
-    type: el.getAttribute('data-type') || 'group'
-  }));
-}
-
-function updateSelectedCounts(){
-  const aCnt = getSelectedAccountIds().length;
-  const bCnt = getSelectedTargets().length;
-  document.getElementById('sel-acc-count').textContent = aCnt + ' Acc đã chọn';
-  document.getElementById('sel-box-count').textContent = bCnt + ' Box đã chọn';
-}
-
-function selectTopAccounts(n){
-  const chks = Array.from(document.querySelectorAll('.acc-chk'));
-  chks.forEach((c, idx) => { c.checked = (idx < n); });
-  updateSelectedCounts();
-}
-
-function selectTopBoxes(n){
-  const chks = Array.from(document.querySelectorAll('.box-chk'));
-  chks.forEach((c, idx) => { c.checked = (idx < n); });
-  updateSelectedCounts();
-}
-
-async function scanBoxes(plat='zalo', force=false){
-  const cont = document.getElementById('box-list-container');
-  cont.innerHTML = '<div style="padding:18px;text-align:center;color:#2563eb">⏳ Đang quét danh sách Box ' + plat.toUpperCase() + '...</div>';
-  try{
-    let url = '/api/all_groups' + (force ? '?refresh=1' : '');
-    if(plat === 'discord') url = '/api/discord_channels' + (force ? '?refresh=1' : '');
-    if(plat === 'messenger') url = '/api/messenger_threads' + (force ? '?refresh=1' : '');
-    const r = await fetch(url);
-    const d = await r.json();
-    let items = [];
-    if(plat === 'zalo'){
-      (d.groups || []).forEach(g => items.push({id: g.id, name: g.name || ('Nhóm ' + g.id), type: 'group', plat: 'zalo', accs: (g.acc_names || []).join(', ')}));
-    }else if(plat === 'discord'){
-      (d.channels || []).forEach(c => items.push({id: c.id, name: c.name || ('Kênh ' + c.id), type: 'discord_channel', plat: 'discord', accs: (c.acc_names || []).join(', ')}));
-    }else{
-      (d.threads || []).forEach(t => items.push({id: t.id, name: t.name || ('Box ' + t.id), type: 'messenger_thread', plat: 'messenger', accs: (t.acc_names || []).join(', ')}));
-    }
-    ALL_BOXES = items;
-    renderBoxList(items);
-  }catch(e){
-    cont.innerHTML = '<div style="padding:18px;text-align:center;color:#f87171">Không thể quét danh sách Box: ' + e + '</div>';
-  }
-}
-
-function renderBoxList(items){
-  const cont = document.getElementById('box-list-container');
-  if(!items || !items.length){
-    cont.innerHTML = '<div style="padding:18px;text-align:center;color:var(--muted)">Chưa tìm thấy Box nào. Bạn có thể nhập trực tiếp ID Box vào ô phía trên và bấm <b>+ Thêm ID</b>!</div>';
-    updateSelectedCounts();
-    return;
-  }
-  cont.innerHTML = items.map((b, i) => `
-    <div class="list-item">
-      <div class="item-left">
-        <input type="checkbox" class="box-chk" value="${b.id}" data-name="${(b.name||'').replace(/"/g,'')}" data-type="${b.type}" ${i===0?'checked':''} onchange="updateSelectedCounts()" style="width:18px;height:18px;cursor:pointer">
-        <span class="tag-plat tag-${b.plat}">${b.plat}</span>
-        <div>
-          <div class="item-title">${b.name}</div>
-          <div class="item-sub">ID: <code>${b.id}</code> ${b.accs ? '• Acc: ' + b.accs : ''}</div>
-        </div>
-      </div>
-    </div>
-  `).join('');
-  updateSelectedCounts();
-}
-
-function filterBoxList(){
-  const q = (document.getElementById('box-search-inp').value || '').toLowerCase().trim();
-  if(!q){ renderBoxList(ALL_BOXES); return; }
-  renderBoxList(ALL_BOXES.filter(b => (b.name||'').toLowerCase().includes(q) || String(b.id).includes(q)));
-}
-
-function addManualBoxId(){
-  const inp = document.getElementById('box-search-inp');
-  const val = (inp.value || '').trim();
-  if(!val) return;
-  ALL_BOXES.unshift({id: val, name: 'Box Mục Tiêu #' + val.slice(-6), type: 'group', plat: 'zalo', accs: 'Tất cả Acc'});
-  inp.value = '';
-  renderBoxList(ALL_BOXES);
-}
-
-async function startCampaignNow(){
-  const targets = getSelectedTargets();
-  if(!targets.length){
-    showToast('⚠️ Vui lòng tích chọn ít nhất 1 Nhóm/Box mục tiêu ở mục 2!', true);
-    return;
-  }
-  const accIds = getSelectedAccountIds();
-  const payload = {
-    targets: targets,
-    account_ids: accIds,
-    multi_acc: document.getElementById('camp-multi-acc').checked && accIds.length !== 1,
-    mode: document.getElementById('camp-mode').value,
-    file_id: document.getElementById('camp-file').value,
-    color_mode: document.getElementById('camp-color').value,
-    delay: parseFloat(document.getElementById('camp-delay').value || '0') || 0.0,
-    raw_text: document.getElementById('camp-raw-text').value,
-    tag_all: document.getElementById('camp-tag-all').checked,
-    is_heading: document.getElementById('camp-heading').checked,
-    antiband: true
-  };
-  const r = await fetch('/task/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-  const d = await r.json();
-  if(d.ok){
-    showToast('🚀 Đã khởi chạy chiến dịch thành công (' + accIds.length + ' Acc × ' + targets.length + ' Box)!');
-    refreshStatus();
-  }else{
-    showToast('❌ ' + (d.error || 'Lỗi khởi chạy'), true);
-  }
-}
-
-async function quickAddFacebookCookie(){
-  const ck = (document.getElementById('fast-fb-cookie').value || '').trim();
-  const nm = (document.getElementById('fast-fb-name').value || '').trim();
-  if(!ck){
-    showToast('⚠️ Hãy dán Cookie Facebook (có c_user và xs) vào ô!', true);
-    return;
-  }
-  showToast('💻 Đang khóa Thiết Bị Máy Tính, gửi thông báo xác nhận vào Facebook & bật lệnh .menu...');
-  try{
-    const r = await fetch('/api/messenger/verify_cookie', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({cookies: ck, name: nm, auto_save: true})
-    });
-    const d = await r.json();
-    if(d.ok){
-      showToast('✅ ' + (d.message || 'Đã nạp Cookie Facebook & báo Máy Tính thành công!'));
-      setTimeout(() => location.reload(), 1000);
-    }else{
-      showToast('❌ ' + (d.error || 'Lỗi nạp Cookie Facebook'), true);
-    }
-  }catch(e){
-    showToast('❌ Lỗi kết nối: ' + e, true);
-  }
-}
-
-async function quickAddDiscordToken(){
-  const tk = (document.getElementById('fast-dc-token').value || '').trim();
-  const nm = (document.getElementById('fast-dc-name').value || '').trim();
-  if(!tk){
-    showToast('⚠️ Hãy dán Token Discord (hoặc Email|Pass) vào ô!', true);
-    return;
-  }
-  showToast('🛡️ Đang khóa vân tay Máy Tính Chrome 131 (Anti-Reg & Anti-Hack) cho Discord...');
-  try{
-    let url = '/api/discord/immortalize';
-    let bodyObj = {raw_input: tk, name: nm, auto_save: true};
-    if(tk.includes('|') && !tk.includes('.')){
-      const parts = tk.split('|');
-      url = '/api/discord/reg_login';
-      bodyObj = {email: parts[0].trim(), password: (parts[1]||'').trim(), two_fa: (parts[2]||'').trim(), auto_save: true};
-    }
-    const r = await fetch(url, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(bodyObj)
-    });
-    const d = await r.json();
-    if(d.ok){
-      showToast('✅ ' + (d.message || 'Đã đúc Token Discord chống quét & bật lệnh thành công!'));
-      setTimeout(() => location.reload(), 1000);
-    }else{
-      showToast('❌ ' + (d.error || 'Không thể nạp Token Discord'), true);
-    }
-  }catch(e){
-    showToast('❌ Lỗi kết nối: ' + e, true);
-  }
-}
-
-async function quickAddZaloCookie(){
-  const ck = (document.getElementById('fast-zalo-cookie').value || '').trim();
-  const im = (document.getElementById('fast-zalo-imei').value || '').trim();
-  const nm = (document.getElementById('fast-zalo-name').value || '').trim();
-  if(!ck){
-    showToast('⚠️ Hãy dán Cookie Zalo (zpw_sek hoặc zpsid) vào ô Cookie!', true);
-    return;
-  }
-  showToast('⏳ Đang xác thực Cookie Zalo, đồng bộ zpw_enk & kích hoạt bộ lắng nghe lệnh độc lập...');
-  try{
-    const r = await fetch('/api/zalo/verify_cookie_imei', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({cookies: ck, imei: im, name: nm, auto_save: true})
-    });
-    const d = await r.json();
-    if(d.ok){
-      showToast('✅ ' + (d.message || 'Đã nạp Cookie Zalo & bật lệnh thành công!'));
-      setTimeout(() => location.reload(), 900);
-    }else{
-      showToast('❌ ' + (d.error || 'Không thể nạp Cookie Zalo'), true);
-    }
-  }catch(e){
-    showToast('❌ Lỗi kết nối khi nạp Cookie: ' + e, true);
-  }
-}
-
-async function searchZaloStickersUI(){
-  const q = (document.getElementById('sticker-input').value || '').trim();
-  const box = document.getElementById('sticker-search-results');
-  box.style.display = 'block';
-  box.innerHTML = '<span style="color:#2563eb;font-size:13px">⏳ Đang tìm kiếm trên API Sticker Zalo...</span>';
-  try{
-    const r = await fetch('/api/zalo/search_stickers?q=' + encodeURIComponent(q));
-    const d = await r.json();
-    const list = d.stickers || [];
-    if(!list.length){
-      box.innerHTML = '<span style="color:var(--muted);font-size:13px">Không tìm thấy mẫu có sẵn — Bấm [🎨 Bắn Nhãn Dán] để cắt khung tạo Sticker mới từ chữ/ảnh này!</span>';
-      return;
-    }
-    box.innerHTML = '<div style="font-size:12.5px;color:#1d4ed8;margin-bottom:6px;font-weight:700">Chạm vào mẫu bên dưới để bắn thẳng Nhãn Dán vào Box đang chọn:</div><div class="btn-row">' +
-      list.map(s => `<button class="btn btn-outline btn-sm" onclick="fireNativeSticker('${s.id}')">🎯 ${s.name} (#${s.id})</button>`).join('') +
-      '</div>';
-  }catch(e){
-    box.innerHTML = '<span style="color:#f87171;font-size:13px">Lỗi tra cứu Sticker: ' + e + '</span>';
-  }
-}
-
-async function fireNativeSticker(tag){
-  document.getElementById('sticker-input').value = tag;
-  await createAndSendCustomSticker();
-}
-
-async function createAndSendCustomSticker(){
-  const targets = getSelectedTargets();
-  if(!targets.length){
-    showToast('⚠️ Hãy chọn ít nhất 1 Nhóm/Box ở mục 2 để bắn Nhãn Dán Sticker!', true);
-    return;
-  }
-  const inputVal = (document.getElementById('sticker-input').value || '').trim();
-  const accIds = getSelectedAccountIds();
-  const r = await fetch('/api/zalo/create_sticker', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({targets: targets, account_ids: accIds, query: inputVal})
-  });
-  const d = await r.json();
-  if(d.ok){
-    showToast('🎨 ' + (d.message || 'Đã bắn Nhãn Dán Sticker [Sticker] chuẩn Zalo thành công!'));
-  }else{
-    showToast('❌ ' + (d.error || 'Không thể tạo Sticker'), true);
-  }
-}
-
-async function quickRunWebCmd(c){
-  const inp = document.getElementById('web-cmd-inp');
-  if(inp){ inp.value = c; }
-  await dispatchWebCommand();
-}
-
-async function dispatchWebCommand(){
-  const cmd = (document.getElementById('web-cmd-inp').value || '').trim();
-  if(!cmd) return;
-  const targets = getSelectedTargets();
-  const tid = targets.length ? targets[0].id : '';
-  const r = await fetch('/api/command/dispatch_web', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({cmd: cmd, thread_id: tid})
-  });
-  const d = await r.json();
-  showToast(d.message || 'Đã thực thi lệnh!', !d.ok);
-  refreshStatus();
-}
-
-async function startZaloQR(){
-  const box = document.getElementById('qr-modal');
-  const txt = document.getElementById('qr-status-txt');
-  const img = document.getElementById('qr-img');
-  box.style.display = 'block';
-  img.style.display = 'none';
-  txt.textContent = '⏳ Đang cấp phát Máy Tính Singapore & tạo mã QR Zalo...';
-  if(QR_POLL_TIMER) clearInterval(QR_POLL_TIMER);
-  const r = await fetch('/api/zalo/qr_start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({region:'SG', auto_save:true})});
-  const d = await r.json();
-  if(!d.ok){
-    txt.textContent = '❌ Lỗi tạo QR: ' + (d.error || '');
-    return;
-  }
-  const sid = d.session_id;
-  QR_POLL_TIMER = setInterval(async () => {
-    try{
-      const sr = await fetch('/api/zalo/qr_status/' + sid);
-      const sd = await sr.json();
-      if(sd.has_qr){
-        img.src = '/api/zalo/qr_image/' + sid + '.png?t=' + Date.now();
-        img.style.display = 'block';
-        txt.textContent = '📲 Hãy mở Zalo quét mã QR bên dưới (' + (sd.pc_name || 'Singapore PC') + '):';
-      }
-      if(sd.status === 'scanned'){
-        txt.textContent = '📱 Đã quét mã QR! Hãy bấm [Đăng nhập] trên điện thoại của bạn...';
-      }
-      if(sd.status === 'success'){
-        clearInterval(QR_POLL_TIMER);
-        txt.textContent = '✅ Đăng nhập thành công tài khoản: ' + (sd.display_name || sd.uid || 'Zalo VIP') + '! Đang tải lại...';
-        setTimeout(() => location.reload(), 1200);
-      }
-      if(sd.status === 'expired' || sd.status === 'error'){
-        clearInterval(QR_POLL_TIMER);
-        txt.textContent = '⌛ ' + (sd.message || 'Mã QR đã hết hạn. Hãy bấm Quét QR Zalo PC lại.');
-      }
-    }catch(e){}
-  }, 1500);
-}
-
-async function checkAllLive(){
-  showToast('🔍 Đang kiểm tra trạng thái Sống/Die của toàn bộ tài khoản...');
-  const r = await fetch('/api/account/check_all_live', {method:'POST'});
-  const d = await r.json();
-  showToast(d.message || 'Đã kiểm tra xong!', !d.ok);
-}
-
-async function testSingleAcc(id){
-  const r = await fetch('/api/account/test_session', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({acc_id:id})});
-  const d = await r.json();
-  showToast(d.message || d.error || 'Đã kiểm tra', !d.ok);
-}
-
-async function toggleSingleCmd(id, en){
-  await fetch('/api/account/chat_cmd', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({acc_id:id, enabled:en})});
-  location.reload();
-}
-
-async function bulkToggleCmd(en){
-  await fetch('/api/account/cmd_permissions_bulk', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode: en ? 'enable_all' : 'disable_all'})});
-  location.reload();
-}
-
-async function reconnectAll(){
-  const r = await fetch('/api/account/reconnect_all', {method:'POST'});
-  const d = await r.json();
-  showToast(d.message || 'Đã kết nối lại!');
-}
-
-async function stopSingleTask(tid){
-  await fetch('/task/stop/' + tid, {method:'POST'});
-  refreshStatus();
-}
-
-asyncindex_ready = false;
-async function stopAllTasks(){
-  const r = await fetch('/task/stop_all', {method:'POST'});
-  const d = await r.json();
-  showToast('🛑 Đã dừng toàn bộ (' + (d.stopped || 0) + ' chiến dịch)!');
-  refreshStatus();
-}
-
-async function refreshStatus(){
-  try{
-    const r = await fetch('/api/status');
-    const d = await r.json();
-    const running = (d.tasks || []).filter(t => t.status === 'Đang chạy');
-    document.getElementById('stat-tasks').textContent = running.length;
-    if(d.ping_telemetry) document.getElementById('stat-rpm').textContent = d.ping_telemetry.total_rpm || 0;
-    const tb = document.getElementById('tasks-tbody');
-    if(!d.tasks || !d.tasks.length){
-      tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">Chưa có chiến dịch nào.</td></tr>';
-      return;
-    }
-    tb.innerHTML = d.tasks.slice(0, 18).map(t => `
-      <tr>
-        <td><code>#${t.id}</code></td>
-        <td><b>${t.mode}</b></td>
-        <td>${t.acc_count} Acc</td>
-        <td>${t.targets_count} Box</td>
-        <td><b style="color:#059669">${t.sent}</b></td>
-        <td>${t.delay}s</td>
-        <td><span style="color:${t.status==='Đang chạy'?'#34d399':'#94a3b8'};font-weight:700">${t.status}</span></td>
-        <td>${t.status==='Đang chạy' ? `<button class="btn btn-danger btn-sm" onclick="stopSingleTask('${t.id}')">🛑 Dừng</button>` : '-'}</td>
-      </tr>
-    `).join('');
-  }catch(e){}
-}
-
-window.addEventListener('DOMContentLoaded', () => {
-  updateSelectedCounts();
-  scanBoxes('zalo', false);
-  refreshStatus();
-  setInterval(refreshStatus, 2500);
-});
-</script>
-</body>
-</html>"""
+DASHBOARD_HTML = '<a href="/miniapp">Mở Mini App</a>'
 
 KEEPALIVE_HTML = DASHBOARD_HTML
 
@@ -21185,8 +16007,8 @@ def api_zalo_geo_status():
             "isp": "Singtel / Viettel Fiber",
             "is_vn_or_sg": True,
         })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+    except Exception:
+        return jsonify({"ok": False, "error": public_error_message("Không thể kiểm tra đường truyền.")})
 
 
 @app.route("/api/zalo/auto_scan_vn_sg_proxy", methods=["POST"])
@@ -21209,8 +16031,8 @@ def api_zalo_auto_scan_vn_sg_proxy():
                 f"Máy chủ hiện tại đang ở {route.get('country') or cc} ({route.get('ip')}). Hãy nhập Proxy VN/SG hoặc dùng cấu hình render.yaml (region: singapore)!"
             ),
         })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+    except Exception:
+        return jsonify({"ok": False, "error": public_error_message("Không thể quét đường truyền VN/SG.")})
 
 
 @app.route("/api/network/gateways")
@@ -21218,37 +16040,6 @@ def api_network_gateways():
     return jsonify(MessagingGatewayDirectory.get_directory_payload())
 
 
-@app.route("/api/messenger/typing_sources", methods=["GET", "POST"])
-def api_messenger_typing_sources():
-    """API tra cứu & kích hoạt 12 Nguồn Fake Soạn Tin Nhắn + Khiên Anti-Ban Cookie Messenger."""
-    if request.method == "GET":
-        return jsonify({
-            "ok": True,
-            "author": APP_AUTHOR,
-            "version": APP_VERSION,
-            "sources_count": len(MessengerClient.MESSENGER_TYPING_SOURCES),
-            "sources": MessengerClient.MESSENGER_TYPING_SOURCES,
-        })
-    data = request.json or {}
-    thread_id = str(data.get("thread_id") or "").strip()
-    enable = bool(data.get("enable", True))
-    accs = get_all_accounts_from_ram(platform="messenger", enabled_only=True)
-    if not accs or not thread_id:
-        return jsonify({"ok": False, "error": "Cần có ít nhất 1 Acc Messenger đang bật và truyền thread_id!"}), 400
-    fired = 0
-    for a in accs[:5]:
-        try:
-            mc = MessengerClient.get_pooled_client(a["cookies"], uid=a.get("uid") or "")
-            if mc.send_typing_mqtt(thread_id, is_typing=enable, multi_source=True):
-                fired += 1
-        except Exception:
-            pass
-    return jsonify({
-        "ok": fired > 0,
-        "fired_accounts": fired,
-        "sources_count": len(MessengerClient.MESSENGER_TYPING_SOURCES),
-        "message": f"Đã {'kích hoạt' if enable else 'tắt'} 12 Nguồn Fake Soạn Tin Nhắn trên {fired} Acc Messenger!"
-    })
 
 
 
@@ -21554,64 +16345,14 @@ def api_zalo_create_sticker():
         "message": f"Đã bắn Nhãn Dán Sticker chuẩn Zalo vào {len(targets)} Box bằng {len(sel_accs)} Acc!"
     })
 
-@app.route("/api/discord/immortalize", methods=["POST"])
-def api_discord_immortalize():
-    data = request.json or {}
-    raw_input = (data.get("raw_input") or data.get("token") or "").strip()
-    custom_name = (data.get("name") or "").strip()
-    auto_save = bool(data.get("auto_save", True))
-    res = DiscordImmortalRegTool.immortalize_tokens_batch(
-        raw_input, custom_name=custom_name, auto_save=auto_save
-    )
-    return jsonify(res), (200 if res.get("ok") else 400)
 
-@app.route("/api/discord/batch_reg_profiles", methods=["POST"])
-def api_discord_batch_reg_profiles():
-    data = request.json or {}
-    cnt = int(data.get("count", 5))
-    res = DiscordImmortalRegTool.generate_batch_clean_reg_profiles(count=cnt)
-    return jsonify(res), 200
 
-@app.route("/api/discord/register_acc", methods=["POST"])
-def api_discord_register_acc():
-    data = request.json or {}
-    email = (data.get("email") or "").strip()
-    username = (data.get("username") or "").strip()
-    password = (data.get("password") or "").strip()
-    dob = (data.get("dob") or "2000-06-15").strip()
-    invite_code = (data.get("invite_code") or "").strip()
-    auto_save = bool(data.get("auto_save", True))
-    res = DiscordImmortalRegTool.register_new_account(
-        email=email, username=username, password=password,
-        dob=dob, invite_code=invite_code, auto_save=auto_save
-    )
-    return jsonify(res), 200
 
-@app.route("/api/discord/refresh_firewall", methods=["POST"])
-def api_discord_refresh_firewall():
-    rows = get_all_accounts_from_ram(platform="discord")
-    refreshed = 0
-    for r in rows:
-        tk = (r.get("token") or "").strip()
-        if tk:
-            tkey = DiscordStealthAntiBanEngine._token_vault_key(tk)
-            with DiscordStealthAntiBanEngine._LOCK:
-                DiscordStealthAntiBanEngine._WARMED_SESSIONS.discard(tkey)
-            DiscordStealthAntiBanEngine.ensure_session_warmed_up(tk, is_bot=bool(r.get("is_bot", 0)))
-            refreshed += 1
-    return jsonify({
-        "ok": True,
-        "refreshed": refreshed,
-        "message": f"Đã làm mới Tường Lửa & nạp lại Cookie Cloudflare cho {refreshed} tài khoản Discord!"
-    })
 
-@app.route("/api/tools/2fa", methods=["POST", "GET"])
+@app.route("/api/tools/2fa", methods=["POST"])
 def api_tools_2fa():
-    if request.method == "POST":
-        data = request.json or {}
-        secret = (data.get("secret") or "").strip()
-    else:
-        secret = (request.args.get("secret") or "").strip()
+    data = request.get_json(silent=True) or {}
+    secret = (data.get("secret") or "").strip()
     token, rem_sec = generate_totp_rfc6238(secret)
     if token:
         return jsonify({"ok": True, "token": token, "rem_sec": rem_sec})
@@ -21634,7 +16375,13 @@ def api_zalo_qr_start():
         custom_pc_name=custom_pc_name,
         vn_proxy=vn_proxy,
     )
-    return jsonify(res)
+    public_keys = (
+        "ok", "session_id", "status", "message", "qr_base64", "qr_image_url",
+        "remaining_sec", "qr_code_id", "pc_name", "computer_name", "vn_location",
+        "vn_isp", "route_mode", "real_country_code", "is_vn_or_sg", "step_num",
+        "device_model",
+    )
+    return jsonify({key: res.get(key) for key in public_keys if key in res})
 
 @app.route("/api/zalo/pc_devices")
 def api_zalo_pc_devices():
@@ -21651,7 +16398,7 @@ def api_telegram_status():
         from get_ck_im_zalo import get_telegram_bot_status
         st = get_telegram_bot_status()
     except Exception as e:
-        st = {"running": False, "last_error": str(e)}
+        st = {"running": False, "last_error": f"Telegram status unavailable ({type(e).__name__})"}
     return jsonify({"ok": True, **st})
 
 @app.route("/api/telegram/restart", methods=["POST"])
@@ -21663,13 +16410,13 @@ def api_telegram_restart():
         time.sleep(0.6)
         st = get_telegram_bot_status()
         return jsonify({"ok": True, "message": "🤖 Đã khởi động lại Bot Telegram & gỡ bỏ Webhook xung đột thành công!", **st})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 200
+    except Exception:
+        return jsonify({"ok": False, "error": public_error_message("Không thể khởi động lại Bot Telegram.")}), 200
 
 @app.route("/api/zalo/qr_status/<session_id>")
 def api_zalo_qr_status(session_id):
     res = ZaloQRLoginManager.get_session_status(session_id)
-    return jsonify(res)
+    return jsonify({key: res.get(key) for key in ('ok','status','message','qr_base64','account_id')})
 
 @app.route("/api/zalo/qr_image/<session_id>.png")
 def api_zalo_qr_image_png(session_id):
@@ -21724,7 +16471,7 @@ def api_zalo_verify_cookie_imei():
                 }
         except Exception:
             pass
-    if not chk.get("alive") and not (cookies_dict.get("zpw_sek") or cookies_dict.get("zpsid")):
+    if not chk.get("alive"):
         return jsonify({
             "ok": False,
             "alive": False,
@@ -21775,29 +16522,31 @@ def api_zalo_verify_cookie_imei():
         "groups_count": groups_count,
         "verified_live": True,
         "zpw_enk_ready": bool(zpw_enk),
-        "message": f"🟢 SỐNG (ON) — Đã xác thực & giữ sống 24/7 cho {acc_name} (UID: {uid} • {groups_count} nhóm)!"
+        "message": f"Đã xác minh phiên hiện tại của {acc_name} (UID: {uid} • {groups_count} nhóm). Phiên vẫn có thể hết hạn hoặc bị thu hồi."
     })
 
 @app.route("/api/zalo/vault/activate", methods=["POST"])
 def api_zalo_vault_activate():
     data = request.json or {}
     uid = str(data.get("uid") or "").strip()
-    records = ZaloCookieVaultEngine.list_vault_records()
-    rec = next((r for r in records if str(r["uid"]) == uid), None)
+    rec = ZaloCookieVaultEngine.get_vault_record(uid)
     if not rec:
         return jsonify({"ok": False, "error": "Không tìm thấy bản ghi trong Kho lưu trữ"}), 404
+    cookies = normalize_zalo_cookies(rec.get("cookies_json") or "")
+    if not cookies:
+        return jsonify({"ok": False, "error": "Bản ghi không còn credential hợp lệ trên máy chủ"}), 409
     conn = db()
     existing = conn.execute("SELECT id FROM accounts WHERE platform='zalo' AND (uid=? OR imei=?)", (rec["uid"], rec["imei"])).fetchone()
     if existing:
         conn.execute(
-            "UPDATE accounts SET name=?, imei=?, cookies=?, uid=?, enabled=1 WHERE id=?",
-            (rec["display_name"], rec["imei"], json.dumps(rec["cookies"], ensure_ascii=False), rec["uid"], existing["id"])
+            "UPDATE accounts SET name=?, imei=?, cookies=?, uid=?, zpw_enk=?, enabled=1 WHERE id=?",
+            (rec["display_name"], rec["imei"], json.dumps(cookies, ensure_ascii=False), rec["uid"], rec.get("zpw_enk") or "", existing["id"])
         )
     else:
         conn.execute(
-            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
-               VALUES (?, 'zalo', ?, ?, '', 0, ?, 1, '.', 0, 1, ?)""",
-            (rec["display_name"], rec["imei"], json.dumps(rec["cookies"], ensure_ascii=False), rec["uid"], time.time())
+            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, zpw_enk, user_agent, created_at)
+               VALUES (?, 'zalo', ?, ?, '', 0, ?, 1, '.', 0, 1, ?, ?, ?)""",
+            (rec["display_name"], rec["imei"], json.dumps(cookies, ensure_ascii=False), rec["uid"], rec.get("zpw_enk") or "", rec.get("user_agent") or "", time.time())
         )
     conn.commit()
     conn.close()
@@ -21848,107 +16597,9 @@ def api_antidieall_heal():
     HEALTH_MGR.auto_heal_all()
     return jsonify({"ok": True, "message": "⚡ Đã làm mới toàn bộ kết nối & hàng đợi đa luồng!"})
 
-@app.route("/api/discord/set_status", methods=["POST"])
-def api_discord_set_status():
-    data = request.json or {}
-    text = (data.get("text") or "Online").strip()
-    rows = get_all_accounts_from_ram(platform="discord")
-    ok_cnt = 0
-    for r in rows:
-        try:
-            dc = DiscordClient(r["token"], is_bot=bool(r.get("is_bot", 0)))
-            if dc.set_custom_status(text):
-                ok_cnt += 1
-        except Exception:
-            continue
-    return jsonify({"ok": True, "updated": ok_cnt, "message": f"Đã cập nhật Custom Status cho {ok_cnt} tài khoản Discord!"})
 
-@app.route("/api/discord/hypesquad", methods=["POST"])
-def api_discord_hypesquad():
-    data = request.json or {}
-    house_id = int(data.get("house_id") or 1)
-    rows = get_all_accounts_from_ram(platform="discord")
-    ok_cnt = 0
-    for r in rows:
-        try:
-            dc = DiscordClient(r["token"], is_bot=bool(r.get("is_bot", 0)))
-            if dc.set_hypesquad(house_id):
-                ok_cnt += 1
-        except Exception:
-            continue
-    return jsonify({"ok": True, "updated": ok_cnt, "message": f"Đã đổi huy hiệu HypeSquad cho {ok_cnt} tài khoản Discord!"})
 
-@app.route("/api/messenger/login_credentials", methods=["POST"])
-def api_messenger_login_credentials():
-    data = request.json or {}
-    email = (data.get("email") or "").strip()
-    password = (data.get("password") or "").strip()
-    custom_name = (data.get("name") or "").strip()
-    auto_save = bool(data.get("auto_save", True))
-    getter = FacebookCookieGetter()
-    cookie_str, uid, msg = getter.login_facebook(email, password)
-    if not cookie_str or not uid:
-        return jsonify({"ok": False, "error": msg}), 400
-    c_dict = normalize_messenger_cookies(cookie_str)
-    acc_name = custom_name or f"Mess_{uid[-4:]}"
-    try:
-        m_client = MessengerClient.get_pooled_client(c_dict, uid=uid, force_new=True)
-        if not custom_name and m_client.display_name:
-            acc_name = m_client.display_name
-        c_dict = m_client.cookies_dict
-    except Exception:
-        pass
-    if auto_save:
-        conn = db()
-        existing = conn.execute("SELECT id FROM accounts WHERE platform='messenger' AND uid=?", (uid,)).fetchone()
-        if existing:
-            conn.execute(
-                "UPDATE accounts SET name=?, cookies=?, enabled=1 WHERE id=?",
-                (acc_name, json.dumps(c_dict, ensure_ascii=False), existing["id"])
-            )
-        else:
-            conn.execute(
-                """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
-                   VALUES (?, 'messenger', '', ?, '', 0, ?, 1, '.', 0, 1, ?)""",
-                (acc_name, json.dumps(c_dict, ensure_ascii=False), uid, time.time())
-            )
-        conn.commit()
-        conn.close()
-        sync_all_zalo_listeners()
-    return jsonify({"ok": True, "cookie": cookie_str, "uid": uid, "name": acc_name, "message": "Đã lấy Cookie Facebook thành công!"})
 
-@app.route("/api/discord/reg_login", methods=["POST"])
-def api_discord_reg_login():
-    data = request.json or {}
-    email = (data.get("email") or "").strip()
-    password = (data.get("password") or "").strip()
-    two_fa = (data.get("two_fa") or "").strip()
-    twofa_type = (data.get("twofa_type") or "totp").strip()
-    auto_save = bool(data.get("auto_save", True))
-
-    res = login_discord_reg_session(email, password, two_fa, twofa_type=twofa_type)
-    if not res.get("ok"):
-        return jsonify(res), 400
-
-    token = res["token"]
-    prof = res.get("profile") or {}
-    if auto_save:
-        uid = str(prof.get("id") or "")
-        uname = prof.get("global_name") or prof.get("username") or f"Discord_{uid[-4:]}"
-        conn = db()
-        conn.execute(
-            """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
-               VALUES (?, 'discord', '', '{}', ?, 0, ?, 1, '.', 0, 1, ?)""",
-            (uname, token, uid, time.time()),
-        )
-        conn.commit()
-        conn.close()
-        sync_all_zalo_listeners()
-    return jsonify({
-        "ok": True,
-        "token": token,
-        "message": "Đã lấy Token Discord sạch & kích hoạt bảo vệ!"
-    })
 
 @app.route("/api/ping")
 def api_ping():
@@ -21970,116 +16621,10 @@ def api_ping():
         "ping_history": tel["history"],
     })
 
-@app.route("/api/messenger/verify_cookie", methods=["POST"])
-def api_messenger_verify_cookie():
-    data = request.json or {}
-    raw_cookies = (data.get("cookies") or "").strip()
-    custom_name = (data.get("name") or "").strip()
-    auto_save = bool(data.get("auto_save", True))
-    c_dict = normalize_messenger_cookies(raw_cookies)
-    uid = extract_messenger_uid(c_dict)
-    if not uid or "xs" not in c_dict:
-        return jsonify({"ok": False, "error": "Cookie Facebook/Messenger thiếu trường c_user hoặc xs!"}), 400
-    try:
-        pc_info = FacebookPCDeviceGuard.bind_pc_profile_to_cookies(uid, c_dict)
-        c_dict = pc_info["cookies"]
-        m_bot = MessengerClient.get_pooled_client(c_dict, uid=uid, force_new=True)
-        acc_name = custom_name or m_bot.display_name or f"FB_{uid[-4:]}"
-        # Lấy Máy Tính thông báo thẳng vào Facebook/Messenger để chống quét Checkpoint!
-        FacebookPCDeviceGuard.notify_pc_login_to_facebook_async(m_bot, force=True)
-        if auto_save:
-            conn = db()
-            existing = conn.execute(
-                "SELECT id FROM accounts WHERE platform='messenger' AND uid=?", (uid,)
-            ).fetchone()
-            if existing:
-                conn.execute(
-                    "UPDATE accounts SET name=?, cookies=?, pc_name=?, user_agent=?, chat_cmd_enabled=1, allow_all_cmd=0, enabled=1 WHERE id=?",
-                    (acc_name, json.dumps(m_bot.cookies_dict, ensure_ascii=False), pc_info["pc_name"], pc_info["ua"], existing["id"])
-                )
-            else:
-                conn.execute(
-                    """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, pc_name, user_agent, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, created_at)
-                       VALUES (?, 'messenger', '', ?, '', 0, ?, ?, ?, 1, '.', 1, 1, ?)""",
-                    (acc_name, json.dumps(m_bot.cookies_dict, ensure_ascii=False), uid, pc_info["pc_name"], pc_info["ua"], time.time())
-                )
-            conn.commit()
-            conn.close()
-            refresh_accounts_ram_cache()
-            sync_all_zalo_listeners()
-        return jsonify({
-            "ok": True,
-            "uid": uid,
-            "name": acc_name,
-            "pc_name": pc_info["pc_name"],
-            "message": f"💻 Đã nạp Cookie Facebook cho {acc_name}, khóa Máy Tính {pc_info['short_name']} & gửi thông báo chống quét vào Facebook thành công!"
-        })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
 
 _ROOM_SCAN_POOL = ThreadPoolExecutor(max_workers=12)
 
-@app.route("/api/messenger_threads")
-def api_messenger_threads():
-    force = request.args.get("refresh") == "1"
-    filter_acc_id = request.args.get("acc_id", "").strip()
-    rows = get_all_accounts_from_ram(platform="messenger")
-    if filter_acc_id and filter_acc_id.isdigit():
-        rows = [r for r in rows if int(r["id"]) == int(filter_acc_id)]
 
-    def _scan_mess_acc(r):
-        aid = int(r["id"])
-        aname = r.get("name") or f"Mess #{aid}"
-        out_list = []
-        try:
-            m_bot = MessengerClient.get_pooled_client(r["cookies"], uid=r.get("uid") or "")
-            for th in m_bot.get_threads(use_cache=not force):
-                item = dict(th)
-                item["id"] = str(th["id"])
-                item["acc_id"] = aid
-                item["acc_name"] = aname
-                out_list.append(item)
-        except Exception:
-            pass
-        return aid, aname, out_list
-
-    threads_map = {}
-    by_account = {}
-    futs = [_ROOM_SCAN_POOL.submit(_scan_mess_acc, r) for r in rows]
-    for fut in futs:
-        try:
-            aid, aname, t_list = fut.result(timeout=12)
-            by_account[str(aid)] = {"acc_id": aid, "acc_name": aname, "platform": "messenger", "boxes": t_list}
-            for th in t_list:
-                tid = str(th["id"])
-                if tid not in threads_map:
-                    th_copy = dict(th)
-                    th_copy["acc_ids"] = [aid]
-                    th_copy["acc_names"] = [aname]
-                    threads_map[tid] = th_copy
-                else:
-                    if aid not in threads_map[tid]["acc_ids"]:
-                        threads_map[tid]["acc_ids"].append(aid)
-                        threads_map[tid]["acc_names"].append(aname)
-        except Exception:
-            continue
-    return jsonify({"threads": list(threads_map.values()), "by_account": by_account})
-
-@app.route("/api/messenger_thread_members")
-def api_messenger_thread_members():
-    tid = (request.args.get("thread_id") or "").strip()
-    if not tid:
-        return jsonify({"members": []})
-    rows = get_all_accounts_from_ram(platform="messenger")
-    for r in rows:
-        try:
-            m_bot = MessengerClient.get_pooled_client(r["cookies"], uid=r.get("uid") or "")
-            mems = m_bot.get_thread_members(tid, use_cache=False)
-            if mems:
-                return jsonify({"members": mems})
-        except Exception:
-            continue
-    return jsonify({"members": []})
 
 @app.route("/account/add", methods=["POST"])
 def account_add():
@@ -22208,7 +16753,7 @@ def account_add():
     sync_all_zalo_listeners()
     return redirect("/")
 
-@app.route("/account/delete/<int:acc_id>")
+@app.route("/account/delete/<int:acc_id>", methods=["POST"])
 def account_delete(acc_id):
     if acc_id in ACTIVE_LISTENERS:
         ACTIVE_LISTENERS[acc_id].stop()
@@ -22340,79 +16885,7 @@ def api_group_members():
             continue
     return jsonify({"members": []})
 
-@app.route("/api/discord_channels")
-def api_discord_channels():
-    """Quét song toàn bộ Box Nhóm, Chat Riêng và Server của TỪNG Tài Khoản Discord (Chọn Box theo từng Acc):
-    - Chạy đa luồng qua _ROOM_SCAN_POOL không bao giờ làm đơ web dù áp 50-100 Acc Discord cùng lúc!
-    - Trả về cả danh sách tổng hợp kèm `acc_ids`/`acc_names` VÀ `by_account` để chọn Box theo từng Acc riêng biệt."""
-    force = request.args.get("refresh") == "1"
-    filter_acc_id = request.args.get("acc_id", "").strip()
-    rows = get_all_accounts_from_ram(platform="discord")
-    if filter_acc_id and filter_acc_id.isdigit():
-        rows = [r for r in rows if int(r["id"]) == int(filter_acc_id)]
 
-    def _scan_discord_acc(r):
-        aid = int(r["id"])
-        aname = r.get("name") or f"Discord #{aid}"
-        boxes_out = []
-        try:
-            bot = DiscordClient(r["token"], is_bot=bool(r.get("is_bot", 0)))
-            for b in bot.get_all_boxes(force_refresh=force):
-                cid = str(b["id"])
-                boxes_out.append({
-                    "id": cid,
-                    "name": b["name"],
-                    "type": "discord_channel",
-                    "sub_type": b.get("sub_type", "channel"),
-                    "acc_id": aid,
-                    "acc_name": aname,
-                })
-        except Exception:
-            pass
-        return aid, aname, boxes_out
-
-    channels_map = {}
-    by_account = {}
-    futs = [_ROOM_SCAN_POOL.submit(_scan_discord_acc, r) for r in rows]
-    for fut in futs:
-        try:
-            aid, aname, b_list = fut.result(timeout=12)
-            by_account[str(aid)] = {
-                "acc_id": aid,
-                "acc_name": aname,
-                "platform": "discord",
-                "boxes": b_list,
-            }
-            for b in b_list:
-                cid = str(b["id"])
-                if cid not in channels_map:
-                    bc = dict(b)
-                    bc["acc_ids"] = [aid]
-                    bc["acc_names"] = [aname]
-                    channels_map[cid] = bc
-                else:
-                    if aid not in channels_map[cid]["acc_ids"]:
-                        channels_map[cid]["acc_ids"].append(aid)
-                        channels_map[cid]["acc_names"].append(aname)
-        except Exception:
-            continue
-    return jsonify({"channels": list(channels_map.values()), "by_account": by_account})
-
-@app.route("/api/discord_channel_members")
-def api_discord_channel_members():
-    cid = (request.args.get("channel_id") or "").strip()
-    if not cid:
-        return jsonify({"members": []})
-    rows = get_all_accounts_from_ram(platform="discord")
-    for r in rows:
-        try:
-            bot = DiscordClient(r["token"], is_bot=bool(r.get("is_bot", 0)))
-            mems = bot.get_channel_recent_members(cid)
-            if mems:
-                return jsonify({"members": mems})
-        except Exception:
-            continue
-    return jsonify({"members": []})
 
 @app.route("/file/upload", methods=["POST"])
 def file_upload():
@@ -22461,7 +16934,7 @@ def file_create():
     conn.close()
     return redirect("/")
 
-@app.route("/file/delete/<int:fid>")
+@app.route("/file/delete/<int:fid>", methods=["POST"])
 def file_delete(fid):
     conn = db()
     row = conn.execute("SELECT filepath FROM files WHERE id=?", (fid,)).fetchone()
@@ -22773,8 +17246,8 @@ def api_account_test_session():
             mc = MessengerClient.get_pooled_client(acc["cookies"], uid=acc.get("uid") or "")
             sync_all_zalo_listeners()
             return jsonify({"ok": True, "alive": True, "message": f"🟢 SỐNG — Tài khoản Messenger '{mc.display_name}' đang hoạt động tốt!"})
-    except Exception as e:
-        return jsonify({"ok": False, "alive": False, "error": f"🔴 DIE — Lỗi kiểm tra phiên: {e}"}), 200
+    except Exception:
+        return jsonify({"ok": False, "alive": False, "error": "🔴 DIE — Không thể kiểm tra phiên lúc này."}), 200
 
 @app.route("/api/account/reconnect_all", methods=["POST"])
 def api_account_reconnect_all():
@@ -22801,10 +17274,9 @@ def api_command_dispatch_web():
     if not raw_cmd.startswith((".", "/", "!")):
         raw_cmd = "." + raw_cmd
 
-    accs = get_all_accounts_from_ram(enabled_only=True)
+    accs = [a for a in get_all_accounts_from_ram(enabled_only=True) if (a.get('platform') or 'zalo') == 'zalo']
     if not accs:
-        log_system_command(0, thread_id or "Web_Console", "Admin_Web", raw_cmd, "Đã ghi nhận lệnh trên Web Console (Chưa có tài khoản kết nối)")
-        return jsonify({"ok": True, "message": f"Đã ghi nhận lệnh '{raw_cmd}' trên Bảng Soi Lệnh!"})
+        return jsonify({"ok": False, "error": "Chưa có tài khoản Zalo đang hoạt động"}), 409
 
     acc0 = accs[0]
     plat = (acc0.get("platform") or "zalo").lower()
@@ -22820,18 +17292,8 @@ def api_command_dispatch_web():
             if not thread_id:
                 gs = z_cli.groups(use_cache=True)
                 thread_id = str(gs[0]["id"]) if gs else str(z_cli.uid or "0")
-        elif plat == "discord":
-            d_cli = DiscordClient(acc0["token"], is_bot=bool(acc0.get("is_bot", 0)))
-            if not thread_id:
-                bs = d_cli.get_all_boxes()
-                thread_id = str(bs[0]["id"]) if bs else "0"
-        elif plat == "messenger":
-            m_cli = MessengerClient.get_pooled_client(acc0["cookies"], uid=acc0.get("uid") or "")
-            if not thread_id:
-                ts = m_cli.get_threads(use_cache=True)
-                thread_id = str(ts[0]["id"]) if ts else str(m_cli.uid or "0")
     except Exception:
-        pass
+        return jsonify({"ok": False, "error": "Không kết nối được tài khoản Zalo"}), 503
 
     executed = parse_and_execute_inchat_command(
         zalo_client=z_cli,
@@ -22846,7 +17308,7 @@ def api_command_dispatch_web():
         pre_claimed_slot=True
     )
     if not executed:
-        log_system_command(acc0["id"], thread_id or "Web_Console", "Admin_Web", raw_cmd, f"Đã thực thi lệnh từ Web Console ({plat.upper()})")
+        return jsonify({"ok": False, "error": "Lệnh không được hỗ trợ hoặc không thể thực thi"}), 422
     return jsonify({"ok": True, "message": f"Đã thực thi lệnh '{raw_cmd}' thành công!"})
 
 @app.route("/task/stop/<tid>", methods=["POST"])
@@ -22857,7 +17319,6 @@ def route_task_stop(tid):
             info["stop"].set()
         for t_id in (info.get("targets") or []):
             bump_stop_epoch(t_id)
-            DiscordStealthAntiBanEngine.abort_all_campaign_wait_buckets(t_id)
     else:
         bump_stop_epoch(None)
 
@@ -22882,6 +17343,7 @@ def route_task_stop(tid):
 @app.route("/task/stop_all", methods=["POST"])
 def route_task_stop_all():
     cnt = stop_tasks_for_thread(None)
+    cnt += app.extensions['notification_queue'].stop_all(str(TELEGRAM_ADMIN_ID))
     return jsonify({"ok": True, "stopped": cnt})
 
 _STATUS_SNAPSHOT_CACHE = {"ts": 0.0, "payload": None}
@@ -22970,7 +17432,7 @@ def api_status():
         "cmd_logs": masked_logs,
         "authorized_users": auth_users_list,
         "runtime_config": rt_cfg_snap,
-        "discord_firewall": DiscordFirewallEngine.get_firewall_snapshot(),
+        "discord_firewall": {"retired": True, "mode": "official_oauth_webhook"},
         "proxy_pool": ProxyPoolEngine.get_snapshot(),
         "ping_telemetry": {
             "engine_ms": eng_ms,
