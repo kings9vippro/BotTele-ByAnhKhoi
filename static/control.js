@@ -4,21 +4,33 @@
  const $=id=>document.getElementById(id), reduced=matchMedia('(prefers-reduced-motion: reduce)');
  const launch=new URLSearchParams(location.hash.slice(1)).get('tgWebAppData')||'';
  const REQUEST_TIMEOUT_MS=18000,STREAM_BASE_DELAY_MS=1000,STREAM_MAX_DELAY_MS=30000,STREAM_JITTER=0.2,STREAM_STALE_MS=12000;
- const connectionLabels={CONNECTING:'Đang kết nối…',CONNECTED:'Đã đồng bộ',RECONNECTING:'Đang kết nối lại…',DEGRADED:'Luồng gián đoạn · đang thử lại',DISCONNECTED:'Mất kết nối · dữ liệu cũ'};
- let tg, active='home', data={}, accounts=[], identities=[], eventRows=[], cursor=0, stream, refreshing, refreshController, toastTimer, streamGeneration=0, legacyTelemetry, reconnectTimer, reconnectAttempt=0, lastStreamAt=0, streamConnected=false, requestSequence=0;
+ const connectionLabels={CONNECTING:'Đang kết nối…',CONNECTED:'Đã đồng bộ',RECONNECTING:'Đang kết nối lại…',DEGRADED:'Luồng gián đoạn · đang thử lại',DISCONNECTED:'Mất kết nối · dữ liệu cũ',AUTH_REQUIRED:'Cần đăng nhập Telegram',ACCESS_DENIED:'Không đủ quyền truy cập',SERVER_ERROR:'Máy chủ chưa sẵn sàng'};
+ let tg, active='home', data={}, accounts=[], identities=[], eventRows=[], cursor=0, stream, refreshing, refreshController, toastTimer, streamGeneration=0, legacyTelemetry, reconnectTimer, reconnectAttempt=0, lastStreamAt=0, streamConnected=false, requestSequence=0, terminalAuth=false;
  const names={home:'Tổng quan',accounts:'Tài khoản',discord:'Discord',zalo:'Zalo',tasks:'Task',activity:'Nhật ký',music:'Âm nhạc',settings:'Cài đặt'};
  const keys=Object.keys(names), pages=$('pages');
  const element=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  function toast(text){$('toasts').replaceChildren(element('div',text,'toast'));clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toasts').replaceChildren(),4500);}
  function setConnection(state){const n=$('connection');n.dataset.state=state;n.textContent=connectionLabels[state]||connectionLabels.DISCONNECTED;n.classList.toggle('live',state==='CONNECTED');}
- function failed(error,state='DISCONNECTED'){if(error?.name==='AbortError')return;$('error').hidden=false;$('error').textContent=error?.message||'Không thể đồng bộ dữ liệu.';setConnection(state);}
+ function failed(error,state='DISCONNECTED'){
+  if(error?.name==='AbortError')return;
+  if(error?.status===401){terminalAuth=true;state='AUTH_REQUIRED';stream?.abort();clearTimeout(reconnectTimer);}
+  else if(error?.status===403)state='ACCESS_DENIED';
+  else if(error?.code==='server_configuration'||error?.status===503)state='SERVER_ERROR';
+  $('error').hidden=false;
+  $('error').textContent=error?.message||'Không thể đồng bộ dữ liệu.';
+  setConnection(state);
+ }
  function requestId(prefix='miniapp'){requestSequence=(requestSequence+1)%1000000;const random=window.crypto?.randomUUID?.()||Math.random().toString(36).slice(2);return `${prefix}-${Date.now().toString(36)}-${requestSequence.toString(36)}-${random}`;}
- function requestSignal(parent,timeout=REQUEST_TIMEOUT_MS){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout),abort=()=>controller.abort();if(parent?.aborted)abort();else parent?.addEventListener('abort',abort,{once:true});return {signal:controller.signal,cleanup:()=>{clearTimeout(timer);parent?.removeEventListener('abort',abort);}};}
- async function api(path,body,options={}){const h={'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId()};if(body!==undefined)h['Content-Type']='application/json';const request=requestSignal(options.signal,options.timeout||REQUEST_TIMEOUT_MS);try{const r=await fetch('/api/miniapp/'+path,{method:body===undefined?'GET':'POST',headers:h,body:body===undefined?undefined:JSON.stringify(body),signal:request.signal,cache:'no-store'});const d=await r.json();if(!r.ok||d.ok===false)throw Error(d.error||d.message||'Yêu cầu thất bại');return d;}finally{request.cleanup();}}
+ function requestSignal(parent,timeout=REQUEST_TIMEOUT_MS){const controller=new AbortController();let timedOut=false;const timer=setTimeout(()=>{timedOut=true;controller.abort();},timeout),abort=()=>controller.abort();if(parent?.aborted)abort();else parent?.addEventListener('abort',abort,{once:true});return {signal:controller.signal,isTimeout:()=>timedOut,cleanup:()=>{clearTimeout(timer);parent?.removeEventListener('abort',abort);}};}
+ async function api(path,body,options={}){const h={'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId()};if(body!==undefined)h['Content-Type']='application/json';const request=requestSignal(options.signal,options.timeout||REQUEST_TIMEOUT_MS);try{const r=await fetch('/api/miniapp/'+path,{method:body===undefined?'GET':'POST',headers:h,body:body===undefined?undefined:JSON.stringify(body),signal:request.signal,cache:'no-store'});let d;try{d=await r.json();}catch{throw Object.assign(new Error('API trả về dữ liệu không phải JSON hợp lệ.'),{status:r.status,code:'invalid_json'});}
+  if(!r.ok||d.ok===false)throw Object.assign(new Error(d.error||d.message||'Yêu cầu thất bại'),{status:r.status,code:d.code||'http_error'});
+  return d;
+ }catch(e){if(e?.name==='AbortError'&&request.isTimeout())throw Object.assign(new Error('Yêu cầu vượt quá thời gian chờ.'),{code:'timeout'});throw e;}
+ finally{request.cleanup();}}
  async function uploadFile(form,options={}){const h={'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId('upload')};const request=requestSignal(options.signal,options.timeout||REQUEST_TIMEOUT_MS);try{const r=await fetch('/api/miniapp/upload_file',{method:'POST',headers:h,body:new FormData(form),signal:request.signal,cache:'no-store'});const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||'Tải tệp thất bại');return d;}finally{request.cleanup();}}
  function button(text,fn,cls){const b=element('button',text,cls);b.type='button';b.onclick=async()=>{if(b.disabled)return;b.disabled=true;b.setAttribute('aria-busy','true');try{await fn();}catch(e){failed(e);toast(e.message);}finally{b.disabled=false;b.removeAttribute('aria-busy');}};return b;}
  function theme(){const mode=$('theme').value;document.documentElement.dataset.theme=mode==='system'?(tg?.colorScheme||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark')):mode;}
- function initTelegram(){tg=window.Telegram?.WebApp;if(!tg)return;tg.ready();tg.expand();tg.onEvent?.('themeChanged',theme);tg.onEvent?.('viewportChanged',()=>{document.documentElement.style.setProperty('--safe',Math.max(tg.safeAreaInset?.bottom||0,tg.contentSafeAreaInset?.bottom||0)+'px');});tg.BackButton?.onClick(()=>{if($('sheet').open)$('sheet').close();else go('home');});theme();}
+ function initTelegram(){const sdk=window.Telegram?.WebApp;if(!sdk||tg===sdk)return;tg=sdk;tg.ready();tg.expand();tg.onEvent?.('themeChanged',theme);tg.onEvent?.('viewportChanged',()=>{document.documentElement.style.setProperty('--safe',Math.max(tg.safeAreaInset?.bottom||0,tg.contentSafeAreaInset?.bottom||0)+'px');});tg.BackButton?.onClick(()=>{if($('sheet').open)$('sheet').close();else go('home');});theme();}
  initTelegram();$('telegram-sdk').addEventListener('load',initTelegram);$('theme').onchange=()=>{try{localStorage.setItem('glaze-theme',$('theme').value);}catch{}theme();};try{$('theme').value=localStorage.getItem('glaze-theme')||'system';}catch{}theme();
  for(const [id,allowed,fallback] of [['text-size',['normal','large'],'normal'],['accent',['blue','rose','mint'],'blue']]){
   const input=$(id),key='glaze-'+id;
@@ -141,6 +153,7 @@
  }
  async function refreshControl(options={}){renderControl(await api('control?cursor='+cursor,undefined,options));}
  async function refresh(){
+  if(terminalAuth)return;
   if(refreshing)return refreshing;
   const controller=new AbortController();refreshController=controller;const options={signal:controller.signal};
   const operation=(async()=>{
@@ -175,14 +188,17 @@
  let qrTimer;$('qr').onclick=async()=>{clearTimeout(qrTimer);try{const r=await api('start_qr',{});const poll=async()=>{try{const s=await api('qr_status/'+encodeURIComponent(r.session_id));$('qr-status').textContent=s.message||s.status;if(s.qr_base64){$('qr-image').src=s.qr_base64.startsWith('data:')?s.qr_base64:'data:image/png;base64,'+s.qr_base64;$('qr-image').hidden=false;}if(['success','expired','failed','cancelled','error','declined'].includes(s.status)){await refresh();return;}qrTimer=setTimeout(poll,document.hidden?8000:2000);}catch(e){failed(e);}};await poll();}catch(e){failed(e);}};
  $('stop-all').onclick=()=>confirmAction('Dừng tất cả tác vụ?',async()=>{await api('notifications/stop_all',{});await api('quick_action',{action:'stop_all'});});$('refresh').onclick=refresh;
  function reconnectDelay(){const exponential=Math.min(STREAM_MAX_DELAY_MS,STREAM_BASE_DELAY_MS*2**Math.min(reconnectAttempt,6));reconnectAttempt=Math.min(reconnectAttempt+1,10);return Math.round(exponential*(1-STREAM_JITTER+Math.random()*STREAM_JITTER*2));}
- function scheduleReconnect(generation,delay){if(document.hidden||navigator.onLine===false||generation!==streamGeneration)return;clearTimeout(reconnectTimer);const wait=delay===undefined?reconnectDelay():delay;setConnection('RECONNECTING');reconnectTimer=setTimeout(connect,wait);}
+ function scheduleReconnect(generation,delay){if(terminalAuth||document.hidden||navigator.onLine===false||generation!==streamGeneration)return;clearTimeout(reconnectTimer);const wait=delay===undefined?reconnectDelay():delay;setConnection('RECONNECTING');reconnectTimer=setTimeout(connect,wait);}
  async function connect(){
-  if(document.hidden||navigator.onLine===false)return;
+  if(terminalAuth||document.hidden||navigator.onLine===false)return;
   clearTimeout(reconnectTimer);const generation=++streamGeneration;stream?.abort();stream=new AbortController();streamConnected=false;setConnection(reconnectAttempt?'RECONNECTING':'CONNECTING');
   let received=false;
   try{
    const r=await fetch('/api/miniapp/events?cursor='+cursor,{headers:{'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId('sse')},signal:stream.signal,cache:'no-store'});
-   if(!r.ok)throw Error('Luồng cập nhật tạm gián đoạn');
+   if(!r.ok){
+     let details={};try{details=await r.json();}catch{}
+     throw Object.assign(new Error(details.error||'Luồng cập nhật tạm gián đoạn'),{status:r.status,code:details.code||'http_error'});
+   }
    if(!r.body)throw Error('Trình duyệt không hỗ trợ luồng cập nhật');
    const reader=r.body.getReader(),decoder=new TextDecoder();let buffer='';lastStreamAt=Date.now();
    while(generation===streamGeneration){
@@ -197,11 +213,29 @@
    }
    if(generation===streamGeneration){streamConnected=false;setConnection('DEGRADED');}
   }catch(e){if(e.name!=='AbortError'&&generation===streamGeneration){streamConnected=false;failed(e,'DEGRADED');}}
-  finally{if(!document.hidden&&navigator.onLine!==false&&generation===streamGeneration){if(!received)streamConnected=false;scheduleReconnect(generation);}}
+  finally{if(!terminalAuth&&!document.hidden&&navigator.onLine!==false&&generation===streamGeneration){if(!received)streamConnected=false;scheduleReconnect(generation);}}
  }
  function checkStreamHealth(){if(document.hidden||navigator.onLine===false||!stream||stream.signal.aborted||!lastStreamAt)return;if(Date.now()-lastStreamAt>STREAM_STALE_MS){streamConnected=false;setConnection('DEGRADED');stream.abort();}}
- document.addEventListener('visibilitychange',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();if(document.hidden){streamConnected=false;return;}reconnectAttempt=0;lastStreamAt=0;setConnection('CONNECTING');refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
+ document.addEventListener('visibilitychange',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();if(document.hidden){streamConnected=false;return;}reconnectAttempt=0;lastStreamAt=0;setConnection('CONNECTING');if(!terminalAuth)refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
  window.addEventListener('offline',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();streamConnected=false;setConnection('DISCONNECTED');});
  window.addEventListener('online',()=>{if(document.hidden)return;reconnectAttempt=0;setConnection('CONNECTING');refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
- setInterval(()=>{if(!document.hidden&&navigator.onLine!==false)refresh();},15000);setInterval(checkStreamHealth,5000);refresh().then(()=>scheduleReconnect(streamGeneration,100));
+ setInterval(()=>{if(!terminalAuth&&!document.hidden&&navigator.onLine!==false)refresh();},15000);
+ setInterval(checkStreamHealth,5000);
+ async function bootstrap(){
+   // Telegram's SDK loads asynchronously; defer the first authorized API request.
+   if(!tg?.initData&&!launch&&$('telegram-sdk')){
+     await new Promise(resolve=>{
+       const script=$('telegram-sdk');let settled=false;
+       const done=()=>{if(settled)return;settled=true;clearTimeout(timer);resolve();};
+       const timer=setTimeout(done,2000);
+       script.addEventListener('load',done,{once:true});
+       script.addEventListener('error',done,{once:true});
+       if(window.Telegram?.WebApp)done();
+     });
+     initTelegram();
+   }
+   await refresh();
+   if(!terminalAuth)scheduleReconnect(streamGeneration,100);
+ }
+ bootstrap();
 })();
