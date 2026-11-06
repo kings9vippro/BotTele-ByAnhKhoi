@@ -242,52 +242,72 @@ def get_or_create_csrf_token():
         session["csrf_token"] = tok
     return tok
 
+def _miniapp_auth_failure(code):
+    """Store only a non-sensitive diagnosis for the current request."""
+    g.miniapp_auth_error = code
+    return False
+
+
 def is_miniapp_request_authorized():
-    """Accept an authenticated dashboard session or a signed Telegram Web App request."""
+    """Authorize browser sessions or verified Telegram Web App launch data.
+
+    No token fallback, no anonymous admin, no signature bypass.
+    """
     if session.get("logged_in"):
         g.miniapp_owner = str(TELEGRAM_ADMIN_ID)
         return True
     init_data = (request.headers.get("X-Telegram-Init-Data") or "").strip()
-    # A token baked into tracked source is public; it cannot authenticate a Mini App.
-    if not (os.environ.get('TELEGRAM_BOT_TOKEN') and TELEGRAM_BOT_TOKEN and init_data and TELEGRAM_ADMIN_ID):
-        return False
+    if not init_data:
+        return _miniapp_auth_failure("missing_init_data")
+    if not (os.environ.get("TELEGRAM_BOT_TOKEN") and TELEGRAM_BOT_TOKEN and TELEGRAM_ADMIN_ID):
+        return _miniapp_auth_failure("server_configuration")
     try:
         from urllib.parse import parse_qsl
-        values = dict(parse_qsl(init_data, keep_blank_values=True))
+        pairs = parse_qsl(init_data, keep_blank_values=True)
+        values = dict(pairs)
+        if len(pairs) != len(values):
+            return _miniapp_auth_failure("invalid_init_data")
         received_hash = values.pop("hash", "")
         auth_date = int(values.get("auth_date") or 0)
-        if not received_hash or abs(time.time() - auth_date) > 86400:
-            return False
+        now = time.time()
+        if auth_date <= 0 or auth_date > now + 300:
+            return _miniapp_auth_failure("invalid_init_data")
+        if now - auth_date > 86400:
+            return _miniapp_auth_failure("expired_init_data")
+        if not received_hash:
+            return _miniapp_auth_failure("invalid_signature")
         data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
         secret = hmac.new(b"WebAppData", TELEGRAM_BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
         expected_hash = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(received_hash, expected_hash):
-            return False
+            return _miniapp_auth_failure("invalid_signature")
         user = json.loads(values.get("user") or "{}")
+        if not isinstance(user, dict):
+            return _miniapp_auth_failure("invalid_init_data")
         owner = str(user.get("id") or "")
         if owner == str(TELEGRAM_ADMIN_ID):
             g.miniapp_owner = owner
             return True
-        # Delegates can manage only their OAuth identities and webhook queue.
-        scoped = request.path.startswith('/api/miniapp/oauth/') and request.path != '/api/miniapp/oauth/configure'
-        scoped = scoped or request.path in {'/api/miniapp/session', '/api/miniapp/control', '/api/miniapp/events',
-            '/api/miniapp/channels', '/api/miniapp/channels/delete', '/api/miniapp/notifications',
-            '/api/miniapp/notifications/stop_all', '/api/miniapp/notification_control'}
+        # Delegates can operate only on explicitly authorized, scoped resources.
+        scoped = request.path.startswith("/api/miniapp/oauth/") and request.path != "/api/miniapp/oauth/configure"
+        scoped = scoped or request.path in {"/api/miniapp/session", "/api/miniapp/control", "/api/miniapp/events",
+            "/api/miniapp/channels", "/api/miniapp/channels/delete", "/api/miniapp/notifications",
+            "/api/miniapp/notifications/stop_all", "/api/miniapp/notification_control"}
         if not scoped or not owner.isdigit():
-            return False
-        c = db()
+            return _miniapp_auth_failure("unauthorized_account")
+        connection = db()
         try:
-            authorized = c.execute('SELECT 1 FROM tg_authorized_users WHERE uid=?', (owner,)).fetchone()
+            authorized = connection.execute("SELECT 1 FROM tg_authorized_users WHERE uid=?", (owner,)).fetchone()
         except sqlite3.Error:
-            authorized = None
+            return _miniapp_auth_failure("storage_unavailable")
         finally:
-            c.close()
+            connection.close()
         if authorized:
             g.miniapp_owner = owner
             return True
-        return False
+        return _miniapp_auth_failure("unauthorized_account")
     except (TypeError, ValueError, json.JSONDecodeError):
-        return False
+        return _miniapp_auth_failure("invalid_init_data")
 
 
 def miniapp_request_owner():
@@ -310,7 +330,18 @@ def security_middleware():
     protected = request.path.startswith(("/api/", "/task/", "/account/", "/file/"))
     public_assets = {"/api/logo", "/api/glaze_logo.png", "/api/zenvyre_logo.png", "/api/menu_banner.png"}
     if protected and request.path not in public_assets and not is_miniapp_request_authorized():
-        return jsonify(ok=False, error="Phiên quản trị không hợp lệ hoặc đã hết hạn"), 401
+        reason = getattr(g, "miniapp_auth_error", "invalid_init_data")
+        failures = {
+            "missing_init_data": (401, "Thiếu dữ liệu xác thực Telegram. Hãy mở Mini App trực tiếp từ Telegram."),
+            "expired_init_data": (401, "Phiên Telegram đã hết hạn. Hãy đóng và mở lại Mini App từ Telegram."),
+            "invalid_signature": (401, "Chữ ký Telegram không hợp lệ. Hãy mở lại Mini App từ bot."),
+            "invalid_init_data": (401, "Dữ liệu xác thực Telegram không hợp lệ."),
+            "unauthorized_account": (403, "Tài khoản Telegram chưa được cấp quyền truy cập chức năng này."),
+            "server_configuration": (503, "Máy chủ chưa được cấu hình xác thực Telegram."),
+            "storage_unavailable": (503, "Không thể kiểm tra quyền truy cập do kho dữ liệu tạm gián đoạn."),
+        }
+        status, message = failures.get(reason, failures["invalid_init_data"])
+        return jsonify(ok=False, code=reason, error=message), status
     if protected:
         origin = request.headers.get("Origin")
         if (request.method not in ("GET", "HEAD", "OPTIONS") and origin and origin.rstrip("/") != request.host_url.rstrip("/")) or request.headers.get("Sec-Fetch-Site") == "cross-site":
@@ -17488,8 +17519,10 @@ def ensure_telegram_bot_started():
     try:
         from get_ck_im_zalo import start_background_telegram_bot
         _TELEGRAM_BOT_RUNNER = start_background_telegram_bot(TELEGRAM_BOT_TOKEN)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Telegram API exceptions may contain credential-bearing URLs: log type only.
+        import logging
+        logging.getLogger(__name__).error("Telegram bot startup failed (%s)", type(exc).__name__)
 
 if TELEGRAM_BOT_TOKEN and os.environ.get("DISABLE_TELEGRAM_BOT", "0") != "1":
     threading.Thread(target=ensure_telegram_bot_started, daemon=True).start()
