@@ -105,8 +105,8 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(client.get('/api/miniapp/session',headers=headers).json['owner'],uid)
         self.assertEqual(client.get('/api/miniapp/control',headers=headers).status_code,200)
         self.assertEqual(client.get('/api/miniapp/oauth/connections',headers=headers).status_code,200)
-        self.assertEqual(client.get('/api/miniapp/accounts',headers=headers).status_code,401)
-        self.assertEqual(client.post('/api/miniapp/oauth/configure',headers=headers,json={}).status_code,401)
+        self.assertEqual(client.get('/api/miniapp/accounts',headers=headers).status_code,403)
+        self.assertEqual(client.post('/api/miniapp/oauth/configure',headers=headers,json={}).status_code,403)
 
     def test_miniapp_launch_uses_selected_account_and_named_boxes(self):
         accounts=[{'id':1,'name':'First','platform':'zalo','uid':'uid-first','enabled':1},
