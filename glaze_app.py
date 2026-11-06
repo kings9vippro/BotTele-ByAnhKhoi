@@ -15322,6 +15322,20 @@ def route_zenvyre_logo_png():
     except Exception:
         return Response(b"", status=404)
 
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def miniapp_asset_revision():
+    """Fingerprint the deployed frontend assets, invalidating previous caches."""
+    digest = hashlib.sha256()
+    for filename in ("control.js", "control.css", "compact-nav.css"):
+        digest.update(filename.encode("utf-8"))
+        with open(os.path.join(BASE_DIR, "static", filename), "rb") as asset:
+            digest.update(asset.read())
+    return digest.hexdigest()[:16]
+
+
 @app.route("/miniapp")
 @app.route("/zenvyre")
 @app.route("/admin")
@@ -15333,6 +15347,7 @@ def route_zenvyre_miniapp():
     ctx = {
         "author": APP_AUTHOR,
         "version": APP_VERSION,
+        "asset_revision": miniapp_asset_revision(),
         "admin_id": TELEGRAM_ADMIN_ID,
         "live_accs": live_accs,
         "running_tasks": running_tasks,

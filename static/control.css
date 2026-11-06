@@ -1,5 +1,5 @@
 /* Dev Anh Khôi · v2.0 */
-@import url('/static/compact-nav.css');
+/* Navigation stylesheet loaded with content fingerprint by miniapp template. */
 :root[data-accent=rose]{--accent:#ffacd1;--accent2:#ffc2de}
 :root[data-accent=mint]{--accent:#9ce8d2;--accent2:#b5ede1}
 :root[data-theme=light][data-accent=rose]{--accent:#aa225f;--accent2:#8b2858}
