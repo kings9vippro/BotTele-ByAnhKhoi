@@ -1,0 +1,6 @@
+# Project-scoped Codex subagents. Models inherit the chosen parent model.
+# This file controls compatible Codex clients; Cloud capabilities may vary.
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+default_subagent_reasoning_effort = "high"
