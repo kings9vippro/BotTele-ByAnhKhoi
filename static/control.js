@@ -38,10 +38,10 @@
   const apply=()=>{document.documentElement.setAttribute('data-'+id,input.value);try{localStorage.setItem(key,input.value);}catch{}};
   input.addEventListener('change',apply);apply();
  }
- function select(name){active=name;document.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===name;b.setAttribute('aria-selected',on);b.setAttribute('aria-current',on?'page':'false');b.tabIndex=on?0:-1;});document.querySelectorAll('[data-bottom]').forEach(b=>b.setAttribute('aria-current',b.dataset.bottom===name?'page':'false'));keys.forEach(key=>$(key)?.setAttribute('aria-hidden',key===name?'false':'true'));$('tab-'+name)?.scrollIntoView({block:'nearest',inline:'nearest',behavior:reduced.matches?'auto':'smooth'});if(name==='music')loadMusic();if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();}
+ function select(name){active=name;document.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===name;b.setAttribute('aria-selected',on);b.setAttribute('aria-current',on?'page':'false');b.tabIndex=on?0:-1;});document.querySelectorAll('[data-bottom]').forEach(b=>b.setAttribute('aria-current',b.dataset.bottom===name?'page':'false'));keys.forEach(key=>$(key)?.setAttribute('aria-hidden',key===name?'false':'true'));$('tab-'+name)?.scrollIntoView({block:'nearest',inline:'nearest',behavior:reduced.matches?'auto':'smooth'});if(name==='music')loadMusic();if(name==='zalo'&&!terminalAuth)refreshZaloWatches().catch(failed);if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();}
  function go(name){select(name);pages.scrollTo({left:keys.indexOf(name)*pages.clientWidth,behavior:reduced.matches?'auto':'smooth'});tg?.HapticFeedback?.selectionChanged();}
  keys.forEach((key,i)=>{const b=button(names[key],()=>go(key));b.id='tab-'+key;b.dataset.tab=key;b.role='tab';b.setAttribute('aria-controls',key);$(key).setAttribute('aria-labelledby',b.id);$(key).tabIndex=0;b.onkeydown=e=>{const d=e.key==='ArrowRight'||e.key==='ArrowDown'?1:e.key==='ArrowLeft'||e.key==='ArrowUp'?-1:0;if(d||e.key==='Home'||e.key==='End'){e.preventDefault();const next=e.key==='Home'?keys[0]:e.key==='End'?keys[keys.length-1]:keys[(i+d+keys.length)%keys.length];go(next);$('tab-'+next).focus();}};$('tabs').append(b);});
- for(const [key,icon]of [['home','⌂'],['accounts','◎'],['tasks','◷'],['activity','≋'],['music','♫'],['settings','⚙']]){const b=button('',()=>go(key)),iconNode=element('span',icon,'bottom-icon');iconNode.setAttribute('aria-hidden','true');b.append(iconNode);b.dataset.bottom=key;b.classList.add('bottom-nav-button');b.setAttribute('aria-label',names[key]);b.title=names[key];$('bottom').append(b);}
+ for(const [key,icon]of [['home','⌂'],['accounts','◎'],['tasks','◷'],['music','♫'],['settings','⚙']]){const b=button('',()=>go(key)),iconNode=element('span',icon,'bottom-icon');iconNode.setAttribute('aria-hidden','true');b.append(iconNode);b.dataset.bottom=key;b.classList.add('bottom-nav-button');b.setAttribute('aria-label',names[key]);b.title=names[key];$('bottom').append(b);}
  let musicData,musicLoading;
  async function loadMusic(){
   if(musicData||musicLoading)return musicLoading;
@@ -82,36 +82,93 @@
  function row(title,detail){const r=element('article',undefined,'card');r.append(element('strong',title),element('p',detail));return r;}
  function renderAccounts(){const target=$('account-list'),q=$('account-search').value.toLowerCase();target.replaceChildren();for(const a of [...accounts.map(a=>({...a,kind:'Zalo',label:a.name,state:a.listener_started?'Luồng đã khởi chạy':'Đã lưu'})),...identities.map(a=>({...a,kind:'Discord',label:a.display_name,state:a.status}))]){if(!`${a.label} ${a.id} ${a.uid||a.provider_uid}`.toLowerCase().includes(q))continue;const r=row(a.label,`${a.kind} · #${a.id} · ${a.state}`);if(a.kind==='Zalo')r.append(button(a.chat_cmd_enabled?'Tắt lệnh':'Bật lệnh',async()=>{await api('toggle_acc_cmd',{acc_id:a.id});await refresh();}));r.append(button(a.kind==='Discord'?'Ngắt liên kết':'Xóa',()=>confirmAction('Xác nhận '+a.label,()=>api(a.kind==='Discord'?'oauth/disconnect':'delete_acc',a.kind==='Discord'?{id:a.id}:{acc_id:a.id})),'danger'));target.append(r);}if(!target.children.length)target.append(element('p','Chưa có tài khoản phù hợp.'));}
  $('account-search').oninput=renderAccounts;
- let boxRequest=0;
+ let boxRequest=0,boxPage=1,boxPages=1,boxSelected=new Set(),boxOwner='';
  function renderLaunchAccounts(){
   const select=$('launch-account'),previous=select.value;
-  select.replaceChildren(element('option','Chọn tài khoản'));
-  select.firstChild.value='';
+  select.replaceChildren(element('option','Chọn tài khoản'));select.firstChild.value='';
   for(const account of accounts.filter(a=>a.enabled)){
-   const option=element('option',`${account.name} · #${account.id}`);
+   const option=element('option',account.name+' · #'+account.id);
    option.value=String(account.id);select.append(option);
   }
   select.value=[...select.options].some(o=>o.value===previous)?previous:'';
-  if(select.value!==previous)loadLaunchBoxes();
+  if(select.value!==previous){boxSelected.clear();boxOwner=select.value;boxPage=1;loadLaunchBoxes().catch(failed);}
  }
- async function loadLaunchBoxes(){
+ async function loadLaunchBoxes(page=boxPage){
   const accountId=$('launch-account').value,field=$('launch-boxes'),requestId=++boxRequest;
-  field.replaceChildren(element('legend','Chọn tối đa 5 box'));
-  if(!accountId){field.append(element('p','Chọn tài khoản để tải tên box.'));return;}
-  const result=await api('boxes?account_id='+encodeURIComponent(accountId));
+  if(boxOwner!==accountId){boxSelected.clear();boxOwner=accountId;page=1;}
+  field.replaceChildren(element('legend','Chọn tối đa 5 box · Xem theo trang'));
+  if(!accountId){field.append(element('p','Chọn tài khoản Zalo để xem nhóm.'));return;}
+  const suffix=page>1?'&page='+page:'';
+  const result=await api('boxes?account_id='+encodeURIComponent(accountId)+suffix);
   if(requestId!==boxRequest)return;
+  boxPage=page;boxPages=Math.max(1,Number(result.total_pages)||1);
   const boxes=result.boxes||[];
   for(const box of boxes){
-   const label=element('label');const input=element('input');input.type='checkbox';input.value=box.id;
-   label.append(input,document.createTextNode(`${box.name} · ${box.id}`));field.append(label);
+   const label=element('label'),input=element('input');
+   input.type='checkbox';input.value=box.id;input.checked=boxSelected.has(box.id);
+   input.onchange=()=>{
+    if(input.checked){
+     if(boxSelected.size>=5){input.checked=false;toast('Tối đa 5 box mỗi lần.');return;}
+     boxSelected.add(box.id);
+    }else boxSelected.delete(box.id);
+    const count=$('box-selection-count');if(count)count.textContent='Đã chọn '+boxSelected.size+'/5';
+   };
+   label.classList.add('zalo-group-row');
+   label.append(input,document.createTextNode(box.name+' · '+box.id));field.append(label);
   }
-  if(!boxes.length)field.append(element('p','Chưa có tên box trong bộ nhớ. Mở nhóm trên tài khoản Zalo rồi làm mới.'));
+  if(!boxes.length)field.append(element('p',result.total?'Trang này không có nhóm.':'Chưa có box. Bấm Quét nhóm từ Cookie Zalo.'));
+  const status=element('p','Trang '+boxPage+'/'+boxPages+' · '+(result.total===undefined?boxes.length:result.total)+' box','zalo-page-info');
+  const count=element('strong','Đã chọn '+boxSelected.size+'/5');count.id='box-selection-count';
+  status.append(document.createTextNode(' · '),count);
+  const nav=element('div',undefined,'zalo-box-pagination');
+  const prev=button('‹ Trước',()=>loadLaunchBoxes(boxPage-1).catch(failed));
+  const next=button('Tiếp ›',()=>loadLaunchBoxes(boxPage+1).catch(failed));
+  prev.disabled=boxPage<=1;next.disabled=boxPage>=boxPages;
+  nav.append(prev,next);field.append(status,nav);
  }
- $('launch-account').onchange=()=>loadLaunchBoxes().catch(failed);
- $('refresh-boxes').onclick=()=>loadLaunchBoxes().catch(failed);
+ $('launch-account').onchange=()=>{boxSelected.clear();boxOwner=$('launch-account').value;boxPage=1;loadLaunchBoxes(1).catch(failed);};
+ $('refresh-boxes').onclick=async()=>{
+  const account_id=$('launch-account').value;
+  if(!account_id){toast('Chọn tài khoản Zalo trước.');return;}
+  const b=$('refresh-boxes');b.disabled=true;
+  try{const result=await api('scan_boxes',{account_id},{timeout:60000});toast(result.message||'Đã quét nhóm');boxPage=1;await loadLaunchBoxes(1);}
+  catch(error){failed(error);toast(error.message);}finally{b.disabled=false;}
+ };
+ let watchedBoxes=[],watchRefreshing=null;
+ async function refreshZaloWatches(){
+  if(watchRefreshing)return watchRefreshing;
+  watchRefreshing=(async()=>{
+   const result=await api('zalo_watch');watchedBoxes=result.watches||[];
+   const target=$('zalo-watch-status');if(!target)return;
+   target.replaceChildren();
+   if(!watchedBoxes.length){target.append(element('p','Chưa bật canh treo ở box nào.'));return;}
+   for(const item of watchedBoxes){
+    const since=item.inactive_since_label?'Ngừng nhắn từ: '+item.inactive_since_label:
+      'Tin cuối: '+item.last_message_at_label;
+    const detail=item.status==='awaiting_message'?'Đang chờ tin nhắn đầu tiên':
+      (item.status==='silent'?'Đã im lặng ':'Đang canh ')+item.silence_seconds+'s / '+item.timeout_sec+'s';
+    target.append(row(item.box_name||item.box_id,detail+' · '+since));
+   }
+  })().finally(()=>{watchRefreshing=null;});
+  return watchRefreshing;
+ }
+ async function toggleSelectedWatches(action){
+  const account_id=$('launch-account').value;
+  if(!account_id||!boxSelected.size){toast('Chọn tài khoản và ít nhất một box.');return;}
+  const errors=[];
+  for(const box_id of boxSelected)try{
+   await api('zalo_watch',{action,account_id,box_id,timeout_sec:90});
+  }catch(error){errors.push(box_id+': '+error.message);}
+  await refreshZaloWatches();
+  if(errors.length)toast(errors.join(' · '));
+  else toast(action==='start'?'Đã bật canh treo 1p30s':'Đã dừng canh treo');
+ }
+ $('watch-start').onclick=()=>toggleSelectedWatches('start').catch(failed);
+ $('watch-stop').onclick=()=>toggleSelectedWatches('stop').catch(failed);
+ setInterval(()=>{if(active==='zalo'&&!document.hidden&&!terminalAuth)refreshZaloWatches().catch(failed);},5000);
  $('launch-form').onsubmit=async e=>{
   e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button[type=submit],button.primary');
-  const boxIds=[...$('launch-boxes').querySelectorAll('input:checked')].map(input=>input.value);
+  const boxIds=[...boxSelected];
   if(!boxIds.length||boxIds.length>5){toast('Chọn từ 1 đến 5 box.');return;}
   submit.disabled=true;
   try{

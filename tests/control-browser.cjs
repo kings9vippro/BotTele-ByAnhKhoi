@@ -5,20 +5,19 @@ const crypto=require('crypto'),assert=require('assert/strict');
  const check=Object.keys(values).sort().map(k=>`${k}=${values[k]}`).join('\n');
  values.hash=crypto.createHmac('sha256',crypto.createHmac('sha256','WebAppData').update('test-token').digest()).update(check).digest('hex');
  const auth=new URLSearchParams(values).toString();
- const browser=await chromium.launch({executablePath:'/usr/bin/chromium',args:['--no-sandbox']});
+ const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
  try{
  const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('https://telegram.org/**',r=>r.abort());
- await page.goto('http://127.0.0.1:5873/miniapp#tgWebAppData='+encodeURIComponent(auth));
+ await page.goto('http://127.0.0.1:5873/miniapp#tgWebAppData='+encodeURIComponent(auth),{waitUntil:'domcontentloaded'});
  await page.waitForFunction(()=>document.querySelector('#metrics').getAttribute('aria-busy')==='false');
  assert.equal(await page.getByRole('tab').count(),8);
- assert.equal(await page.locator('#bottom .bottom-nav-button').count(),6);
+ assert.equal(await page.locator('#bottom .bottom-nav-button').count(),5);
  assert.deepEqual(await page.locator('#bottom .bottom-nav-button').evaluateAll(buttons=>buttons.map(button=>({label:button.getAttribute('aria-label'),visibleText:button.innerText.trim(),icon:button.querySelector('.bottom-icon')?.textContent,iconHidden:button.querySelector('.bottom-icon')?.getAttribute('aria-hidden')}))),[
   {label:'Tổng quan',visibleText:'⌂',icon:'⌂',iconHidden:'true'},
   {label:'Tài khoản',visibleText:'◎',icon:'◎',iconHidden:'true'},
   {label:'Task',visibleText:'◷',icon:'◷',iconHidden:'true'},
-  {label:'Nhật ký',visibleText:'≋',icon:'≋',iconHidden:'true'},
   {label:'Âm nhạc',visibleText:'♫',icon:'♫',iconHidden:'true'},
   {label:'Cài đặt',visibleText:'⚙',icon:'⚙',iconHidden:'true'}
  ]);
@@ -67,19 +66,25 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.setViewportSize({width:390,height:844});
  let launchBody;
  await page.route('**/api/miniapp/accounts',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,accounts:[{id:2,name:'Second',uid:'uid-second',platform:'zalo',enabled:true,chat_cmd_enabled:true}]})}));
- await page.route('**/api/miniapp/boxes?account_id=2',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,boxes:[{id:'box-two',name:'Box Two',account_id:2,platform:'zalo'}]})}));
+ await page.route('**/api/miniapp/boxes?account_id=2',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,page:1,total:2,total_pages:2,boxes:[{id:'box-two',name:'Box Two',account_id:2,platform:'zalo'}]})}));
+ await page.route('**/api/miniapp/boxes?account_id=2&page=2',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,page:2,total:2,total_pages:2,boxes:[{id:'box-three',name:'Box Three',account_id:2,platform:'zalo'}]})}));
  await page.route('**/api/miniapp/launch',async r=>{launchBody=r.request().postDataJSON();await r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,task_id:'task-fixture',message:'Đã chạy'})});});
- await page.reload();
+ await page.reload({waitUntil:'domcontentloaded'});
  await page.waitForFunction(()=>document.querySelector('#metrics').getAttribute('aria-busy')==='false');
  await page.getByRole('tab',{name:'Zalo',exact:true}).click();
  await page.locator('#launch-account').selectOption('2');
  await page.getByText('Box Two · box-two').waitFor();
  await page.locator('#launch-boxes input[value="box-two"]').check();
+ await page.getByRole('button',{name:'Tiếp ›'}).click();
+ await page.locator('#launch-boxes input[value="box-three"]').check();
+ await page.getByRole('button',{name:'‹ Trước'}).click();
+ assert.equal(await page.locator('#launch-boxes input[value="box-two"]').isChecked(),true);
+ assert.match(await page.locator('#box-selection-count').innerText(),/2\/5/);
  await page.locator('#launch-form textarea').fill('Hello from fixture');
  await page.getByRole('button',{name:'Chạy trên box đã chọn'}).click();
  await page.waitForFunction(()=>document.querySelector('#tab-tasks').getAttribute('aria-selected')==='true');
  assert.equal(launchBody.account_id,'2');
- assert.deepEqual(launchBody.box_ids,['box-two']);
+ assert.deepEqual(launchBody.box_ids,['box-two','box-three']);
  await page.screenshot({path:'/tmp/glaze-v4.png'});
  const denied=await page.request.get('http://127.0.0.1:5873/api/miniapp/control');assert.equal(denied.status(),401);
  for(const path of ['/api/discord/reg_login','/api/messenger/login','/integrations/facebook'])assert.equal((await page.request.post('http://127.0.0.1:5873'+path)).status(),410);

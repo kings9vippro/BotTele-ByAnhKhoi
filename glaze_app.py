@@ -1198,11 +1198,11 @@ class CanhTreoWatchdogEngine:
                 "enabled": True,
                 "started_at": now,
                 "last_activity_ts": now,
-                "last_msg_id": existing.get("last_msg_id") or "",
-                "last_sender_uid": existing.get("last_sender_uid") or "",
-                "last_sender_name": existing.get("last_sender_name") or "Chưa có ai nhắn",
-                "last_msg_text": existing.get("last_msg_text") or "(Đang canh tin nhắn mới...)",
-                "last_msg_time_str": existing.get("last_msg_time_str") or time.strftime("%H:%M:%S"),
+                "last_msg_id": "",
+                "last_sender_uid": "",
+                "last_sender_name": "Chưa có ai nhắn",
+                "last_msg_text": "(Đang chờ dữ liệu tin nhắn...)",
+                "last_msg_time_str": "Chưa có tin nhắn",
                 "participants": dict(existing.get("participants") or {}),
                 "known_members": dict(existing.get("known_members") or {}),
                 "alerted_for_activity_ts": 0.0,
@@ -1228,18 +1228,27 @@ class CanhTreoWatchdogEngine:
 
     @classmethod
     def get_watched_boxes(cls):
+        from zalo_group_checker import activity_clock, vietnam_time
         with cls._LOCK:
             now = time.time()
-            out = []
+            output = []
             for bid, st in cls._WATCHED_BOXES.items():
                 if not st.get("enabled"):
                     continue
-                d = dict(st)
-                elapsed = max(0.0, now - float(d.get("last_activity_ts") or now))
-                d["silence_sec"] = round(elapsed, 1)
-                d["remaining_sec"] = max(0.0, round(float(d.get("timeout_sec") or 90.0) - elapsed, 1))
-                out.append(d)
-            return out
+                # No participant lists or raw cookies in the frontend status payload.
+                clock = activity_clock(st.get("last_activity_ts"), st.get("timeout_sec", 90),
+                    now=now, has_message=bool(st.get("last_msg_id")))
+                output.append({
+                    "box_id": bid, "box_name": st.get("box_name"), "platform": st.get("platform"),
+                    "acc_id": st.get("acc_id"), "timeout_sec": st.get("timeout_sec"),
+                    "last_sender_name": st.get("last_sender_name"),
+                    "last_msg_text": st.get("last_msg_text"), "alerts_sent": st.get("alerts_sent", 0),
+                    "last_message_at_label": vietnam_time(clock["last_message_at"]),
+                    "inactive_since_label": vietnam_time(clock["inactive_since"]) if clock["inactive_since"] else None,
+                    **clock,
+                    "silence_sec": clock["silence_seconds"], "remaining_sec": clock["remaining_seconds"],
+                })
+            return output
 
     @classmethod
     def record_incoming_message(cls, box_id, sender_uid, sender_name, msg_text, msg_id="", platform="zalo", box_name=""):
@@ -1330,15 +1339,26 @@ class CanhTreoWatchdogEngine:
                         if st_now and st_now.get("enabled"):
                             prev_mid = st_now.get("last_msg_id")
                             if mid and mid != prev_mid:
-                                if prev_mid:
-                                    # Có tin nhắn mới thực sự!
-                                    st_now["last_activity_ts"] = time.time()
+                                # A Zalo fetch can lag behind the message event: use actual message timestamp.
+                                raw_ts = last_m.get("ts") or last_m.get("timestamp") or last_m.get("time")
+                                try:
+                                    observed = float(raw_ts)
+                                    if observed > 1e11:
+                                        observed /= 1000.0
+                                    if not 946684800 < observed <= time.time() + 300:
+                                        observed = time.time()
+                                except (TypeError, ValueError):
+                                    observed = time.time()
+                                # Never roll the clock back when polling delivers old records.
+                                if not prev_mid or observed > float(st_now.get("last_activity_ts") or 0):
+                                    st_now["last_activity_ts"] = observed
                                     st_now["alerted_for_activity_ts"] = 0.0
                                 st_now["last_msg_id"] = mid
                                 st_now["last_sender_uid"] = u_from
                                 st_now["last_sender_name"] = d_name
                                 st_now["last_msg_text"] = clean_c[:350]
-                                st_now["last_msg_time_str"] = time.strftime("%H:%M:%S %d/%m/%Y")
+                                from zalo_group_checker import vietnam_time
+                                st_now["last_msg_time_str"] = vietnam_time(st_now["last_activity_ts"])
                                 if u_from and u_from != "0":
                                     st_now["participants"][u_from] = {
                                         "uid": u_from,
@@ -1355,18 +1375,23 @@ class CanhTreoWatchdogEngine:
         """Đẩy thông báo Canh Treo 1p30s siêu chi tiết về thẳng Bot Telegram."""
         try:
             import get_ck_im_zalo as _tg_mod
-            bot = getattr(_tg_mod, "_BOT_INSTANCE", None)
+            # Never start a competing Telegram poller just to deliver an alert.
+            bot = getattr(_tg_mod, "_BOT_INSTANCE", None) or globals().get("_TELEGRAM_BOT_RUNNER")
             if bot is None:
-                bot = _tg_mod.start_background_telegram_bot(TELEGRAM_BOT_TOKEN)
+                return
             target_chat = st_snapshot.get("notify_chat_id") or getattr(_tg_mod, "ROOT_ADMIN_ID", TELEGRAM_ADMIN_ID)
-            bid = st_snapshot["box_id"]
-            bname = st_snapshot["box_name"]
+            from html import escape
+            bid = escape(str(st_snapshot["box_id"]))
+            bname = escape(str(st_snapshot.get("box_name") or "Box Zalo"))
             timeout_s = float(st_snapshot.get("timeout_sec") or 90.0)
             silence_s = round(time.time() - float(st_snapshot.get("last_activity_ts") or time.time()), 1)
-            last_sender = st_snapshot.get("last_sender_name") or "Không rõ"
-            last_uid = st_snapshot.get("last_sender_uid") or "-"
-            last_msg = st_snapshot.get("last_msg_text") or "(Không có nội dung)"
-            last_time = st_snapshot.get("last_msg_time_str") or time.strftime("%H:%M:%S")
+            from zalo_group_checker import vietnam_time
+            stop_at = float(st_snapshot.get("last_activity_ts") or time.time()) + timeout_s
+            last_time = vietnam_time(st_snapshot.get("last_activity_ts"))
+            last_sender = escape(str(st_snapshot.get("last_sender_name") or "Không rõ"))
+            last_uid = escape(str(st_snapshot.get("last_sender_uid") or "-"))
+            last_msg = escape(str(st_snapshot.get("last_msg_text") or "(Không có nội dung)"))
+            # last_time is derived above from the original timestamp (GMT+7).
 
             # Xác định danh sách những người trong Box đã im lặng không nhắn tin tiếp theo trong vòng 1p30s
             now = time.time()
@@ -1376,19 +1401,19 @@ class CanhTreoWatchdogEngine:
             for p_uid, p_info in parts.items():
                 p_Wait = round(now - float(p_info.get("last_ts") or 0), 1)
                 if p_Wait >= timeout_s - 1.0:
-                    silent_people.append(f"• <b>{p_info['name']}</b> (<code>{p_uid}</code>) — Ngưng nhắn: <b>{int(p_Wait)}s</b> (Tin cuối: <i>{p_info.get('last_msg', '')[:45]}</i>)")
-            for km_uid, km_name in list(known_m.items())[:12]:
-                if km_uid not in parts:
-                    silent_people.append(f"• <b>{km_name}</b> (<code>{km_uid}</code>) — Không nhắn câu nào trong <b>1p30s</b> qua!")
+                    silent_people.append(f"• <b>{escape(str(p_info.get('name') or p_uid))}</b> (<code>{escape(str(p_uid))}</code>) — Ngưng nhắn: <b>{int(p_Wait)}s</b> (Tin cuối: <i>{escape(str(p_info.get('last_msg', ''))[:45])}</i>)")
+            # Group membership alone does not establish when someone last messaged;
+            # never label a member inactive without observing an actual message timestamp.
 
             if not silent_people:
-                silent_people.append(f"• Toàn bộ thành viên trong Box <b>{bname}</b> đã im lặng suốt <b>1 phút 30 giây ({int(silence_s)}s)</b> sau tin nhắn của <b>{last_sender}</b>!")
+                silent_people.append(f"• Không có tin nhắn mới trong Box <b>{bname}</b> suốt <b>{int(silence_s)}s</b> kể từ tin cuối của <b>{last_sender}</b>.")
 
             silent_block = "\n".join(silent_people[:10])
             alert_html = (
                 f"🚨 <b>[ZENVYRE CANH TREO 1P30S — PHÁT HIỆN NGƯNG NHẮN!]</b> 🚨\n\n"
                 f"📦 <b>Box đang canh:</b> <b>{bname}</b> (ID: <code>{bid}</code>)\n"
-                f"⏱️ <b>Thời gian không nhắn tiếp:</b> <b>1 phút 30 giây ({silence_s:.0f}s)</b>\n\n"
+                f"⏱️ <b>Im lặng:</b> <b>{silence_s:.0f}s / {timeout_s:.0f}s</b>\n"
+                f"🕒 <b>Ngừng nhắn từ:</b> <code>{vietnam_time(stop_at)}</code>\n\n"
                 f"🔇 <b>Ai không nhắn tin tiếp theo trong 1p30s:</b>\n"
                 f"<blockquote>{silent_block}</blockquote>\n\n"
                 f"💬 <b>TIN NHẮN CUỐI CÙNG TRONG BOX:</b>\n"
@@ -1408,8 +1433,27 @@ class CanhTreoWatchdogEngine:
                 ]
             }
             bot.send_text(target_chat, alert_html, reply_markup=kb)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Provider exception messages may include private content; log the class only.
+            import logging
+            logging.getLogger(__name__).error("Zalo inactivity alert failed (%s)", type(exc).__name__)
+
+    @classmethod
+    def collect_due_alerts(cls, now=None):
+        """Pure watchdog transition: one alert per unchanged last message."""
+        now = time.time() if now is None else float(now)
+        pending = []
+        with cls._LOCK:
+            for st in cls._WATCHED_BOXES.values():
+                if not st.get("enabled") or not st.get("last_msg_id"):
+                    continue
+                last = float(st.get("last_activity_ts") or 0)
+                timeout = float(st.get("timeout_sec") or 90)
+                if now - last >= timeout and st.get("alerted_for_activity_ts") != last:
+                    st["alerted_for_activity_ts"] = last
+                    st["alerts_sent"] = int(st.get("alerts_sent") or 0) + 1
+                    pending.append(dict(st))
+        return pending
 
     @classmethod
     def ensure_daemon_started(cls):
@@ -1420,6 +1464,7 @@ class CanhTreoWatchdogEngine:
 
         def _watchdog_worker():
             poll_tick = 0
+            scan_cursor = 0
             while True:
                 try:
                     with cls._LOCK:
@@ -1428,26 +1473,16 @@ class CanhTreoWatchdogEngine:
                         poll_tick += 1
                         # Mỗi 1.0s đồng bộ lịch sử mới nhất từ API Zalo cho các Box đang canh treo
                         if poll_tick % 2 == 0:
-                            for bid in active_ids[:10]:
+                            # Round-robin: every monitored box gets a turn, unlike the old [:10].
+                            count = len(active_ids)
+                            chunk = [active_ids[(scan_cursor + i) % count]
+                                for i in range(min(2, count))]
+                            scan_cursor = (scan_cursor + len(chunk)) % count
+                            for bid in chunk:
                                 cls._sync_box_latest_messages(bid)
-                        now = time.time()
-                        to_alert = []
-                        with cls._LOCK:
-                            for bid in active_ids:
-                                st = cls._WATCHED_BOXES.get(bid)
-                                if not st or not st.get("enabled"):
-                                    continue
-                                last_act = float(st.get("last_activity_ts") or st.get("started_at") or now)
-                                t_out = float(st.get("timeout_sec") or 90.0)
-                                if (now - last_act >= t_out) and (st.get("alerted_for_activity_ts") != last_act):
-                                    st["alerted_for_activity_ts"] = last_act
-                                    st["alerts_sent"] = int(st.get("alerts_sent") or 0) + 1
-                                    # Đặt lại mốc để nếu tiếp tục im lặng thêm 1p30s nữa sẽ báo tiếp
-                                    st["last_activity_ts"] = now
-                                    st["alerted_for_activity_ts"] = 0.0
-                                    to_alert.append(dict(st))
-                        for alert_st in to_alert:
-                            threading.Thread(target=cls._send_telegram_inactivity_alert, args=(alert_st,), daemon=True).start()
+                        for alert_st in cls.collect_due_alerts():
+                            threading.Thread(target=cls._send_telegram_inactivity_alert,
+                                args=(alert_st,), daemon=True, name="ZaloInactivityAlert").start()
                 except Exception:
                     pass
                 time.sleep(0.5)
@@ -15552,12 +15587,88 @@ def _cached_miniapp_boxes(requested_acc=''):
                         boxes.append({"id": gid_s, "name": f"Box Zalo {gid_s[-6:]}", "platform": "zalo", "account_id": a['id']})
     except Exception:
         pass
-    return boxes[:80]
+    return boxes
+
+
+_BOX_SCAN_LOCK = threading.Lock()
+_BOX_SCAN_LAST = {}
 
 
 @app.route("/api/miniapp/boxes")
 def api_miniapp_boxes():
-    return jsonify({"ok": True, "boxes": _cached_miniapp_boxes(str(request.args.get('account_id') or '').strip())})
+    from zalo_group_checker import paginate_groups
+    account_id = str(request.args.get("account_id") or "").strip()
+    try:
+        result = paginate_groups(_cached_miniapp_boxes(account_id),
+            page=request.args.get("page", 1), page_size=request.args.get("page_size", 20))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    return jsonify(ok=True, **result)
+
+
+@app.route("/api/miniapp/scan_boxes", methods=["POST"])
+def api_miniapp_scan_boxes():
+    """Read group names from an already authorized saved Zalo account; never return cookies."""
+    data = request.get_json(silent=True) or {}
+    account_id = str(data.get("account_id") or "").strip()
+    if not account_id.isdigit():
+        return jsonify(ok=False, error="Chọn một tài khoản Zalo đã lưu."), 400
+    acc = next((a for a in get_all_accounts_from_ram(platform="zalo", enabled_only=True)
+                if str(a.get("id")) == account_id), None)
+    if not acc:
+        return jsonify(ok=False, error="Tài khoản không tồn tại hoặc chưa được bật."), 404
+    now = time.monotonic()
+    with _BOX_SCAN_LOCK:
+        last = _BOX_SCAN_LAST.get(account_id, 0)
+        if now - last < 30:
+            return jsonify(ok=False, code="scan_rate_limited",
+                error="Vui lòng đợi 30 giây giữa các lượt quét.", retry_after=round(30 - (now-last))), 429
+        _BOX_SCAN_LAST[account_id] = now
+    try:
+        client = Zalo.get_pooled_client(acc["imei"], acc["cookies"],
+            user_agent=acc.get("user_agent") or "",
+            zpw_enk_hint=acc.get("zpw_enk") or "",
+            uid_hint=acc.get("uid") or "")
+        groups = client.get_groups(use_cache=False)
+    except Exception:
+        # Never expose provider responses or cookie-bearing exception strings.
+        return jsonify(ok=False, code="zalo_scan_unavailable",
+            error="Không thể quét nhóm Zalo. Kiểm tra phiên cookie và thử lại."), 502
+    return jsonify(ok=True, refreshed=True, total=len(groups or []),
+        message="Đã cập nhật danh sách nhóm từ tài khoản Zalo.")
+
+
+@app.route("/api/miniapp/zalo_watch", methods=["GET", "POST"])
+def api_miniapp_zalo_watch():
+    """Control the shared in-process 90s watcher; no duplicate zlapi listener."""
+    if request.method == "GET":
+        return jsonify(ok=True, watches=CanhTreoWatchdogEngine.get_watched_boxes(),
+                       persistence="process_local", refreshed_at=time.time())
+    from zalo_group_checker import validate_timeout
+    data = request.get_json(silent=True) or {}
+    action = str(data.get("action") or "").strip().lower()
+    account_id = str(data.get("account_id") or "").strip()
+    box_id = str(data.get("box_id") or "").strip()
+    if action not in {"start", "stop"} or not account_id.isdigit() or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", box_id):
+        return jsonify(ok=False, error="Thao tác hoặc ID box không hợp lệ."), 400
+    matches = [b for b in _cached_miniapp_boxes(account_id)
+               if str(b.get("id")) == box_id and str(b.get("account_id")) == account_id]
+    active = [w for w in CanhTreoWatchdogEngine.get_watched_boxes()
+              if w.get("box_id") == box_id and str(w.get("acc_id")) == account_id]
+    if not matches and not (action == "stop" and active):
+        return jsonify(ok=False, error="Box không thuộc tài khoản đã chọn hoặc chưa được quét."), 403
+    if action == "stop":
+        count = CanhTreoWatchdogEngine.disable_watch(box_id) if active else 0
+        return jsonify(ok=bool(count), stopped=count, status="stopped" if count else "not_found"), 200 if count else 404
+    try:
+        timeout = validate_timeout(data.get("timeout_sec", 90))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    result = CanhTreoWatchdogEngine.enable_watch(box_id, box_name=matches[0]["name"],
+        platform="zalo", acc_id=int(account_id), timeout_sec=timeout)
+    return jsonify(ok=True, status="monitoring", box_id=result["box_id"],
+                   timeout_sec=result["timeout_sec"], persistence="process_local")
+
 
 
 @app.route("/api/miniapp/launch", methods=["POST"])
