@@ -124,6 +124,25 @@ def register(app, db, owner):
 
     app.extensions['control_snapshot'] = snapshot
 
+    def unified_tasks(principal):
+        from task_registry import aggregate_tasks
+        principal = str(principal)
+        legacy = []
+        is_admin = bool(os.environ.get("TELEGRAM_ADMIN_ID")) and principal == str(os.environ.get("TELEGRAM_ADMIN_ID"))
+        if is_admin:
+            import app as runtime
+            # Legacy task records are process-local and may be interrupted by restart.
+            legacy = runtime.task_snapshots(runtime.ACTIVE_TASKS, runtime.TASKS_RAM_STORE,
+                [], runtime.TASKS_RAM_LOCK)
+        return aggregate_tasks(queue.list(principal), legacy, owner=principal, include_legacy=is_admin)
+
+    app.extensions['unified_tasks'] = unified_tasks
+
+    @app.get('/api/miniapp/task_registry')
+    def api_task_registry():
+        principal = str(owner())
+        return jsonify(ok=True, owner=principal, tasks=unified_tasks(principal))
+
     @app.get('/api/miniapp/control')
     def control_snapshot():
         return jsonify(snapshot(owner(), max(0, request.args.get('cursor',0,type=int) or 0)))
@@ -276,16 +295,39 @@ def telegram_command(bot, user, chat, name, args):
         elif name == 'discord_logout':
             answer = ext['discord_oauth_disconnect'](str(user), int(args))
         elif name.startswith('task_') and name != 'task_status':
-            answer = queue.control(user,args.strip(),name[5:])
-        elif name in ('tasks','task_status'):
-            rows = queue.list(user)
-            if name == 'task_status': rows = [r for r in rows if r['id'] == args.strip()]
-            answer = '\n'.join(f"{r['id']} · {r['channel']} · {r['status']}" for r in rows[:15]) or 'Chưa có tác vụ'
-            keyboard=[]
-            for r in rows[:5]:
-                actions={'QUEUED':['pause','stop'],'RETRYING':['pause','stop'],'PAUSED':['resume','stop'],'RUNNING':['stop'],'FAILED':['retry']}.get(r['status'],[])
-                if actions:keyboard.append([{'text':a+' '+r['id'][:6], 'callback_data':'v4:'+a+':'+r['id']} for a in actions])
-            bot.send_text(chat,html.escape(answer),reply_markup={'inline_keyboard':keyboard})
+            task_id = args.strip()
+            if not task_id:
+                answer = 'Cú pháp: /' + name + ' <task_id>'
+            elif task_id.startswith('legacy:'):
+                if not os.environ.get('TELEGRAM_ADMIN_ID') or str(user) != str(os.environ.get('TELEGRAM_ADMIN_ID')):
+                    answer = 'Không đủ quyền quản lý tác vụ tiến trình.'
+                elif name != 'task_stop':
+                    answer = 'Tác vụ tiến trình chỉ hỗ trợ dừng; không hỗ trợ tạm dừng, tiếp tục hay thử lại.'
+                else:
+                    state = runtime.cancel_one(task_id[len('legacy:'):], runtime.ACTIVE_TASKS,
+                        runtime.TASKS_RAM_STORE, runtime.TASKS_RAM_LOCK)
+                    answer = 'Không tìm thấy tác vụ.' if state is None else 'Trạng thái hiện tại: ' + state
+            else:
+                answer = queue.control(user, task_id, name[5:])
+        elif name in ('tasks', 'task_status'):
+            if name == 'task_status' and not args.strip():
+                bot.send_text(chat, 'Cú pháp: /task_status <task_id>')
+                return True
+            rows = ext['unified_tasks'](str(user))
+            if name == 'task_status':
+                rows = [row for row in rows if row['id'] == args.strip() or row['source_id'] == args.strip()]
+            answer = '\n'.join(
+                f"{row['id']} · {row['platform']} · {row['status']}" +
+                (' · tạm thời theo tiến trình' if row['persistence'] == 'process_local' else '')
+                for row in rows[:15]
+            ) or ('Không tìm thấy tác vụ.' if name == 'task_status' else 'Chưa có tác vụ')
+            keyboard = []
+            for row in rows[:5]:
+                if row['execution_source'] == 'durable_notifications' and row['actions']:
+                    keyboard.append([{'text': action + ' ' + row['source_id'][:6],
+                        'callback_data': 'v4:' + action + ':' + row['source_id']}
+                        for action in row['actions']])
+            bot.send_text(chat, html.escape(answer), reply_markup={'inline_keyboard': keyboard})
             return True
         elif name == 'channels':
             answer = '\n'.join(f"{r['id']} · {r['name']}" for r in ext['managed_channels'](user)) or 'Thêm webhook trong Mini App → Discord'

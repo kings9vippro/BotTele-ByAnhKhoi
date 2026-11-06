@@ -3909,7 +3909,7 @@ class DirectTelegramBotRunner:
         command = parts[0].lower().split("@")[0] if parts else ""
         interactive = "callback_query" in upd or command in (
             "/start", "/menu", "/help", "/bot", "/ping", "/tasks", "/task_status",
-            "/task_stop", "/task_pause", "/task_resume", "/stopall", "/ta", "/stop",
+            "/task_stop", "/task_pause", "/task_resume", "/task_retry", "/stopall", "/ta", "/stop",
         )
         executor = self.interactive_executor if interactive else self.executor
         slots = self._interactive_update_slots if interactive else self._update_slots

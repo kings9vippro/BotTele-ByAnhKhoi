@@ -27,7 +27,7 @@ def check_entry(source):
 
 def main():
     paths = ("app.py", "glaze_app.py", "bot_settings.py", "task_control.py", "official_integrations.py",
-             "app_storage.py", "miniapp_oauth.py", "command_catalog.py", "get_ck_im_zalo.py", "zalo_login.py", "gunicorn.conf.py", "durable_tasks.py", "control_plane.py", "zalo_lag_engine.py")
+             "app_storage.py", "miniapp_oauth.py", "command_catalog.py", "get_ck_im_zalo.py", "zalo_login.py", "gunicorn.conf.py", "durable_tasks.py", "control_plane.py", "task_registry.py", "zalo_lag_engine.py")
     for name in paths:
         source = (ROOT / name).read_text(encoding="utf-8")
         if name == "app.py":

@@ -120,31 +120,64 @@
    toast(launched.message||'Đã tạo task');await refresh();go('tasks');
   }catch(error){failed(error);toast(error.message);}finally{submit.disabled=false;}
  };
- let tasksSignature='';
+ let tasksSignature='',registryTasks=[],registryState='loading';
+ async function refreshRegistry(options={}){
+  try{
+   const result=await api('task_registry',undefined,options);
+   registryTasks=Array.isArray(result.tasks)?result.tasks:[];
+   registryState='ready';
+  }catch(error){
+   registryState=error?.status===403?'forbidden':error?.status===401?'unauthorized':'unavailable';
+   throw error;
+  }finally{tasksSignature='';renderTasks();}
+ }
  function renderTasks(){
   const f=$('task-filter').value,target=$('task-list');
-  const signature=JSON.stringify([f,data.tasks]);
+  const signature=JSON.stringify([f,registryTasks,registryState]);
   if(signature===tasksSignature)return;
   const focused=document.activeElement?.dataset?.taskAction;
   tasksSignature=signature;target.replaceChildren();
-  for(const t of data.tasks||[]){
-   if(f==='active'&&!['QUEUED','RUNNING','RETRYING','PAUSED','CANCELLING'].includes(t.status)||!['all','active'].includes(f)&&t.status!==f)continue;
-   const r=row(`Discord · ${t.channel}`,`${t.status} · ${new Date(t.created*1000).toLocaleString()} · ${t.attempts} lần thử`);
-   r.append(element('small',`Task ${t.id} · Chủ ${t.owner} · Bắt đầu ${t.started?new Date(t.started*1000).toLocaleTimeString():'chưa'} · Cập nhật ${new Date(t.updated*1000).toLocaleTimeString()}`));
-   if(t.latency>0)r.append(element('small',`API ${t.latency.toFixed(2)} giây`));
-   if(t.error)r.append(element('p',t.error));
-   const actions=element('div',undefined,'actions');
-   for(const [name,label,states]of [['pause','Tạm dừng',['QUEUED','RETRYING']],['resume','Tiếp tục',['PAUSED']],['stop','Dừng',['QUEUED','RETRYING','RUNNING','PAUSED']],['retry','Thử lại',['FAILED']]])if(states.includes(t.status)){
-    const b=button(label,async()=>{await api('notification_control',{id:t.id,action:name});await refreshControl();});
-    b.dataset.taskAction=`${t.id}:${name}`;actions.append(b);
-   }
-   const detail=()=>sheet('Chi tiết tác vụ',JSON.stringify(t,null,2));
-   const info=button('Chi tiết / Logs',detail);info.dataset.taskAction=`${t.id}:detail`;actions.append(info);
-   let press;r.onpointerdown=()=>{press=setTimeout(detail,650);};r.onpointerup=r.onpointercancel=r.onpointerleave=()=>clearTimeout(press);
-   r.append(actions);target.append(r);
+  if(registryState!=='ready'){
+   const notice=registryState==='loading'?'Đang tải tác vụ…':
+     registryState==='forbidden'?'Tài khoản chưa được cấp quyền xem tác vụ.':
+     registryState==='unauthorized'?'Phiên Telegram không hợp lệ. Hãy mở lại từ bot.':
+     'Không tải được trạng thái mới. Dữ liệu bên dưới có thể đã cũ.';
+   target.append(element('p',notice));
+   if(registryState==='unavailable')target.append(button('Thử tải lại',()=>refreshRegistry()));
   }
-  if(!target.children.length)target.append(element('p','Không có tác vụ trong bộ lọc này.'));
-  if(focused)for(const b of target.querySelectorAll('button[data-task-action]'))if(b.dataset.taskAction===focused){b.focus({preventScroll:true});break;}
+  for(const task of registryTasks){
+   if(f==='active'&&!['QUEUED','RUNNING','RETRYING','PAUSED','CANCELLING'].includes(task.status)||
+     !['all','active'].includes(f)&&task.status!==f)continue;
+   const timestamp=task.started||task.created;
+   const timeText=timestamp?new Date(timestamp*1000).toLocaleString():'Chưa bắt đầu';
+   const label=task.platform==='discord'?'Discord':'Zalo';
+   const card=row(label+' · '+(task.task_type||'Tác vụ'),task.status+' · '+timeText);
+   card.append(element('small','ID '+task.id+' · Chủ '+task.owner+' · '+(task.target||'Không có đích')));
+   card.append(element('small',task.persistence==='process_local'?
+     'Chỉ tồn tại trong tiến trình · có thể mất khi khởi động lại':
+     'Lưu trong SQLite · độ bền phụ thuộc ổ đĩa máy chủ'));
+   if(task.error)card.append(element('p',task.error));
+   const actions=element('div',undefined,'actions');
+   for(const action of task.actions||[]){
+    const labels={stop:'Dừng',pause:'Tạm dừng',resume:'Tiếp tục',retry:'Thử lại'};
+    const b=button(labels[action]||action,async()=>{
+     if(task.execution_source==='durable_notifications')
+      await api('notification_control',{id:task.source_id,action});
+     else if(task.execution_source==='legacy_process'&&action==='stop')
+      await api('stop_task',{task_id:task.source_id});
+     else throw Error('Hành động không được hỗ trợ bởi tác vụ này');
+     await refreshRegistry();await refreshControl();
+    });
+    b.dataset.taskAction=task.id+':'+action;actions.append(b);
+   }
+   const details=()=>sheet('Chi tiết tác vụ',JSON.stringify(task,null,2));
+   const info=button('Chi tiết',details);info.dataset.taskAction=task.id+':detail';actions.append(info);
+   card.append(actions);target.append(card);
+  }
+  if(registryState==='ready'&&!target.children.length)
+   target.append(element('p','Không có tác vụ trong bộ lọc này.'));
+  if(focused)for(const b of target.querySelectorAll('button[data-task-action]'))
+   if(b.dataset.taskAction===focused){b.focus({preventScroll:true});break;}
  }
  $('task-filter').onchange=renderTasks;
  function paintMetrics(){if(!legacyTelemetry)return;const t=legacyTelemetry;const values=[['Tài khoản',accounts.length+identities.length],['Discord',identities.length],['Zalo',accounts.length],['Đang chạy',(data.counts?.RUNNING||0)+t.running_tasks],['Đang chờ',(data.counts?.QUEUED||0)+(data.counts?.RETRYING||0)],['Hoàn tất',data.counts?.COMPLETED||0],['Thất bại',data.counts?.FAILED||0],['Worker',data.workers||0],['Kênh',data.channels?.length||0],['Thông lượng',data.completed_last_minute===undefined?'—':data.completed_last_minute+'/phút'],['API',data.api_latency_seconds==null?'Chưa đo':data.api_latency_seconds.toFixed(2)+'s'],['RAM',t.ram_mb+' MB']];$('metrics').replaceChildren(...values.map(([label,value])=>{const r=element('div',undefined,'metric');r.append(element('span',label),element('strong',value));return r;}));$('metrics').setAttribute('aria-busy','false');}
@@ -172,7 +205,7 @@
     accounts=[];legacyTelemetry={running_tasks:0,ram_mb:'—'};
     if(!$('member-notice')){const notice=element('article','Tài khoản Zalo và tệp hiện do quản trị viên chính điều khiển. Discord và task trong trang này chỉ hiển thị dữ liệu của bạn.');notice.id='member-notice';$('zalo').replaceChildren(notice);$('oauth-form').closest('article').hidden=true;$('stop-all').hidden=true;}
    }
-   await refreshControl(options);renderAccounts();paintMetrics();
+   await Promise.all([refreshControl(options),refreshRegistry(options)]);renderAccounts();paintMetrics();
    $('oauth-status').textContent=p.providers[0]?.configured?'OAuth đã cấu hình':'Cần quản trị viên cấu hình ứng dụng Discord';
    $('updated').textContent='Đồng bộ: '+new Date().toLocaleTimeString();
    $('error').hidden=true;if(streamConnected)setConnection('CONNECTED');

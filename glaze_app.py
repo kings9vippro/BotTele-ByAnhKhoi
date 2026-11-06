@@ -292,7 +292,8 @@ def is_miniapp_request_authorized():
         scoped = request.path.startswith("/api/miniapp/oauth/") and request.path != "/api/miniapp/oauth/configure"
         scoped = scoped or request.path in {"/api/miniapp/session", "/api/miniapp/control", "/api/miniapp/events",
             "/api/miniapp/channels", "/api/miniapp/channels/delete", "/api/miniapp/notifications",
-            "/api/miniapp/notifications/stop_all", "/api/miniapp/notification_control"}
+            "/api/miniapp/notifications/stop_all", "/api/miniapp/notification_control",
+            "/api/miniapp/task_registry"}
         if not scoped or not owner.isdigit():
             return _miniapp_auth_failure("unauthorized_account")
         connection = db()
