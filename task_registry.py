@@ -45,11 +45,16 @@ def aggregate_tasks(notification_rows, legacy_rows, *, owner, include_legacy=Fal
             if not raw_id:
                 continue
             status = LEGACY_STATES.get(str(record.get("status") or "").lower(), "UNKNOWN")
-            can_stop = bool(record.get("can_stop")) and status in ("RUNNING", "CANCELLING")
+            account_ids = [str(x) for x in record.get("account_ids", [])]
+            shared_execution = len(set(account_ids)) > 1
+            can_stop = bool(record.get("can_stop")) and not shared_execution and status in ("RUNNING", "CANCELLING")
             tasks.append({
                 "id": "legacy:" + raw_id, "source_id": raw_id,
                 "execution_source": "legacy_process", "task_type": str(record.get("mode") or "legacy"),
                 "owner": principal, "platform": "zalo", "target": str(record.get("target_label") or ""),
+                "account_ids": account_ids,
+                "shared_execution": shared_execution,
+                "account_names": list(record.get("account_names", [])),
                 "status": status, "created": record.get("started_at"),
                 "started": record.get("started_at"), "updated": None,
                 "progress": None, "error": str(record.get("error") or ""),

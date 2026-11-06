@@ -1475,8 +1475,9 @@ class DirectTelegramBotRunner:
                                 if not isinstance(g, dict):
                                     continue
                                 gid = str(g.get("id") or "").strip()
-                                if gid and gid not in seen and gid != "null":
-                                    seen.add(gid)
+                                key = (str(a["id"]), gid)
+                                if gid and key not in seen and gid != "null":
+                                    seen.add(key)
                                     boxes.append({
                                         "id": gid,
                                         "name": g.get("name") or f"Nhóm {gid[-6:]}",
@@ -1484,10 +1485,11 @@ class DirectTelegramBotRunner:
                                         "acc_id": a["id"],
                                     })
                         # 2. Bổ sung tức thì từ KNOWN_GROUPS_BY_ACC & ALL_KNOWN_ZALO_GROUP_IDS trong RAM
-                        for gid_k in (_main_app.KNOWN_GROUPS_BY_ACC.get(auid_s, set()) | _main_app.ALL_KNOWN_ZALO_GROUP_IDS):
+                        for gid_k in _main_app.KNOWN_GROUPS_BY_ACC.get(auid_s, set()):
                             gid_s = str(gid_k).strip()
-                            if gid_s and gid_s not in seen and gid_s != "null":
-                                seen.add(gid_s)
+                            key = (str(a["id"]), gid_s)
+                            if gid_s and key not in seen and gid_s != "null":
+                                seen.add(key)
                                 boxes.append({
                                     "id": gid_s,
                                     "name": f"Box Zalo {gid_s[-6:]}",
@@ -1529,8 +1531,9 @@ class DirectTelegramBotRunner:
                             )
                             for g in (zc.groups(use_cache=not force_refresh) or []):
                                 gid = str(g.get("id") or "").strip()
-                                if gid and gid not in seen and gid != "null":
-                                    seen.add(gid)
+                                key = (str(a["id"]), gid)
+                                if gid and key not in seen and gid != "null":
+                                    seen.add(key)
                                     boxes.append({
                                         "id": gid,
                                         "name": g.get("name") or f"Nhóm {gid[-6:]}",
@@ -1539,8 +1542,9 @@ class DirectTelegramBotRunner:
                                     })
                             for gid_k in _main_app.KNOWN_GROUPS_BY_ACC.get(str(zc.uid or a.get("uid") or ""), set()):
                                 gid_s = str(gid_k).strip()
-                                if gid_s and gid_s not in seen and gid_s != "null":
-                                    seen.add(gid_s)
+                                key = (str(a["id"]), gid_s)
+                                if gid_s and key not in seen and gid_s != "null":
+                                    seen.add(key)
                                     boxes.append({
                                         "id": gid_s,
                                         "name": f"Box Zalo {gid_s[-6:]}",
@@ -2498,6 +2502,16 @@ class DirectTelegramBotRunner:
                 f"🆔 ID của bạn: <code>{user_id}</code>\n"
                 f"Liên hệ Admin chính để cấp quyền: <a href=\"tg://user?id={ROOT_ADMIN_ID}\">Bấm vào đây ↗</a>",
             )
+            return
+
+        if data.startswith('v8:dsbox:'):
+            parts = data.split(':')
+            if len(parts) != 4 or not parts[2].isdigit() or not parts[3].isdigit():
+                self.answer_callback(cb_id, "Trang không hợp lệ", show_alert=True)
+                return
+            from control_plane import telegram_command
+            self.answer_callback(cb_id, "Đang mở danh sách box")
+            telegram_command(self, user_id, chat_id, "dsbox", parts[2] + " " + parts[3])
             return
 
         if data.startswith('v4:'):
@@ -3908,7 +3922,7 @@ class DirectTelegramBotRunner:
         parts = str(msg.get("text") or "").split(None, 1)
         command = parts[0].lower().split("@")[0] if parts else ""
         interactive = "callback_query" in upd or command in (
-            "/start", "/menu", "/help", "/bot", "/ping", "/tasks", "/task_status",
+            "/start", "/menu", "/help", "/bot", "/ping", "/tasks", "/dsbox", "/task_status",
             "/task_stop", "/task_pause", "/task_resume", "/task_retry", "/stopall", "/ta", "/stop",
         )
         executor = self.interactive_executor if interactive else self.executor

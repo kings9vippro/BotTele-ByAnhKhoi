@@ -33,7 +33,7 @@ def cancel_one(task_id, active_tasks, saved_tasks, lock):
         return state
 
 
-def task_snapshots(active_tasks, saved_tasks, accounts, lock):
+def task_snapshots(active_tasks, saved_tasks, accounts, lock, account_id=None):
     now = time.time()
     names = {str(account["id"]): account.get("name") or f"#{account['id']}" for account in accounts}
     with lock:
@@ -46,7 +46,10 @@ def task_snapshots(active_tasks, saved_tasks, accounts, lock):
             mode = saved.get("type") or active.get("mode") or (active.get("opts") or {}).get("mode") or active.get("source") or "task"
             targets = list(meta.get("targets") or active.get("targets") or [])
             target_names = list(meta.get("target_names") or targets)
-            ids = list(meta.get("account_ids") or ([active["acc_id"]] if active.get("acc_id") else []))
+            ids = list(meta.get("account_ids") or active.get("acc_ids") or
+                       ([active["acc_id"]] if active.get("acc_id") else []))
+            if account_id is not None and str(account_id) not in {str(x) for x in ids}:
+                continue
             started_at = float(saved.get("started_at") or active.get("started_at") or now)
             state = task_state(active, saved)
             if saved and saved.get("status") != state:
@@ -57,6 +60,7 @@ def task_snapshots(active_tasks, saved_tasks, accounts, lock):
                 "status": state, "can_stop": state in ("running", "stopping"),
                 "targets": [str(target) for target in targets], "target_names": [str(name) for name in target_names],
                 "target_label": ", ".join(str(name) for name in target_names) or "Chưa có đích",
+                "account_ids": [str(account_id) for account_id in ids],
                 "account_names": [names.get(str(account_id), f"#{account_id}") for account_id in ids],
                 "uptime_s": int(max(0, float(saved.get("finished_at") or now) - started_at)), "started_at": started_at,
                 "sent": int(saved.get("sent") or 0), "failed": int(saved.get("fail") or 0)})

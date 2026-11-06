@@ -174,14 +174,37 @@
   try{
    const body={...Object.fromEntries(new FormData(form)),box_ids:boxIds};
    const launched=await api('launch',body);
-   toast(launched.message||'Đã tạo task');await refresh();go('tasks');
+   toast(launched.message||'Đã tạo task');$('task-account-filter').value=String(body.account_id);await refreshRegistry();await refresh();go('tasks');
   }catch(error){failed(error);toast(error.message);}finally{submit.disabled=false;}
  };
- let tasksSignature='',registryTasks=[],registryState='loading';
+ let tasksSignature='',registryTasks=[],registryState='loading',taskAccountInitialized=false;
+ function renderTaskAccounts(){
+  const target=$('task-account-filter'),before=target.value,available=new Set(['discord']);
+  target.replaceChildren(element('option','Thông báo Discord'),element('option','Task chưa xác định cookie'));
+  target.children[0].value='discord';target.children[1].value='unassigned';
+  available.add('unassigned');
+  for(const account of accounts.filter(a=>a.enabled)){
+   const id=String(account.id),option=element('option',account.name+' · Cookie #'+id);
+   option.value=id;target.append(option);available.add(id);
+  }
+  const preferred=accounts.find(a=>a.enabled);
+  target.value=taskAccountInitialized&&available.has(before)?before:(preferred?String(preferred.id):'discord');
+  taskAccountInitialized=true;
+ }
+ $('task-account-filter').onchange=()=>{
+  registryTasks=[];registryState='loading';tasksSignature='';renderTasks();
+  refreshRegistry().catch(failed);
+ };
  async function refreshRegistry(options={}){
   try{
-   const result=await api('task_registry',undefined,options);
-   registryTasks=Array.isArray(result.tasks)?result.tasks:[];
+   const account=$('task-account-filter').value||'discord';
+   const path=['discord','unassigned'].includes(account)?'task_registry':'task_registry?account_id='+encodeURIComponent(account);
+   const result=await api(path,undefined,options);
+   if(account!==$('task-account-filter').value)return;
+   registryTasks=(Array.isArray(result.tasks)?result.tasks:[]).filter(task=>
+     account==='discord'?task.execution_source==='durable_notifications':
+     account==='unassigned'?task.execution_source==='legacy_process'&&!(task.account_ids||[]).length:
+      (task.account_ids||[]).map(String).includes(account));
    registryState='ready';
   }catch(error){
    registryState=error?.status===403?'forbidden':error?.status===401?'unauthorized':'unavailable';
@@ -189,8 +212,14 @@
   }finally{tasksSignature='';renderTasks();}
  }
  function renderTasks(){
-  const f=$('task-filter').value,target=$('task-list');
-  const signature=JSON.stringify([f,registryTasks,registryState]);
+  const f=$('task-filter').value,target=$('task-list'),acc=$('task-account-filter').value;
+  const signature=JSON.stringify([f,acc,registryTasks,registryState]);
+  $('task-account-status').textContent=acc==='discord'?
+    'Chỉ hiển thị tác vụ thông báo Discord của bạn.':acc==='unassigned'?
+    'Task cũ chưa lưu ID cookie. Không thể tự động gán cho bất kỳ tài khoản nào.':
+    'Cookie Zalo #'+acc+' · Task thuộc tài khoản này; task đa tài khoản không hỗ trợ dừng riêng.';
+  $('stop-all').hidden=acc!=='discord';
+
   if(signature===tasksSignature)return;
   const focused=document.activeElement?.dataset?.taskAction;
   tasksSignature=signature;target.replaceChildren();
@@ -209,6 +238,7 @@
    const timeText=timestamp?new Date(timestamp*1000).toLocaleString():'Chưa bắt đầu';
    const label=task.platform==='discord'?'Discord':'Zalo';
    const card=row(label+' · '+(task.task_type||'Tác vụ'),task.status+' · '+timeText);
+   if(task.shared_execution)card.append(element('small','Tác vụ nhiều cookie · dừng sẽ ảnh hưởng các cookie khác.'));
    card.append(element('small','ID '+task.id+' · Chủ '+task.owner+' · '+(task.target||'Không có đích')));
    card.append(element('small',task.persistence==='process_local'?
      'Chỉ tồn tại trong tiến trình · có thể mất khi khởi động lại':
@@ -252,14 +282,14 @@
    identities=o.connections;
    if(viewer.role==='admin'){
     const [t,a,f,c]=await Promise.all([api('telemetry',undefined,options),api('accounts',undefined,options),api('files',undefined,options),api('commands',undefined,options)]);
-    accounts=a.accounts;legacyTelemetry=t;renderLaunchAccounts();
+    accounts=a.accounts;legacyTelemetry=t;renderLaunchAccounts();renderTaskAccounts();
     $('storage').textContent='Kho: '+t.storage_id;
     $('selected-files').textContent=`Nhây: ${f.selected_nhay||'—'} · Ngôn: ${f.selected_ngon||'—'}`;
     $('file-list').replaceChildren(...f.files.map(file=>{const r=element('div',undefined,'row');r.append(element('strong',file.filename));for(const target of ['nhay','ngon'])r.append(button(target,async()=>{await api('select_file',{filename:file.filename,target});await refresh();}));return r;}));
     $('zalo-commands').replaceChildren(...c.commands.filter(x=>x.platforms.includes('zalo')).map(x=>row(x.usage,x.description)));
     $('legacy-tasks').replaceChildren(...t.tasks.map(task=>{const r=row(task.name,`${task.status} · ${task.target_label}`);if(task.can_stop)r.append(button('Dừng',async()=>{await api('stop_task',{task_id:task.id});await refresh();}));return r;}));
    }else{
-    accounts=[];legacyTelemetry={running_tasks:0,ram_mb:'—'};
+    accounts=[];legacyTelemetry={running_tasks:0,ram_mb:'—'};renderTaskAccounts();
     if(!$('member-notice')){const notice=element('article','Tài khoản Zalo và tệp hiện do quản trị viên chính điều khiển. Discord và task trong trang này chỉ hiển thị dữ liệu của bạn.');notice.id='member-notice';$('zalo').replaceChildren(notice);$('oauth-form').closest('article').hidden=true;$('stop-all').hidden=true;}
    }
    await Promise.all([refreshControl(options),refreshRegistry(options)]);renderAccounts();paintMetrics();

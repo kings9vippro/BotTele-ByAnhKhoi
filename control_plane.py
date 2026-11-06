@@ -17,7 +17,8 @@ COMMANDS = {
     'menu': 'Toàn bộ lệnh', 'help': 'Hướng dẫn', 'accounts': 'Tài khoản Zalo và Discord',
     'discord_login': 'Liên kết Discord OAuth2', 'discord_accounts': 'Tài khoản Discord',
     'discord_status': 'Trạng thái OAuth', 'discord_logout': 'Ngắt liên kết: ID',
-    'tasks': 'Danh sách tác vụ thông báo', 'task_status': 'Chi tiết: ID',
+    'tasks': 'Task theo cookie: /tasks [acc_id]', 'dsbox': 'Nhóm Zalo riêng: /dsbox [acc_id] [trang]',
+    'task_status': 'Chi tiết: ID',
     'task_pause': 'Tạm dừng tác vụ chờ: ID', 'task_resume': 'Tiếp tục: ID',
     'task_stop': 'Dừng: ID', 'task_retry': 'Thử lại tác vụ thất bại: ID',
     'channels': 'Kênh webhook được cấp quyền', 'send': 'Gửi: channel_id | nội dung',
@@ -124,7 +125,7 @@ def register(app, db, owner):
 
     app.extensions['control_snapshot'] = snapshot
 
-    def unified_tasks(principal):
+    def unified_tasks(principal, account_id=None):
         from task_registry import aggregate_tasks
         principal = str(principal)
         legacy = []
@@ -133,15 +134,28 @@ def register(app, db, owner):
             import app as runtime
             # Legacy task records are process-local and may be interrupted by restart.
             legacy = runtime.task_snapshots(runtime.ACTIVE_TASKS, runtime.TASKS_RAM_STORE,
-                [], runtime.TASKS_RAM_LOCK)
-        return aggregate_tasks(queue.list(principal), legacy, owner=principal, include_legacy=is_admin)
+                [], runtime.TASKS_RAM_LOCK, account_id=account_id)
+        items = aggregate_tasks(queue.list(principal), legacy, owner=principal, include_legacy=is_admin)
+        if account_id is not None:
+            # No task is silently reattributed to a cookie missing from its metadata.
+            from account_views import task_belongs_to_account
+            items = [t for t in items if task_belongs_to_account(t, account_id)]
+        return items
 
     app.extensions['unified_tasks'] = unified_tasks
 
     @app.get('/api/miniapp/task_registry')
     def api_task_registry():
         principal = str(owner())
-        return jsonify(ok=True, owner=principal, tasks=unified_tasks(principal))
+        account_id = str(request.args.get('account_id') or '').strip()
+        if account_id:
+            from get_ck_im_zalo import get_user_visible_accounts
+            allowed = {str(a['id']) for a in get_user_visible_accounts(
+                principal, enabled_only=False, platform='zalo', strict=True)}
+            if not account_id.isdigit() or account_id not in allowed or principal != str(os.environ.get('TELEGRAM_ADMIN_ID') or ''):
+                return jsonify(ok=False, error='Tài khoản Zalo không được cấp quyền.'), 403
+        return jsonify(ok=True, owner=principal, account_id=account_id or None,
+                       tasks=unified_tasks(principal, account_id=account_id if account_id else None))
 
     @app.get('/api/miniapp/control')
     def control_snapshot():
@@ -282,6 +296,63 @@ def telegram_command(bot, user, chat, name, args):
     try:
         if name in ('menu','help'):
             answer = '\n'.join('/'+key+' — '+value for key,value in COMMANDS.items())+'\n/files — Kho tệp\n/sticker — Tạo nhãn dán\n/stopall — Dừng tác vụ Zalo'
+        elif name == 'dsbox':
+            from account_views import groups_for_account, paginate, request_group_refresh
+            from get_ck_im_zalo import get_user_visible_accounts
+            visible = get_user_visible_accounts(user, enabled_only=True, platform='zalo', strict=True)
+            allowed = {str(a['id']): a for a in visible}
+            parts = args.strip().split()
+            if not parts:
+                answer = ('Các tài khoản Zalo được phép xem:\n' +
+                    '\n'.join(f"#{a['id']} · {a['name']}" for a in visible) +
+                    '\nDùng /dsbox <acc_id> [trang].') if visible else 'Chưa có tài khoản Zalo.'
+            elif len(parts)>2 or not all(part.isdigit() for part in parts):
+                answer = 'Cú pháp: /dsbox <acc_id> [trang]'
+            elif parts[0] not in allowed:
+                answer = 'Tài khoản này không thuộc quyền quản lý của bạn.'
+            else:
+                account = allowed[parts[0]]
+                try:
+                    result = paginate(groups_for_account(account, runtime.Zalo._GROUPS_CACHE,
+                        runtime.KNOWN_GROUPS_BY_ACC),int(parts[1]) if len(parts)>1 else 1,size=12)
+                except ValueError:
+                    answer = 'Trang không hợp lệ. Dùng /dsbox '+parts[0]+' 1'
+                else:
+                    a_id = str(account['id'])
+                    page = result['page']
+                    report = [f"BOX RIÊNG ACC #{a_id} · {account['name']}",
+                              f"Trang {page}/{result['total_pages']} · {result['total']} nhóm"]
+                    report.extend(f"{(page-1)*12+i}. {b['name']} · {b['id']}" for i,b in enumerate(result['rows'],1))
+                    cache = runtime.Zalo._GROUPS_CACHE
+                    cache_record = cache.get(str(account.get('uid') or '')) or cache.get(str(account.get('imei') or ''))
+                    cache_timestamp = cache_record.get('ts', 0) if isinstance(cache_record,dict) else 0
+                    stale = not result['total'] or not cache_record or bool(cache_timestamp and time.time()-float(cache_timestamp)>180)
+                    if stale:
+                        def _load_account():
+                            client = runtime.Zalo.get_pooled_client(account['imei'], account['cookies'],
+                                user_agent=account.get('user_agent') or '',
+                                zpw_enk_hint=account.get('zpw_enk') or '',
+                                uid_hint=account.get('uid') or '')
+                            client.get_groups(use_cache=False)
+                        def _notify_loaded(ok):
+                            if ok:
+                                bot.send_text(chat,'Đã đồng bộ nhóm acc #'+a_id+'. Xem /dsbox '+a_id+' 1')
+                        queued = request_group_refresh(a_id, _load_account, _notify_loaded)
+                        if queued:
+                            report.append('Dữ liệu cache, đang cập nhật nền riêng của cookie này…')
+                        elif not result['total']:
+                            report.append('Chưa có dữ liệu. Thử lại sau khi phiên Zalo hoạt động.')
+                    keyboard = []
+                    nav = []
+                    if result['has_previous']:
+                        nav.append({'text':'‹ Trang trước','callback_data':f'v8:dsbox:{a_id}:{page-1}'})
+                    if result['has_next']:
+                        nav.append({'text':'Trang tiếp ›','callback_data':f'v8:dsbox:{a_id}:{page+1}'})
+                    if nav:
+                        keyboard.append(nav)
+                    bot.send_text(chat,html.escape('\n'.join(report)),
+                        reply_markup={'inline_keyboard':keyboard})
+                    return True
         elif name == 'discord_login':
             url = ext['discord_oauth_start'](str(user))['url']
             bot.send_text(chat,'Liên kết tài khoản tại Discord chính thức.',reply_markup={'inline_keyboard':[[{'text':'Đăng nhập Discord','url':url}]]})
@@ -313,14 +384,27 @@ def telegram_command(bot, user, chat, name, args):
             if name == 'task_status' and not args.strip():
                 bot.send_text(chat, 'Cú pháp: /task_status <task_id>')
                 return True
-            rows = ext['unified_tasks'](str(user))
+            requested_account = args.strip() if name == 'tasks' else ''
+            if requested_account:
+                from get_ck_im_zalo import get_user_visible_accounts
+                allowed = {str(a['id']) for a in get_user_visible_accounts(
+                    user, enabled_only=False, platform='zalo', strict=True)}
+                if not requested_account.isdigit() or requested_account not in allowed or str(user) != str(os.environ.get('TELEGRAM_ADMIN_ID') or ''):
+                    bot.send_text(chat,'Tài khoản Zalo không được cấp quyền. Cú pháp: /tasks <acc_id>')
+                    return True
+            rows = ext['unified_tasks'](str(user), account_id=requested_account) if requested_account else ext['unified_tasks'](str(user))
             if name == 'task_status':
                 rows = [row for row in rows if row['id'] == args.strip() or row['source_id'] == args.strip()]
             answer = '\n'.join(
-                f"{row['id']} · {row['platform']} · {row['status']}" +
+                f"{row['id']} · " + ("ACC #"+",".join(row['account_ids']) if row.get('account_ids') else row['platform'].upper()) +
+                f" · {row['status']}" +
                 (' · tạm thời theo tiến trình' if row['persistence'] == 'process_local' else '')
                 for row in rows[:15]
             ) or ('Không tìm thấy tác vụ.' if name == 'task_status' else 'Chưa có tác vụ')
+            if name == 'tasks' and not requested_account:
+                answer = 'Tác vụ được gắn nhãn theo ACC. Lọc riêng: /tasks <acc_id>\\n' + answer
+            if name == 'tasks' and requested_account:
+                answer = 'Tác vụ ACC #' + requested_account + '\\n' + answer
             keyboard = []
             for row in rows[:5]:
                 if row['execution_source'] == 'durable_notifications' and row['actions']:

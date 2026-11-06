@@ -1656,10 +1656,11 @@ def refresh_owner_uids():
 AUTHORIZED_USERS_RAM_CACHE = {}
 AUTHORIZED_USERS_LOCK = threading.RLock()
 _AUTHORIZED_USERS_LOADED = False
-_PRIORITY_CMD_EXECUTOR = ThreadPoolExecutor(max_workers=32)
+_PRIORITY_CMD_EXECUTOR = ThreadPoolExecutor(max_workers=12, thread_name_prefix="ZaloCommands")
+# Preserve a dedicated lane for user-visible replies and input when multiple cookies are active.
 # Menu replies should not wait behind slow media or other network requests.
-_INTERACTIVE_REPLY_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="InteractiveReply")
-_INTERACTIVE_INPUT_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="InteractiveInput")
+_INTERACTIVE_REPLY_EXECUTOR = ThreadPoolExecutor(max_workers=6, thread_name_prefix="InteractiveReply")
+_INTERACTIVE_INPUT_EXECUTOR = ThreadPoolExecutor(max_workers=6, thread_name_prefix="InteractiveInput")
 _STICKER_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="StickerMedia")
 
 def _zalo_input_executor(text):
@@ -1667,7 +1668,8 @@ def _zalo_input_executor(text):
         text = text.get("title") or text.get("text") or text.get("msg") or ""
     parts = str(text or "").strip().lower().split(None, 1)
     command = parts[0] if parts else ""
-    if command in (".menu", "/menu", "!menu", ".help", "/help", "!help", ".m", ".h", ".lenh", ".hdsd"):
+    if command in (".menu", "/menu", "!menu", ".help", "/help", "!help", ".m", ".h", ".lenh", ".hdsd",
+                   ".dsbox", "/dsbox", "!dsbox", ".listbox", ".dsnhom", ".tasks", ".running"):
         return _INTERACTIVE_INPUT_EXECUTOR
     return _PRIORITY_CMD_EXECUTOR
 _TYPING_BG_POOL = ThreadPoolExecutor(max_workers=8)
@@ -11697,9 +11699,9 @@ def parse_and_execute_inchat_command(
         "ta": "stopall",
         "soifull": "soi",
         "scanbox": "soi",
-        "dsbox": "soi",
-        "listbox": "soi",
-        "dsnhom": "soi",
+        "dsbox": "dsbox",
+        "listbox": "dsbox",
+        "dsnhom": "dsbox",
         "gll": "gall",
         "ngonall": "gall",
         "nll": "nall",
@@ -11827,14 +11829,15 @@ def parse_and_execute_inchat_command(
         with SYSTEM_CFG_LOCK:
             acc_filter_cfg = SYSTEM_RUNTIME_CONFIG.get("active_acc_filter", "ALL")
             single_rep_cfg = bool(SYSTEM_RUNTIME_CONFIG.get("single_reply_mode", True))
-        if str(acc_filter_cfg).upper() != "ALL" and str(acc_filter_cfg).isdigit():
+        account_local_reply = cmd_token in ("menu", "help", "lenh", "bot", "hdsd", "dsbox", "listbox", "dsnhom", "running", "tasks")
+        if not account_local_reply and str(acc_filter_cfg).upper() != "ALL" and str(acc_filter_cfg).isdigit():
             if int(eff_acc_row.get("id") or 0) != int(acc_filter_cfg):
                 only_acc = get_account_from_ram(int(acc_filter_cfg))
                 if only_acc:
                     eff_acc_row = only_acc
         if broadcast_all_accs is None:
             # Mặc định phản hồi gọn gàng bằng đúng Acc nhận lệnh (tránh nhiều Acc cùng nhắn bảng thông báo gây loạn/rối!)
-            broadcast_all_accs = (not single_rep_cfg) and (cmd_token not in ("menu", "help", "lenh", "hdsd", "files", "dsfile", "listfile"))
+            broadcast_all_accs = (not single_rep_cfg) and not account_local_reply and (cmd_token not in ("files", "dsfile", "listfile"))
         if not broadcast_all_accs:
             target_accs = [eff_acc_row]
         else:
@@ -11866,8 +11869,11 @@ def parse_and_execute_inchat_command(
                         use_emoji=False, icon_count=0, auto_retry_thread_type=True,
                         parse_auto_tags=False, priority_bypass=True
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Never log source content/cookies/provider exception strings.
+                    app.logger.warning(
+                        "Zalo interactive reply failed: account_id=%s, exception=%s",
+                        a_item.get("id"), type(exc).__name__)
             elif platform == "discord":
                 DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS[a_item.get("id", acc_id)].add(str(thread_id))
                 try:
@@ -11893,7 +11899,7 @@ def parse_and_execute_inchat_command(
                     pass
 
         for idx_a, a_item in enumerate(target_accs[:12]):
-            executor = _INTERACTIVE_REPLY_EXECUTOR if cmd_token in ("menu", "help", "lenh", "bot", "hdsd") else _PRIORITY_CMD_EXECUTOR
+            executor = _INTERACTIVE_REPLY_EXECUTOR if account_local_reply else _PRIORITY_CMD_EXECUTOR
             executor.submit(_reply_for_acc, idx_a, a_item)
 
     if cmd_token in ("menu", "help", "lenh", "bot", "hdsd"):
@@ -11986,6 +11992,45 @@ def parse_and_execute_inchat_command(
                 }
             _send_reply(f"Đã bật chế độ Bám Sát & Chặn Mục Tiêu 0s ({len(blocks_c)} câu) tại box {thread_id}: Ai nhắn vào sẽ tự động bị tag và phản đòn tức thì!", broadcast_all_accs=False)
         log_system_command(acc_id, thread_id, sender_id, text, f"Bật/Tắt chế độ .chan/.bam ({platform})")
+        return True
+
+    if cmd_token == "dsbox" and platform == "zalo":
+        from account_views import groups_for_account, paginate
+        try:
+            page = int(arg_body.strip() or "1")
+        except ValueError:
+            _send_reply("Cú pháp: .dsbox [trang] · Ví dụ .dsbox 2", broadcast_all_accs=False)
+            return True
+        records = groups_for_account(acc_row, Zalo._GROUPS_CACHE, KNOWN_GROUPS_BY_ACC)
+        try:
+            result = paginate(records, page, size=12)
+        except ValueError:
+            _send_reply("Số trang không hợp lệ. Dùng .dsbox 1 để xem từ đầu.", broadcast_all_accs=False)
+            return True
+        lines = [f"DS BOX RIÊNG ACC #{acc_id} · {acc_row.get('name') or 'Zalo'}",
+                 f"Trang {result['page']}/{result['total_pages']} · {result['total']} nhóm"]
+        lines.extend(f"{(page-1)*12+i}. {r['name']} · ID: {r['id']}" for i,r in enumerate(result["rows"],1))
+        cache_record = Zalo._GROUPS_CACHE.get(str(acc_row.get("uid") or "")) or Zalo._GROUPS_CACHE.get(str(acc_row.get("imei") or ""))
+        cache_timestamp = cache_record.get("ts", 0) if isinstance(cache_record, dict) else 0
+        stale = not records or not cache_record or bool(cache_timestamp and time.time()-float(cache_timestamp)>180)
+        if stale:
+            from account_views import request_group_refresh
+            if zalo_client is not None:
+                queued = request_group_refresh(acc_id,
+                    lambda: zalo_client.get_groups(use_cache=False),
+                    lambda ok: _send_reply("Đã cập nhật nhóm của acc #%s. Gõ .dsbox 1 để xem." % acc_id,
+                        broadcast_all_accs=False) if ok else None)
+                if queued:
+                    lines.append("Đang cập nhật nhóm của cookie này trong nền...")
+                elif not records:
+                    lines.append("Chưa có cache nhóm. Thử lại .dsbox 1 sau khi kết nối Zalo.")
+            else:
+                lines.append("Tài khoản này chưa có phiên Zalo hoạt động.")
+        if result["has_next"]:
+            lines.append(f"Trang tiếp: .dsbox {page+1}")
+        if result["has_previous"]:
+            lines.append(f"Trang trước: .dsbox {page-1}")
+        _send_reply("\n".join(lines), broadcast_all_accs=False, reply_color_mode="none")
         return True
 
     if cmd_token in ("soi",):
@@ -13918,7 +13963,26 @@ def parse_and_execute_inchat_command(
     return True
 
 # LISTENER 24/7 TRÊN ZALO (WEBSOCKET + HTTP FALLBACK)
-_SHARED_ZALO_POLLER_POOL = ThreadPoolExecutor(max_workers=16)
+_SHARED_ZALO_POLLER_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="ZaloBackgroundPoll")
+_ZALO_POLL_SLOTS = threading.BoundedSemaphore(24)
+
+
+def _submit_zalo_background_poll(fn, *args):
+    """Drop redundant discovery work when saturated; never queue unlimited HTTP jobs."""
+    if not _ZALO_POLL_SLOTS.acquire(blocking=False):
+        return False
+    def run():
+        try:
+            return fn(*args)
+        finally:
+            _ZALO_POLL_SLOTS.release()
+    try:
+        _SHARED_ZALO_POLLER_POOL.submit(run)
+    except RuntimeError:
+        _ZALO_POLL_SLOTS.release()
+        return False
+    return True
+
 
 class ZaloRealtimeListener:
     def __init__(self, acc_id):
@@ -14721,7 +14785,7 @@ class ZaloRealtimeListener:
         changed_gids = []
         if not hasattr(self, "_grid_ver_cache"):
             self._grid_ver_cache = {}
-        if not acc_gids or (now_t - getattr(self, "_last_gmap_check_ts", 0.0) >= 0.22):
+        if not acc_gids or (now_t - getattr(self, "_last_gmap_check_ts", 0.0) >= 1.5):
             self._last_gmap_check_ts = now_t
             try:
                 gmap = client.get_grid_ver_map() or {}
@@ -14741,13 +14805,13 @@ class ZaloRealtimeListener:
                 pass
 
         for c_gid in changed_gids[:10]:
-            _PRIORITY_CMD_EXECUTOR.submit(self._poll_single_group, client, acc_now, c_gid, True)
+            _submit_zalo_background_poll(self._poll_single_group, client, acc_now, c_gid, True)
 
-        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.22:
+        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 1.0:
             self._last_rot_group_poll_ts = now_t
             own_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(client.uid, set())
             all_my_gids = sorted(
-                g for g in (own_gids if own_gids else ALL_KNOWN_ZALO_GROUP_IDS)
+                g for g in own_gids
                 if _clean_zalo_id(g) and g != my_uid and (client.imei, _clean_zalo_id(g)) not in NON_MEMBER_EXCLUDED_PAIRS
             )
             if all_my_gids:
@@ -14755,7 +14819,7 @@ class ZaloRealtimeListener:
                 for h_gid in list(HOT_ACTIVE_ZALO_GROUPS):
                     if h_gid in all_my_gids and h_gid not in changed_gids and len(batch_gids) < 2:
                         batch_gids.append(h_gid)
-                batch_size = min(8, len(all_my_gids))
+                batch_size = min(3, len(all_my_gids))
                 for _ in range(len(all_my_gids)):
                     if len(batch_gids) >= batch_size:
                         break
@@ -14764,7 +14828,7 @@ class ZaloRealtimeListener:
                     if cand_g not in batch_gids and cand_g not in changed_gids:
                         batch_gids.append(cand_g)
                 for gid_target in batch_gids:
-                    _SHARED_ZALO_POLLER_POOL.submit(self._poll_single_group, client, acc_now, gid_target)
+                    _submit_zalo_background_poll(self._poll_single_group, client, acc_now, gid_target)
 
     def _run_http_poller_loop(self):
         stagger_init = (int(self.acc_id or 1) % 7) * 0.06
@@ -15598,6 +15662,8 @@ _BOX_SCAN_LAST = {}
 def api_miniapp_boxes():
     from zalo_group_checker import paginate_groups
     account_id = str(request.args.get("account_id") or "").strip()
+    if not account_id.isdigit():
+        return jsonify(ok=False, error="Chọn tài khoản Zalo trước khi xem nhóm."), 400
     try:
         result = paginate_groups(_cached_miniapp_boxes(account_id),
             page=request.args.get("page", 1), page_size=request.args.get("page_size", 20))

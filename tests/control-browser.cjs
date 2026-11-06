@@ -48,7 +48,7 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.getByRole('button',{name:'Lưu và chọn tệp',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('#selected-files').textContent.includes('v4-browser.txt'));
  await page.getByRole('tab',{name:'Task',exact:true}).click();
- await page.getByRole('button',{name:'Dừng tất cả tác vụ',exact:true}).click();
+ await page.getByRole('button',{name:'Dừng toàn bộ task Zalo (tất cả cookie)',exact:true}).click();
  assert.equal(await page.locator('dialog').evaluate(x=>x.open),true);
  await page.keyboard.press('Escape');
  assert.equal(await page.locator('dialog').evaluate(x=>x.open),false);
@@ -69,6 +69,13 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.route('**/api/miniapp/boxes?account_id=2',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,page:1,total:2,total_pages:2,boxes:[{id:'box-two',name:'Box Two',account_id:2,platform:'zalo'}]})}));
  await page.route('**/api/miniapp/boxes?account_id=2&page=2',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,page:2,total:2,total_pages:2,boxes:[{id:'box-three',name:'Box Three',account_id:2,platform:'zalo'}]})}));
  await page.route('**/api/miniapp/launch',async r=>{launchBody=r.request().postDataJSON();await r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,task_id:'task-fixture',message:'Đã chạy'})});});
+ const v8Task={id:'legacy:task2',source_id:'task2',platform:'zalo',owner:'123',
+  task_type:'treo_ngon',status:'RUNNING',started:1000,created:1000,
+  account_ids:['2'],actions:[],persistence:'process_local',target:'box-two',
+  execution_source:'legacy_process'};
+ await page.route('**/api/miniapp/task_registry?account_id=2',r=>r.fulfill({
+  contentType:'application/json',body:JSON.stringify({ok:true,account_id:'2',tasks:[v8Task]})}));
+
  await page.reload({waitUntil:'domcontentloaded'});
  await page.waitForFunction(()=>document.querySelector('#metrics').getAttribute('aria-busy')==='false');
  await page.getByRole('tab',{name:'Zalo',exact:true}).click();
@@ -85,6 +92,10 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.waitForFunction(()=>document.querySelector('#tab-tasks').getAttribute('aria-selected')==='true');
  assert.equal(launchBody.account_id,'2');
  assert.deepEqual(launchBody.box_ids,['box-two','box-three']);
+ assert.equal(await page.locator('#task-account-filter').inputValue(),'2');
+ await page.getByText('ID legacy:task2', {exact:false}).waitFor();
+ assert.doesNotMatch(await page.locator('#task-list').innerText(),/legacy:otheracc/);
+
  await page.screenshot({path:'/tmp/glaze-v4.png'});
  const denied=await page.request.get('http://127.0.0.1:5873/api/miniapp/control');assert.equal(denied.status(),401);
  for(const path of ['/api/discord/reg_login','/api/messenger/login','/integrations/facebook'])assert.equal((await page.request.post('http://127.0.0.1:5873'+path)).status(),410);
