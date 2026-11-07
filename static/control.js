@@ -31,7 +31,7 @@
  function button(text,fn,cls){const b=element('button',text,cls);b.type='button';b.onclick=async()=>{if(b.disabled)return;b.disabled=true;b.setAttribute('aria-busy','true');try{await fn();}catch(e){failed(e);toast(e.message);}finally{b.disabled=false;b.removeAttribute('aria-busy');}};return b;}
  function theme(){const mode=$('theme').value;document.documentElement.dataset.theme=mode==='system'?(tg?.colorScheme||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark')):mode;}
  function initTelegram(){const sdk=window.Telegram?.WebApp;if(!sdk||tg===sdk)return;tg=sdk;tg.ready();tg.expand();tg.onEvent?.('themeChanged',theme);tg.onEvent?.('viewportChanged',()=>{document.documentElement.style.setProperty('--safe',Math.max(tg.safeAreaInset?.bottom||0,tg.contentSafeAreaInset?.bottom||0)+'px');});tg.BackButton?.onClick(()=>{if($('sheet').open)$('sheet').close();else go('home');});theme();}
- initTelegram();$('telegram-sdk').addEventListener('load',initTelegram);$('theme').onchange=()=>{try{localStorage.setItem('glaze-theme',$('theme').value);}catch{}theme();};try{$('theme').value=localStorage.getItem('glaze-theme')||'system';}catch{}theme();
+ initTelegram();$('telegram-sdk').addEventListener('load',initTelegram);$('theme').onchange=()=>{try{localStorage.setItem('glaze-theme',$('theme').value);}catch{}theme();};try{$('theme').value=localStorage.getItem('glaze-theme')||'light';}catch{$('theme').value='light';}theme();
  for(const [id,allowed,fallback] of [['text-size',['normal','large'],'normal'],['accent',['blue','rose','mint'],'blue']]){
   const input=$(id),key='glaze-'+id;
   try{const saved=localStorage.getItem(key);input.value=allowed.includes(saved)?saved:fallback;}catch{input.value=fallback;}
@@ -126,7 +126,7 @@
   prev.disabled=boxPage<=1;next.disabled=boxPage>=boxPages;
   nav.append(prev,next);field.append(status,nav);
  }
- $('launch-account').onchange=()=>{boxSelected.clear();boxOwner=$('launch-account').value;boxPage=1;loadLaunchBoxes(1).catch(failed);};
+ $('launch-account').onchange=()=>{boxSelected.clear();boxOwner=$('launch-account').value;boxPage=1;loadLaunchBoxes(1).catch(failed);renderWatchedBoxes();};
  $('refresh-boxes').onclick=async()=>{
   const account_id=$('launch-account').value;
   if(!account_id){toast('Chọn tài khoản Zalo trước.');return;}
@@ -134,21 +134,50 @@
   try{const result=await api('scan_boxes',{account_id},{timeout:60000});toast(result.message||'Đã quét nhóm');boxPage=1;await loadLaunchBoxes(1);}
   catch(error){failed(error);toast(error.message);}finally{b.disabled=false;}
  };
- let watchedBoxes=[],watchRefreshing=null;
+ let watchedBoxes=[],watchRefreshing=null,watchLastFetched=0,watchError='';
+ function renderWatchedBoxes(){
+  const target=$('zalo-watch-status');
+  if(!target)return;
+  const selected=String($('launch-account').value||'');
+  target.replaceChildren();
+  if(!selected){target.append(element('p','Chọn cookie Zalo để xem các box đang canh.'));return;}
+  if(watchError){
+   target.append(element('p','Không đồng bộ được trạng thái: '+watchError+'. Đang hiển thị ảnh chụp gần nhất.'));
+  }
+  const items=watchedBoxes.filter(w=>String(w.acc_id)===selected);
+  if(!items.length){target.append(element('p','Cookie này chưa bật canh treo trong tiến trình hiện tại.'));return;}
+  const now=Date.now()/1000;
+  const snapshotAge=(Date.now()-watchLastFetched)/1000;
+  if(snapshotAge>12)target.append(element('p','Dữ liệu canh box đã cũ; kết nối có thể đang gián đoạn.'));
+  for(const item of items){
+   const threshold=Number(item.timeout_sec)||90;
+   const last=Number(item.last_message_at);
+   const hasLast=Number.isFinite(last)&&last>0;
+   const elapsed=hasLast?Math.max(0,Math.floor(now-last)):null;
+   const status=!hasLast?'Chờ tin nhắn đầu tiên':
+     elapsed>=threshold?'Đã im lặng '+elapsed+'s':'Đang canh · '+elapsed+'s/'+threshold+'s';
+   const timestamp=item.inactive_since_label?'Ngừng nhắn từ: '+item.inactive_since_label:
+     'Tin cuối: '+(item.last_message_at_label||'Chưa có');
+   const sync=item.last_sync_at===null||item.last_sync_at===undefined?'Chưa đồng bộ API Zalo':
+     item.last_sync_ok===false?'API Zalo lỗi · dữ liệu cũ':
+     (Number(item.last_sync_age_seconds)>60?'Lịch sử Zalo chưa cập nhật gần đây':
+     'API Zalo đã kiểm tra');
+   const card=row(item.box_name||item.box_id,status+' · '+timestamp);
+   card.append(element('small','ACC #'+selected+' · '+sync));
+   target.append(card);
+  }
+ }
  async function refreshZaloWatches(){
   if(watchRefreshing)return watchRefreshing;
   watchRefreshing=(async()=>{
-   const result=await api('zalo_watch');watchedBoxes=result.watches||[];
-   const target=$('zalo-watch-status');if(!target)return;
-   target.replaceChildren();
-   if(!watchedBoxes.length){target.append(element('p','Chưa bật canh treo ở box nào.'));return;}
-   for(const item of watchedBoxes){
-    const since=item.inactive_since_label?'Ngừng nhắn từ: '+item.inactive_since_label:
-      'Tin cuối: '+item.last_message_at_label;
-    const detail=item.status==='awaiting_message'?'Đang chờ tin nhắn đầu tiên':
-      (item.status==='silent'?'Đã im lặng ':'Đang canh ')+item.silence_seconds+'s / '+item.timeout_sec+'s';
-    target.append(row(item.box_name||item.box_id,detail+' · '+since));
-   }
+   try{
+    const result=await api('zalo_watch');
+    watchedBoxes=Array.isArray(result.watches)?result.watches:[];
+    watchLastFetched=Date.now();watchError='';
+   }catch(error){
+    watchError=error?.message||'Kết nối tạm gián đoạn';
+    throw error;
+   }finally{renderWatchedBoxes();}
   })().finally(()=>{watchRefreshing=null;});
   return watchRefreshing;
  }
@@ -165,7 +194,9 @@
  }
  $('watch-start').onclick=()=>toggleSelectedWatches('start').catch(failed);
  $('watch-stop').onclick=()=>toggleSelectedWatches('stop').catch(failed);
- setInterval(()=>{if(active==='zalo'&&!document.hidden&&!terminalAuth)refreshZaloWatches().catch(failed);},5000);
+ setInterval(()=>{if(active==='zalo'&&!document.hidden&&!terminalAuth)
+  refreshZaloWatches().catch(()=>{});},5000);
+ setInterval(()=>{if(active==='zalo'&&!document.hidden)renderWatchedBoxes();},1000);
  $('launch-form').onsubmit=async e=>{
   e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button[type=submit],button.primary');
   const boxIds=[...boxSelected];
@@ -195,29 +226,43 @@
   registryTasks=[];registryState='loading';tasksSignature='';renderTasks();
   refreshRegistry().catch(failed);
  };
+ let registryPending=null,registryFetchedAt=0,registryNextRetryAt=0,registryErrorCount=0;
  async function refreshRegistry(options={}){
-  try{
-   const account=$('task-account-filter').value||'discord';
-   const path=['discord','unassigned'].includes(account)?'task_registry':'task_registry?account_id='+encodeURIComponent(account);
-   const result=await api(path,undefined,options);
-   if(account!==$('task-account-filter').value)return;
-   registryTasks=(Array.isArray(result.tasks)?result.tasks:[]).filter(task=>
-     account==='discord'?task.execution_source==='durable_notifications':
-     account==='unassigned'?task.execution_source==='legacy_process'&&!(task.account_ids||[]).length:
-      (task.account_ids||[]).map(String).includes(account));
-   registryState='ready';
-  }catch(error){
-   registryState=error?.status===403?'forbidden':error?.status===401?'unauthorized':'unavailable';
-   throw error;
-  }finally{tasksSignature='';renderTasks();}
+  const account=$('task-account-filter').value||'discord';
+  if(registryPending?.account===account)return registryPending.promise;
+  const operation=(async()=>{
+   try{
+    const path=['discord','unassigned'].includes(account)?'task_registry':'task_registry?account_id='+encodeURIComponent(account);
+    const result=await api(path,undefined,options);
+    if(account!==$('task-account-filter').value)return;
+    registryTasks=(Array.isArray(result.tasks)?result.tasks:[]).filter(task=>
+      account==='discord'?task.execution_source==='durable_notifications':
+      account==='unassigned'?task.execution_source==='legacy_process'&&!(task.account_ids||[]).length:
+       (task.account_ids||[]).map(String).includes(account));
+    registryFetchedAt=Date.now();registryErrorCount=0;registryNextRetryAt=0;
+    registryState='ready';
+   }catch(error){
+    if(account===$('task-account-filter').value){
+     registryState=error?.status===403?'forbidden':error?.status===401?'unauthorized':'unavailable';
+     registryErrorCount=Math.min(5,registryErrorCount+1);
+     registryNextRetryAt=Date.now()+Math.min(30000,4000*Math.pow(2,registryErrorCount-1));
+    }
+    throw error;
+   }finally{tasksSignature='';renderTasks();}
+  })();
+  registryPending={account,promise:operation};
+  try{return await operation;}finally{if(registryPending?.promise===operation)registryPending=null;}
  }
  function renderTasks(){
   const f=$('task-filter').value,target=$('task-list'),acc=$('task-account-filter').value;
   const signature=JSON.stringify([f,acc,registryTasks,registryState]);
-  $('task-account-status').textContent=acc==='discord'?
-    'Chỉ hiển thị tác vụ thông báo Discord của bạn.':acc==='unassigned'?
-    'Task cũ chưa lưu ID cookie. Không thể tự động gán cho bất kỳ tài khoản nào.':
-    'Cookie Zalo #'+acc+' · Task thuộc tài khoản này; task đa tài khoản không hỗ trợ dừng riêng.';
+  const scope=acc==='discord'?'Chỉ hiển thị tác vụ thông báo Discord.':acc==='unassigned'?
+    'Task cũ chưa lưu ID cookie.':
+    'Cookie Zalo #'+acc+' · Tác vụ đa cookie không thể dừng riêng.';
+  const age=registryFetchedAt?Math.floor((Date.now()-registryFetchedAt)/1000):null;
+  $('task-account-status').textContent=scope+' · '+(age===null?'Chưa đồng bộ':
+    registryState!=='ready'?'Không có dữ liệu mới; ảnh chụp cũ từ '+age+'s trước':
+    'Cập nhật '+age+'s trước');
   $('stop-all').hidden=acc!=='discord';
 
   if(signature===tasksSignature)return;
@@ -285,7 +330,23 @@
     accounts=a.accounts;legacyTelemetry=t;renderLaunchAccounts();renderTaskAccounts();
     $('storage').textContent='Kho: '+t.storage_id;
     $('selected-files').textContent=`Nhây: ${f.selected_nhay||'—'} · Ngôn: ${f.selected_ngon||'—'}`;
-    $('file-list').replaceChildren(...f.files.map(file=>{const r=element('div',undefined,'row');r.append(element('strong',file.filename));for(const target of ['nhay','ngon'])r.append(button(target,async()=>{await api('select_file',{filename:file.filename,target});await refresh();}));return r;}));
+    $('file-list').replaceChildren(...['nhay','ngon'].map(target=>{
+      const title=target==='nhay'?'KHO NHÂY · từng dòng (.n)':'KHO NGÔN · nguyên đoạn (.g)';
+      const box=element('article',undefined,'file-category');
+      box.append(element('h2',title));
+      const subset=f.files.filter(file=>file.file_type===target);
+      if(!subset.length)box.append(element('p','Chưa có file thuộc loại này.'));
+      for(const file of subset){
+       const card=row(file.filename,(file.lines||0)+' dòng · '+(file.size_kb||0)+' KB');
+       if(file.filename===(target==='nhay'?f.selected_nhay:f.selected_ngon))
+        card.append(element('small','✓ Đang chọn'));
+       else card.append(button('Dùng cho '+(target==='nhay'?'Nhây':'Ngôn'),async()=>{
+        await api('select_file',{filename:file.filename,target});await refresh();
+       },'primary'));
+       box.append(card);
+      }
+      return box;
+    }));
     $('zalo-commands').replaceChildren(...c.commands.filter(x=>x.platforms.includes('zalo')).map(x=>row(x.usage,x.description)));
     $('legacy-tasks').replaceChildren(...t.tasks.map(task=>{const r=row(task.name,`${task.status} · ${task.target_label}`);if(task.can_stop)r.append(button('Dừng',async()=>{await api('stop_task',{task_id:task.id});await refresh();}));return r;}));
    }else{
@@ -340,6 +401,13 @@
  window.addEventListener('offline',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();streamConnected=false;setConnection('DISCONNECTED');});
  window.addEventListener('online',()=>{if(document.hidden)return;reconnectAttempt=0;setConnection('CONNECTING');refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
  setInterval(()=>{if(!terminalAuth&&!document.hidden&&navigator.onLine!==false)refresh();},15000);
+ setInterval(()=>{if(active==='tasks'&&!terminalAuth&&!document.hidden&&navigator.onLine!==false
+   &&Date.now()>=registryNextRetryAt)refreshRegistry().catch(()=>{});},4000);
+ setInterval(()=>{if(active==='tasks'&&!document.hidden&&registryFetchedAt){
+   const status=$('task-account-status');if(status&&registryState==='ready')
+    status.textContent=status.textContent.replace(/Cập nhật \d+s trước/,
+      'Cập nhật '+Math.floor((Date.now()-registryFetchedAt)/1000)+'s trước');
+ }},1000);
  setInterval(checkStreamHealth,5000);
  async function bootstrap(){
    // Telegram's SDK loads asynchronously; defer the first authorized API request.

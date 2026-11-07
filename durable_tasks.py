@@ -98,6 +98,28 @@ class TaskQueue:
             c.rollback()
             c.close()
 
+    def list_all_for_root(self):
+        """Metadata only, no webhook payloads; caller must authenticate root."""
+        c = self.db()
+        try:
+            return [dict(r) for r in c.execute(
+                "SELECT id,owner,channel,status,created,started,updated,completed,attempts,error,latency "
+                "FROM notification_tasks ORDER BY (status IN ('QUEUED','RUNNING','RETRYING','PAUSED','CANCELLING')) DESC, created DESC LIMIT 200"
+            )]
+        finally:
+            c.rollback()
+            c.close()
+
+    def owner_of_task(self, task_id):
+        """Resolve authority from DB instead of trusting a client-supplied owner."""
+        c = self.db()
+        try:
+            row = c.execute("SELECT owner FROM notification_tasks WHERE id=?", (str(task_id),)).fetchone()
+            return str(row["owner"]) if row else None
+        finally:
+            c.rollback()
+            c.close()
+
     def stop_all(self, owner):
         c = self.db()
         try:
