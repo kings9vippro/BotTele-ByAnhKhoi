@@ -5,8 +5,6 @@ import unittest
 from concurrent.futures import Future
 from unittest.mock import Mock, patch
 
-from cryptography.fernet import Fernet
-
 os.environ.setdefault("DISABLE_TELEGRAM_BOT", "1")
 os.environ.setdefault("DISABLE_BACKGROUND_WORKERS", "1")
 os.environ.setdefault("SECRET_KEY", "v9-regression-test")
@@ -17,39 +15,24 @@ from control_plane import telegram_command
 
 
 class TokenSecretTests(unittest.TestCase):
-    def test_secret_environment_preserves_legacy_supported_setup(self):
+    def test_secret_environment_preserves_single_supported_setup(self):
         fake = "only-a-synthetic-token"
         self.assertEqual(load_bot_token({"TELEGRAM_BOT_TOKEN": fake}), fake)
 
-    def test_fernet_encryption_requires_a_different_secret_key(self):
-        key = Fernet.generate_key()
-        dummy = "a-test-bot-token-not-real"
-        ct = Fernet(key).encrypt(dummy.encode()).decode()
+    def test_old_encrypted_only_configuration_does_not_create_a_second_token(self):
         self.assertEqual(load_bot_token({
-            "TELEGRAM_BOT_TOKEN_ENCRYPTED": ct,
-            "TELEGRAM_BOT_TOKEN_KEY": key.decode(),
-        }), dummy)
+            "TELEGRAM_BOT_TOKEN_ENCRYPTED": "obsolete-placeholder",
+            "TELEGRAM_BOT_TOKEN_KEY": "obsolete-placeholder",
+        }), "")
 
-    def test_missing_or_wrong_encryption_key_fails_closed_without_secret(self):
-        key = Fernet.generate_key()
-        ct = Fernet(key).encrypt(b"demo-secret-do-not-print").decode()
-        with self.assertRaises(BotSecretConfigurationError) as e:
-            load_bot_token({"TELEGRAM_BOT_TOKEN_ENCRYPTED": ct})
-        self.assertNotIn(ct, str(e.exception))
-        with self.assertRaises(BotSecretConfigurationError) as e:
-            load_bot_token({"TELEGRAM_BOT_TOKEN_ENCRYPTED": ct,
-                            "TELEGRAM_BOT_TOKEN_KEY": Fernet.generate_key().decode()})
-        self.assertNotIn("demo-secret", str(e.exception))
+    def test_primary_env_token_is_used_when_legacy_keys_remain(self):
+        actual = load_bot_token({
+            "TELEGRAM_BOT_TOKEN": "fixture",
+            "TELEGRAM_BOT_TOKEN_ENCRYPTED": "legacy",
+            "TELEGRAM_BOT_TOKEN_KEY": "legacy",
+        })
+        self.assertEqual(actual, "fixture")
 
-    def test_direct_secret_precedes_duplicate_encrypted_configuration(self):
-        # Existing Render services may have both keys during migration.
-        # Safe direct precedence keeps Gunicorn bootable and does not log tokens.
-        with self.assertLogs("bot_settings", level="WARNING") as lines:
-            token = load_bot_token({"TELEGRAM_BOT_TOKEN": "dummy",
-                                    "TELEGRAM_BOT_TOKEN_ENCRYPTED": "bad"})
-        self.assertEqual(token, "dummy")
-        self.assertNotIn("dummy", "\n".join(lines.output))
-        self.assertNotIn("bad", "\n".join(lines.output))
 
 
 class TelegramResponseTests(unittest.TestCase):
