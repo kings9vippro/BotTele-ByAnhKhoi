@@ -1,7 +1,7 @@
 """Telegram configuration: secrets come from the host secret store, never source.
 
 Supports direct secret environment variables, or optional Fernet-encrypted
-ciphertext with a *separate* key secret. Nothing is printed or logged.
+ciphertext with a *separate* key secret. Credential values are never logged.
 """
 import os
 from cryptography.fernet import Fernet, InvalidToken
@@ -17,12 +17,19 @@ def load_bot_token(environment=None):
         raise BotSecretConfigurationError(
             "load_bot_token requires an environment mapping. Set TELEGRAM_BOT_TOKEN in hosting secrets."
         )
-    direct = str(env.get("TELEGRAM_BOT_TOKEN") or "9089151186:AAHeWAKE0TeVEj2ZecCyuKBhqqE2YH9kIVI").strip()
-    encrypted = str(env.get("TELEGRAM_BOT_TOKEN_ENCRYPTED") or "8827605973").strip()
-    if direct and encrypted:
-        raise BotSecretConfigurationError(
-            "Configure either TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN_ENCRYPTED, not both."
-        )
+    # Direct env secrets take precedence for backward-compatible hosting setup.
+    # A second encrypted value must never prevent the web process from booting.
+    direct = str(env.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    encrypted = str(env.get("TELEGRAM_BOT_TOKEN_ENCRYPTED") or "").strip()
+    key = str(env.get("TELEGRAM_BOT_TOKEN_KEY") or "").strip()
+    if direct:
+        if encrypted:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Both Telegram token settings exist; using TELEGRAM_BOT_TOKEN. "
+                "Remove TELEGRAM_BOT_TOKEN_ENCRYPTED to avoid ambiguity."
+            )
+        return direct
     if not encrypted:
         return direct
     if not key:
