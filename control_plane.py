@@ -156,9 +156,16 @@ def register(app, db, owner):
             # Legacy task records are process-local and may be interrupted by restart.
             legacy = runtime.task_snapshots(runtime.ACTIVE_TASKS, runtime.TASKS_RAM_STORE,
                 [], runtime.TASKS_RAM_LOCK, account_id=account_id)
-        rows = queue.list_all_for_root() if is_admin else queue.list(principal)
-        if is_admin and not rows:
-            rows = queue.list(principal)  # Backward-compatible empty registry fallback.
+        # Account-scoped Mini App task views contain only process-local Zalo
+        # tasks. Durable Discord notifications have no cookie/account binding.
+        # Avoid scanning and aggregating up to 200 unrelated notification tasks
+        # every time a high-activity Zalo account refreshes its own task tab.
+        if account_id is not None:
+            rows = []
+        else:
+            rows = queue.list_all_for_root() if is_admin else queue.list(principal)
+            if is_admin and not rows:
+                rows = queue.list(principal)  # Backward-compatible empty registry fallback.
         items = aggregate_tasks(rows, legacy, owner=principal,
                                 include_legacy=is_admin, include_all_notifications=is_admin)
         if account_id is not None:

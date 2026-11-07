@@ -15515,7 +15515,7 @@ from functools import lru_cache
 def miniapp_asset_revision():
     """Fingerprint the deployed frontend assets, invalidating previous caches."""
     digest = hashlib.sha256()
-    for filename in ("control.js", "control.css", "compact-nav.css"):
+    for filename in ("control.js", "control.css", "compact-nav.css", "v11.css"):
         digest.update(filename.encode("utf-8"))
         with open(os.path.join(BASE_DIR, "static", filename), "rb") as asset:
             digest.update(asset.read())
