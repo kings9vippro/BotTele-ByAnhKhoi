@@ -259,7 +259,7 @@ def is_miniapp_request_authorized():
     init_data = (request.headers.get("X-Telegram-Init-Data") or "").strip()
     if not init_data:
         return _miniapp_auth_failure("missing_init_data")
-    if not (os.environ.get("TELEGRAM_BOT_TOKEN") and TELEGRAM_BOT_TOKEN and TELEGRAM_ADMIN_ID):
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_ADMIN_ID):
         return _miniapp_auth_failure("server_configuration")
     try:
         from urllib.parse import parse_qsl
@@ -1177,8 +1177,57 @@ class CanhTreoWatchdogEngine:
          về thẳng Bot Telegram cho Admin biết chính xác ở Box nào, ai đã không nhắn tin trong vòng 1p30s kèm tin nhắn cuối cùng!"""
 
     _LOCK = threading.RLock()
+    # Watchers are keyed by (cookie account, group ID), never only the group ID.
+    # Retain lookup of legacy keys for in-memory test fixtures and migration.
     _WATCHED_BOXES = {}
     _DAEMON_STARTED = False
+    _SYNC_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="ZaloWatchSync")
+    _SYNC_INFLIGHT = set()
+    _SYNC_MAX_INFLIGHT = 6
+
+    @classmethod
+    def _storage_key(cls, box_id, acc_id=0):
+        bid = _clean_zalo_id(box_id) or str(box_id or "").strip()
+        return f"{int(acc_id)}:{bid}" if acc_id else bid
+
+    @classmethod
+    def _resolve_key(cls, box_id, acc_id=None):
+        """Return one watch key. Refuse ambiguous cross-account operations."""
+        bid = _clean_zalo_id(box_id) or str(box_id or "").strip()
+        if acc_id is not None:
+            exact = cls._storage_key(bid, acc_id)
+            if exact in cls._WATCHED_BOXES:
+                return exact
+            legacy = cls._WATCHED_BOXES.get(bid)
+            return bid if legacy and str(legacy.get("acc_id") or 0) == str(acc_id) else None
+        if bid in cls._WATCHED_BOXES:
+            return bid
+        candidates = [key for key, state in cls._WATCHED_BOXES.items()
+                      if str(state.get("box_id") or "") == bid]
+        return candidates[0] if len(candidates) == 1 else None
+
+    @classmethod
+    def _schedule_sync(cls, watch_key):
+        """Bound remote reads; a slow provider must not block the watch clock."""
+        with cls._LOCK:
+            if watch_key in cls._SYNC_INFLIGHT or len(cls._SYNC_INFLIGHT) >= cls._SYNC_MAX_INFLIGHT:
+                return False
+            if watch_key not in cls._WATCHED_BOXES:
+                return False
+            cls._SYNC_INFLIGHT.add(watch_key)
+        try:
+            job = cls._SYNC_POOL.submit(cls._sync_box_latest_messages, watch_key)
+        except RuntimeError:
+            with cls._LOCK:
+                cls._SYNC_INFLIGHT.discard(watch_key)
+            return False
+        job.add_done_callback(lambda _: cls._sync_completed(watch_key))
+        return True
+
+    @classmethod
+    def _sync_completed(cls, watch_key):
+        with cls._LOCK:
+            cls._SYNC_INFLIGHT.discard(watch_key)
 
     @classmethod
     def enable_watch(cls, box_id, box_name="", platform="zalo", acc_id=0, timeout_sec=90.0, notify_chat_id=None):
@@ -1187,7 +1236,8 @@ class CanhTreoWatchdogEngine:
             return None
         now = time.time()
         with cls._LOCK:
-            existing = cls._WATCHED_BOXES.get(bid) or {}
+            key = cls._storage_key(bid, acc_id)
+            existing = cls._WATCHED_BOXES.get(key) or {}
             bname = str(box_name or existing.get("box_name") or f"Box #{bid[-6:]}").strip()
             state = {
                 "box_id": bid,
@@ -1196,35 +1246,42 @@ class CanhTreoWatchdogEngine:
                 "acc_id": int(acc_id or existing.get("acc_id") or 0),
                 "timeout_sec": float(timeout_sec or 90.0),
                 "enabled": True,
-                "started_at": now,
-                "last_activity_ts": now,
-                "last_msg_id": "",
-                "last_sender_uid": "",
-                "last_sender_name": "Chưa có ai nhắn",
-                "last_msg_text": "(Đang chờ dữ liệu tin nhắn...)",
-                "last_msg_time_str": "Chưa có tin nhắn",
+                "started_at": existing.get("started_at") or now,
+                # Reopening an existing watch is NOT a new message: retain its clock.
+                "last_activity_ts": float(existing.get("last_activity_ts") or now),
+                "last_msg_id": existing.get("last_msg_id") or "",
+                "last_sender_uid": existing.get("last_sender_uid") or "",
+                "last_sender_name": existing.get("last_sender_name") or "Chưa có ai nhắn",
+                "last_msg_text": existing.get("last_msg_text") or "(Đang chờ dữ liệu tin nhắn...)",
+                "last_msg_time_str": existing.get("last_msg_time_str") or "Chưa có tin nhắn",
+                "last_sync_at": existing.get("last_sync_at"),
+                "last_sync_ok": existing.get("last_sync_ok"),
                 "participants": dict(existing.get("participants") or {}),
                 "known_members": dict(existing.get("known_members") or {}),
                 "alerted_for_activity_ts": 0.0,
                 "alerts_sent": int(existing.get("alerts_sent") or 0),
                 "notify_chat_id": str(notify_chat_id or existing.get("notify_chat_id") or TELEGRAM_ADMIN_ID).strip(),
             }
-            cls._WATCHED_BOXES[bid] = state
+            cls._WATCHED_BOXES[key] = state
         cls.ensure_daemon_started()
-        # Quét ngay tin nhắn cuối cùng hiện có trong Box để nạp tức thì không cần chờ!
-        threading.Thread(target=cls._sync_box_latest_messages, args=(bid,), daemon=True).start()
+        cls._schedule_sync(key)
         return dict(state)
 
     @classmethod
-    def disable_watch(cls, box_id=None):
+    def disable_watch(cls, box_id=None, acc_id=None):
         with cls._LOCK:
             if not box_id or str(box_id).upper() == "ALL":
+                if acc_id is not None:
+                    keys = [key for key, state in cls._WATCHED_BOXES.items()
+                            if str(state.get("acc_id") or "") == str(acc_id)]
+                    for key in keys:
+                        cls._WATCHED_BOXES.pop(key, None)
+                    return len(keys)
                 cnt = len(cls._WATCHED_BOXES)
                 cls._WATCHED_BOXES.clear()
                 return cnt
-            bid = _clean_zalo_id(box_id) or str(box_id).strip()
-            popped = cls._WATCHED_BOXES.pop(bid, None)
-            return 1 if popped else 0
+            key = cls._resolve_key(box_id, acc_id)
+            return 1 if key and cls._WATCHED_BOXES.pop(key, None) else 0
 
     @classmethod
     def get_watched_boxes(cls):
@@ -1241,6 +1298,9 @@ class CanhTreoWatchdogEngine:
                 output.append({
                     "box_id": bid, "box_name": st.get("box_name"), "platform": st.get("platform"),
                     "acc_id": st.get("acc_id"), "timeout_sec": st.get("timeout_sec"),
+                    "last_sync_at": st.get("last_sync_at"),
+                    "last_sync_ok": st.get("last_sync_ok"),
+                    "last_sync_age_seconds": round(now-st["last_sync_at"], 1) if st.get("last_sync_at") else None,
                     "last_sender_name": st.get("last_sender_name"),
                     "last_msg_text": st.get("last_msg_text"), "alerts_sent": st.get("alerts_sent", 0),
                     "last_message_at_label": vietnam_time(clock["last_message_at"]),
@@ -1251,13 +1311,14 @@ class CanhTreoWatchdogEngine:
             return output
 
     @classmethod
-    def record_incoming_message(cls, box_id, sender_uid, sender_name, msg_text, msg_id="", platform="zalo", box_name=""):
+    def record_incoming_message(cls, box_id, sender_uid, sender_name, msg_text, msg_id="", platform="zalo", box_name="", account_id=None):
         """Cập nhật tức thì (0.00ms) mỗi khi có bất kỳ ai nhắn tin vào Box đang được Canh Treo."""
         bid = _clean_zalo_id(box_id) or str(box_id or "").strip()
         if not bid:
             return
         with cls._LOCK:
-            st = cls._WATCHED_BOXES.get(bid)
+            key = cls._resolve_key(bid, account_id)
+            st = cls._WATCHED_BOXES.get(key)
             if not st or not st.get("enabled"):
                 return
             clean_txt = strip_invisible_chars(str(msg_text or "")).strip()
@@ -1288,15 +1349,16 @@ class CanhTreoWatchdogEngine:
                 st["known_members"][s_uid] = s_name
 
     @classmethod
-    def _sync_box_latest_messages(cls, bid):
-        """Chủ động lấy danh sách thành viên & tin nhắn cuối cùng trong Box từ API Zalo để thông tin luôn chuẩn xác 100%."""
+    def _sync_box_latest_messages(cls, watch_key):
+        """Synchronize one account-scoped watcher without blocking the clock."""
         with cls._LOCK:
-            st = cls._WATCHED_BOXES.get(bid)
+            st = cls._WATCHED_BOXES.get(watch_key)
             if not st or not st.get("enabled"):
                 return
+            bid = str(st.get("box_id") or "")
             plat = st.get("platform", "zalo")
             aid = st.get("acc_id", 0)
-        if plat != "zalo":
+        if plat != "zalo" or not bid:
             return
         try:
             accs = get_all_accounts_from_ram(platform="zalo", enabled_only=True)
@@ -1312,17 +1374,17 @@ class CanhTreoWatchdogEngine:
             real_gname = zc.get_group_real_name(bid)
             if real_gname:
                 with cls._LOCK:
-                    if bid in cls._WATCHED_BOXES:
-                        cls._WATCHED_BOXES[bid]["box_name"] = real_gname
+                    if watch_key in cls._WATCHED_BOXES:
+                        cls._WATCHED_BOXES[watch_key]["box_name"] = real_gname
             mems = zc.get_members_full(bid, use_cache=True) or []
             if mems:
                 with cls._LOCK:
-                    if bid in cls._WATCHED_BOXES:
+                    if watch_key in cls._WATCHED_BOXES:
                         for m in mems:
                             mu = _clean_zalo_id(m.get("uid") or m.get("id"))
                             mn = str(m.get("name") or "").strip()
                             if mu and mn and mu != str(zc.uid or ""):
-                                cls._WATCHED_BOXES[bid]["known_members"][mu] = mn
+                                cls._WATCHED_BOXES[watch_key]["known_members"][mu] = mn
             msgs = zc.get_recent_group_messages(bid) or []
             if msgs:
                 last_m = msgs[-1]
@@ -1335,7 +1397,7 @@ class CanhTreoWatchdogEngine:
                         rc = rc.get("title") or rc.get("text") or rc.get("msg") or "[Media/Sticker]"
                     clean_c = strip_invisible_chars(str(rc)).strip() or "[Media/Sticker]"
                     with cls._LOCK:
-                        st_now = cls._WATCHED_BOXES.get(bid)
+                        st_now = cls._WATCHED_BOXES.get(watch_key)
                         if st_now and st_now.get("enabled"):
                             prev_mid = st_now.get("last_msg_id")
                             if mid and mid != prev_mid:
@@ -1368,7 +1430,17 @@ class CanhTreoWatchdogEngine:
                                         "time_str": time.strftime("%H:%M:%S"),
                                     }
         except Exception:
-            pass
+            with cls._LOCK:
+                if watch_key in cls._WATCHED_BOXES:
+                    cls._WATCHED_BOXES[watch_key]["last_sync_ok"] = False
+        else:
+            with cls._LOCK:
+                if watch_key in cls._WATCHED_BOXES:
+                    cls._WATCHED_BOXES[watch_key]["last_sync_ok"] = True
+        finally:
+            with cls._LOCK:
+                if watch_key in cls._WATCHED_BOXES:
+                    cls._WATCHED_BOXES[watch_key]["last_sync_at"] = time.time()
 
     @classmethod
     def _send_telegram_inactivity_alert(cls, st_snapshot):
@@ -1428,7 +1500,10 @@ class CanhTreoWatchdogEngine:
                 "inline_keyboard": [
                     [
                         {"text": "🔄 Xem Trạng Thái Canh Treo", "callback_data": "pickfn:fn_canh_treo"},
-                        {"text": f"🛑 Tắt Canh Box {bid[-4:]}", "callback_data": f"canhtreo_stop:{bid}"},
+                        {"text": f"🛑 Tắt Canh Box {bid[-4:]}",
+                         "callback_data": (f"canhtreo_stop:{st_snapshot.get('acc_id') or 0}:{st_snapshot['box_id']}"
+                             if len(f"canhtreo_stop:{st_snapshot.get('acc_id') or 0}:{st_snapshot['box_id']}".encode()) <= 64
+                             else "pickfn:fn_canh_treo")},
                     ]
                 ]
             }
@@ -1478,8 +1553,8 @@ class CanhTreoWatchdogEngine:
                             chunk = [active_ids[(scan_cursor + i) % count]
                                 for i in range(min(2, count))]
                             scan_cursor = (scan_cursor + len(chunk)) % count
-                            for bid in chunk:
-                                cls._sync_box_latest_messages(bid)
+                            for watch_key in chunk:
+                                cls._schedule_sync(watch_key)
                         for alert_st in cls.collect_due_alerts():
                             threading.Thread(target=cls._send_telegram_inactivity_alert,
                                 args=(alert_st,), daemon=True, name="ZaloInactivityAlert").start()
@@ -12216,7 +12291,7 @@ def parse_and_execute_inchat_command(
     if cmd_token in ("canhtreo",):
         sub_ct = arg_body.strip().lower()
         if sub_ct in ("off", "tat", "0", "stop", "dung"):
-            CanhTreoWatchdogEngine.disable_watch(thread_id)
+            CanhTreoWatchdogEngine.disable_watch(thread_id, acc_id=acc_id)
             _send_reply(f"🛑 Đã TẮT chế độ Canh Treo 1p30s tại Box {thread_id}!", broadcast_all_accs=False)
         elif sub_ct in ("status", "check", "ds", "list"):
             w_list = CanhTreoWatchdogEngine.get_watched_boxes()
@@ -14494,6 +14569,7 @@ class ZaloRealtimeListener:
                 msg_text=content,
                 msg_id=msg_id or cli_msg_id,
                 platform="zalo",
+                account_id=self.acc_id,
             )
         except Exception:
             pass
@@ -14505,6 +14581,7 @@ class ZaloRealtimeListener:
         elif cmd_Quick in (".ta", ".stopall", ".dunghet", ".tathet", "/stopall", "!ta", "!stopall"):
             if is_true_account_owner(sender_for_auth, client_uid=my_uid, client_send2me_id=my_s2m, platform="zalo") or is_user_authorized_for_cmd(sender_for_auth, my_uid, my_s2m, allow_all=False, sender_name=d_name, platform="zalo"):
                 stop_tasks_for_thread(None, acc_id=self.acc_id)
+        command_started_at = time.monotonic()
         was_cmd = parse_and_execute_inchat_command(
             zalo_client=client,
             acc_row=acc_row,
@@ -14521,6 +14598,11 @@ class ZaloRealtimeListener:
             reply_target=reply_target,
             raw_msg_obj=msg_obj
         )
+        if was_cmd:
+            from command_metrics import record_command
+            command_text = content.strip().split(None, 1)[0]
+            record_command("." + command_text.lstrip("./!").lower(),
+                1000 * (time.monotonic()-command_started_at))
         if not was_cmd and str(thread_id) in AUTO_INTERCEPT_BOXES:
             ic_cfg = AUTO_INTERCEPT_BOXES.get(str(thread_id))
             if ic_cfg and ic_cfg.get("enabled") and uid_from and uid_from not in ("0", my_uid, my_s2m) and uid_from not in OWNER_UIDS_CACHE:
@@ -15724,7 +15806,7 @@ def api_miniapp_zalo_watch():
     if not matches and not (action == "stop" and active):
         return jsonify(ok=False, error="Box không thuộc tài khoản đã chọn hoặc chưa được quét."), 403
     if action == "stop":
-        count = CanhTreoWatchdogEngine.disable_watch(box_id) if active else 0
+        count = CanhTreoWatchdogEngine.disable_watch(box_id, acc_id=int(account_id)) if active else 0
         return jsonify(ok=bool(count), stopped=count, status="stopped" if count else "not_found"), 200 if count else 404
     try:
         timeout = validate_timeout(data.get("timeout_sec", 90))

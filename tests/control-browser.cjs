@@ -69,6 +69,18 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.route('**/api/miniapp/boxes?account_id=2',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,page:1,total:2,total_pages:2,boxes:[{id:'box-two',name:'Box Two',account_id:2,platform:'zalo'}]})}));
  await page.route('**/api/miniapp/boxes?account_id=2&page=2',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,page:2,total:2,total_pages:2,boxes:[{id:'box-three',name:'Box Three',account_id:2,platform:'zalo'}]})}));
  await page.route('**/api/miniapp/launch',async r=>{launchBody=r.request().postDataJSON();await r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,task_id:'task-fixture',message:'Đã chạy'})});});
+ await page.route('**/api/miniapp/zalo_watch',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({
+  ok:true,refreshed_at:Date.now()/1000,persistence:'process_local',
+  watches:[
+   {box_id:'box-two',acc_id:2,box_name:'Watcher account two',timeout_sec:90,
+    last_message_at:Math.floor(Date.now()/1000)-95,last_message_at_label:'09:00 GMT+7',
+    inactive_since_label:'09:01 GMT+7',last_sync_at:Date.now()/1000-12,last_sync_ok:false,
+    status:'silent',silence_seconds:95},
+   {box_id:'box-other',acc_id:999,box_name:'Confidential account other',
+    timeout_sec:90,last_message_at:Date.now()/1000-5,last_sync_at:Date.now()/1000,
+    last_sync_ok:true,status:'monitoring',silence_seconds:5}
+  ]
+ })}));
  const v8Task={id:'legacy:task2',source_id:'task2',platform:'zalo',owner:'123',
   task_type:'treo_ngon',status:'RUNNING',started:1000,created:1000,
   account_ids:['2'],actions:[],persistence:'process_local',target:'box-two',
@@ -81,6 +93,13 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.getByRole('tab',{name:'Zalo',exact:true}).click();
  await page.locator('#launch-account').selectOption('2');
  await page.getByText('Box Two · box-two').waitFor();
+ await page.getByText('Watcher account two').waitFor();
+ assert.match(await page.locator('#zalo-watch-status').innerText(),/API Zalo lỗi/);
+ assert.doesNotMatch(await page.locator('#zalo-watch-status').innerText(),/Confidential account other/);
+ const firstWatchText=await page.locator('#zalo-watch-status').innerText();
+ await page.waitForTimeout(2800);
+ const secondWatchText=await page.locator('#zalo-watch-status').innerText();
+ assert.notEqual(firstWatchText,secondWatchText, 'watch elapsed timer should update locally');
  await page.locator('#launch-boxes input[value="box-two"]').check();
  await page.getByRole('button',{name:'Tiếp ›'}).click();
  await page.locator('#launch-boxes input[value="box-three"]').check();

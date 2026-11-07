@@ -1697,16 +1697,21 @@ class DirectTelegramBotRunner:
                 watched = _main_app.CanhTreoWatchdogEngine.get_watched_boxes()
             except Exception:
                 pass
-            watched_ids = {w["box_id"] for w in watched}
+            watched_keys = {(str(w.get("acc_id") or 0), str(w.get("box_id") or "")) for w in watched}
             rows = []
             for b in boxes[:12]:
                 bid_s = str(b["id"])
-                is_w = bid_s in watched_ids
+                account_s = str(b.get("acc_id") or 0)
+                is_w = (account_s, bid_s) in watched_keys
                 status_ico = "[ĐANG CANH 1P30S]" if is_w else "[BẬT CANH 1P30S]"
+                callback = f"canhtreo_{'stop' if is_w else 'start'}:{account_s}:{bid_s}"
+                if len(callback.encode("utf-8")) > 64:
+                    # Telegram callback_data is capped at 64 bytes; no ambiguous ID fallback.
+                    continue
                 rows.append([
                     tg_btn(
-                        f"{status_ico} {b['name'][:22]} ({bid_s[-4:]})",
-                        f"canhtreo_stop:{bid_s}" if is_w else f"canhtreo_start:{bid_s}",
+                        f"{status_ico} ACC #{account_s} · {b['name'][:19]}",
+                        callback,
                         emoji_key="check" if is_w else "radar",
                     )
                 ])
@@ -1717,10 +1722,16 @@ class DirectTelegramBotRunner:
             rows.append([tg_btn("Quay lại Bảng Chức Năng", "tab_func_1", emoji_key="back")])
 
             w_lines = []
-            for w in watched:
+            from html import escape as _escape_watch
+            for w in watched[:12]:
+                age = w.get("silence_sec")
+                age_label = "Chưa nhận tin" if age is None else f"{int(age)}s / {int(w.get('timeout_sec') or 90)}s"
+                name = _escape_watch(str(w.get("box_name") or "Box Zalo"))
+                latest = _escape_watch(str(w.get("last_sender_name") or "Chưa rõ"))
+                sync = " · API Zalo lỗi" if w.get("last_sync_ok") is False else ""
                 w_lines.append(
-                    f"• <b>{w['box_name']}</b> (<code>{w['box_id']}</code>) — Đã im lặng: <b>{w['silence_sec']}s / 90s</b>\n"
-                    f"  └ Tin cuối bởi <b>{w['last_sender_name']}</b>: <i>{w['last_msg_text'][:50]}</i>"
+                    f"• <b>ACC #{w.get('acc_id')}</b> · <b>{name}</b> — {age_label}{sync}\n"
+                    f"  └ Tin cuối: <b>{latest}</b> · {str(w.get('last_message_at_label') or 'Chưa có')}"
                 )
             w_summary = "\n".join(w_lines) if w_lines else "• <i>Chưa bật canh treo ở Box nào. Hãy bấm chọn 1 Box bên dưới để bắt đầu canh 1p30s!</i>"
             cap = (
@@ -2775,32 +2786,46 @@ class DirectTelegramBotRunner:
             self.render_function_wizard(chat_id, msg_id, user_id, "fn_canh_treo")
             return
 
-        if data.startswith("canhtreo_start:"):
-            bid_target = data.split(":", 1)[1].strip()
+        if data.startswith(("canhtreo_start:", "canhtreo_stop:")):
+            verb, value = data.split(":", 1)
+            value = value.strip()
+            if verb == "canhtreo_stop" and value == "ALL":
+                if not is_root_admin(user_id):
+                    self.answer_callback(cb_id, "Chỉ admin chính được dừng tất cả.", show_alert=True)
+                    return
+                import app as _main_app
+                stopped = _main_app.CanhTreoWatchdogEngine.disable_watch(None)
+                self.answer_callback(cb_id, f"Đã tắt {stopped} box.", show_alert=True)
+                self.render_function_wizard(chat_id, msg_id, user_id, "fn_canh_treo")
+                return
             boxes = self._discover_all_boxes(user_id=user_id, force_refresh=False)
-            matched_b = next((b for b in boxes if str(b["id"]) == bid_target), None)
-            b_name = matched_b["name"] if matched_b else f"Box #{bid_target[-6:]}"
-            b_plat = matched_b.get("platform", "zalo") if matched_b else "zalo"
-            b_aid = matched_b.get("acc_id", 0) if matched_b else 0
-            try:
-                import app as _main_app
-                _main_app.CanhTreoWatchdogEngine.enable_watch(
-                    bid_target, box_name=b_name, platform=b_plat, acc_id=b_aid, timeout_sec=90.0, notify_chat_id=chat_id
-                )
-            except Exception:
-                pass
-            self.answer_callback(cb_id, f"Đã BẬT Canh Treo 1p30s cho {b_name[:20]}!", show_alert=True)
-            self.render_function_wizard(chat_id, msg_id, user_id, "fn_canh_treo")
-            return
-
-        if data.startswith("canhtreo_stop:"):
-            bid_target = data.split(":", 1)[1].strip()
-            try:
-                import app as _main_app
-                _main_app.CanhTreoWatchdogEngine.disable_watch(None if bid_target == "ALL" else bid_target)
-            except Exception:
-                pass
-            self.answer_callback(cb_id, "Đã tắt Canh Treo!", show_alert=True)
+            parts = value.split(":", 1)
+            if len(parts) == 2 and parts[0].isdigit():
+                account_id, box_id = parts
+                matched = [b for b in boxes if str(b.get("id")) == box_id and str(b.get("acc_id") or 0) == account_id]
+            else:
+                box_id = value
+                matched = [b for b in boxes if str(b.get("id")) == box_id]
+                if len(matched) > 1:
+                    self.answer_callback(cb_id, "Box xuất hiện trên nhiều cookie. Hãy chọn lại box.", show_alert=True)
+                    return
+                account_id = str(matched[0].get("acc_id") or 0) if matched else ""
+            if not matched or not account_id.isdigit() or account_id == "0":
+                self.answer_callback(cb_id, "Không xác minh được cookie sở hữu box.", show_alert=True)
+                return
+            import app as _main_app
+            if verb == "canhtreo_start":
+                row = matched[0]
+                state = _main_app.CanhTreoWatchdogEngine.enable_watch(
+                    box_id, box_name=row.get("name") or "Box Zalo",
+                    platform=row.get("platform") or "zalo", acc_id=int(account_id),
+                    timeout_sec=90, notify_chat_id=chat_id)
+                notice = ("Đã bật canh 90 giây" if state else "Không thể bật canh box")
+            else:
+                stopped = _main_app.CanhTreoWatchdogEngine.disable_watch(box_id, acc_id=int(account_id))
+                notice = ("Đã dừng canh cookie #"+account_id if stopped
+                          else "Box không còn canh trên cookie này")
+            self.answer_callback(cb_id, notice, show_alert=True)
             self.render_function_wizard(chat_id, msg_id, user_id, "fn_canh_treo")
             return
 
@@ -3912,19 +3937,26 @@ class DirectTelegramBotRunner:
         self.send_welcome_video_menu(chat_id, cap, reply_to=msg_id, reply_markup=kb)
 
     def _safe_process_update(self, upd):
+        start = time.monotonic()
+        ok = True
+        msg = upd.get("message") or upd.get("edited_message") or {}
+        command = str(msg.get("text") or "").split(None, 1)[0].lower() if msg.get("text") else "/callback"
         try:
             self.process_update(upd)
-        except Exception as e:
-            self.last_error = f"Telegram update failed ({type(e).__name__})"
+        except Exception as exc:
+            ok = False
+            self.last_error = f"Telegram update failed ({type(exc).__name__})"
+        finally:
+            from command_metrics import record_command
+            record_command(command, 1000 * (time.monotonic() - start), ok=ok)
 
     def _submit_update(self, upd):
         msg = upd.get("message") or upd.get("edited_message") or {}
         parts = str(msg.get("text") or "").split(None, 1)
         command = parts[0].lower().split("@")[0] if parts else ""
-        interactive = "callback_query" in upd or command in (
-            "/start", "/menu", "/help", "/bot", "/ping", "/tasks", "/dsbox", "/task_status",
-            "/task_stop", "/task_pause", "/task_resume", "/task_retry", "/stopall", "/ta", "/stop",
-        )
+        # All Telegram slash commands get a reserved execution lane. Long-running
+        # provider operations still run in their dedicated bounded executors.
+        interactive = "callback_query" in upd or command.startswith("/")
         executor = self.interactive_executor if interactive else self.executor
         slots = self._interactive_update_slots if interactive else self._update_slots
         if not slots.acquire(blocking=False):

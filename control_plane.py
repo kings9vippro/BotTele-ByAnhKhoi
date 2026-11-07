@@ -18,6 +18,7 @@ COMMANDS = {
     'discord_login': 'Liên kết Discord OAuth2', 'discord_accounts': 'Tài khoản Discord',
     'discord_status': 'Trạng thái OAuth', 'discord_logout': 'Ngắt liên kết: ID',
     'tasks': 'Task theo cookie: /tasks [acc_id]', 'dsbox': 'Nhóm Zalo riêng: /dsbox [acc_id] [trang]',
+    'watch_status': 'Canh Zalo theo cookie: /watch_status [acc_id]',
     'task_status': 'Chi tiết: ID',
     'task_pause': 'Tạm dừng tác vụ chờ: ID', 'task_resume': 'Tiếp tục: ID',
     'task_stop': 'Dừng: ID', 'task_retry': 'Thử lại tác vụ thất bại: ID',
@@ -353,6 +354,41 @@ def telegram_command(bot, user, chat, name, args):
                     bot.send_text(chat,html.escape('\n'.join(report)),
                         reply_markup={'inline_keyboard':keyboard})
                     return True
+        elif name == 'watch_status':
+            if not os.environ.get('TELEGRAM_ADMIN_ID') or str(user) != str(os.environ.get('TELEGRAM_ADMIN_ID')):
+                answer = 'Chỉ quản trị viên được xem thông tin canh box.'
+            else:
+                requested_account = args.strip()
+                watched = runtime.CanhTreoWatchdogEngine.get_watched_boxes()
+                if requested_account and not requested_account.isdigit():
+                    answer = 'Cú pháp: /watch_status [acc_id]'
+                elif not requested_account:
+                    grouped = {}
+                    for watch in watched:
+                        key = str(watch.get('acc_id') or 'không xác định')
+                        grouped[key] = grouped.get(key, 0) + 1
+                    answer = ('CANH BOX ZALO THEO COOKIE\n' + ('\n'.join(
+                        f'Acc #{k}: {count} box · /watch_status {k}' for k,count in sorted(grouped.items()))
+                        or 'Chưa có box được canh trong tiến trình hiện tại.'))
+                else:
+                    subset = [w for w in watched if str(w.get('acc_id') or '') == requested_account]
+                    items = ['CANH BOX ACC #' + requested_account]
+                    for watch in subset[:10]:
+                        label = str(watch.get('box_name') or watch.get('box_id'))[:65]
+                        if watch.get('status') == 'awaiting_message':
+                            status = 'Chờ tin nhắn đầu tiên'
+                        else:
+                            status = (f"{watch.get('silence_seconds') or 0:.0f}s/"
+                                      f"{watch.get('timeout_sec') or 90:.0f}s") + (' · ĐÃ IM LẶNG' if watch.get('status') == 'silent' else '')
+                        sync = 'API Zalo chưa đồng bộ' if watch.get('last_sync_at') is None else (
+                            'API Zalo lỗi, dữ liệu cũ' if watch.get('last_sync_ok') is False else
+                            'Đồng bộ '+str(int(watch.get('last_sync_age_seconds') or 0))+'s trước')
+                        items.append(f"{label} · {status}\n  Tin cuối: {watch.get('last_message_at_label') or 'Chưa có'} · {sync}")
+                    if len(subset)>10:
+                        items.append(f'Còn {len(subset)-10} box: mở Mini App để xem.')
+                    if not subset:
+                        items.append('Chưa canh box nào ở cookie này hoặc watch đã mất sau restart.')
+                    answer = '\n'.join(items)
         elif name == 'discord_login':
             url = ext['discord_oauth_start'](str(user))['url']
             bot.send_text(chat,'Liên kết tài khoản tại Discord chính thức.',reply_markup={'inline_keyboard':[[{'text':'Đăng nhập Discord','url':url}]]})
@@ -402,9 +438,11 @@ def telegram_command(bot, user, chat, name, args):
                 for row in rows[:15]
             ) or ('Không tìm thấy tác vụ.' if name == 'task_status' else 'Chưa có tác vụ')
             if name == 'tasks' and not requested_account:
-                answer = 'Tác vụ được gắn nhãn theo ACC. Lọc riêng: /tasks <acc_id>\\n' + answer
+                answer = 'TÁC VỤ HIỆN CÓ\nLọc riêng: /tasks <acc_id>\n' + answer
             if name == 'tasks' and requested_account:
-                answer = 'Tác vụ ACC #' + requested_account + '\\n' + answer
+                answer = 'TÁC VỤ ACC #' + requested_account + '\n' + answer
+            if not rows and name == 'tasks':
+                answer += '\nLưu ý: task Zalo trong RAM có thể mất sau khi hosting khởi động lại.' 
             keyboard = []
             for row in rows[:5]:
                 if row['execution_source'] == 'durable_notifications' and row['actions']:
@@ -417,16 +455,48 @@ def telegram_command(bot, user, chat, name, args):
             answer = '\n'.join(f"{r['id']} · {r['name']}" for r in ext['managed_channels'](user)) or 'Thêm webhook trong Mini App → Discord'
         elif name in ('send','send_multi'):
             ids, separator, content = args.partition('|')
-            targets = [s.strip() for s in ids.split(',')]
-            allowed = {r['id'] for r in ext['managed_channels'](user)}
-            if not separator or not 1 <= len(targets) <= (1 if name == 'send' else 5) or any(c not in allowed for c in targets):
-                raise ValueError('Cú pháp: /send channel_id | nội dung; chỉ kênh được cấp quyền')
-            answer = '\n'.join(queue.submit_many(user,targets,content.strip()))
+            targets = [v.strip() for v in ids.split(',')]
+            maximum = 1 if name == 'send' else 5
+            if not separator or not content.strip() or not 1 <= len(targets) <= maximum or any(not v for v in targets):
+                answer = ('CÚ PHÁP: /send <channel_id> | <nội dung>' if name == 'send'
+                          else 'CÚ PHÁP: /send_multi <id1>,<id2> | <nội dung> (tối đa 5 kênh)')
+                answer += '\nXem /channels để biết các webhook được cấp quyền.'
+            else:
+                allowed = {r['id'] for r in ext['managed_channels'](user)}
+                if any(v not in allowed for v in targets):
+                    answer = 'Kênh chưa được cấp quyền. Mở /channels hoặc Mini App → Discord.'
+                else:
+                    answer = '\n'.join(queue.submit_many(user,targets,content.strip()))
         elif name == 'delay': answer = 'artificial_delay_seconds = 0; Retry-After của API vẫn được tôn trọng.'
         elif name == 'settings': answer = 'Mở /miniapp → Cài đặt để cấu hình kết nối.'
-        else:
+        elif name == 'performance':
+            from command_metrics import snapshot as command_snapshot
+            stats = command_snapshot()
             data = ext['control_snapshot'](user)
-            answer = json.dumps(data['events'][-10:] if name == 'logs' else {'workers':data['workers'],'tasks':data['counts'],'api_latency_seconds':data['api_latency_seconds']},ensure_ascii=False)
+            counts = data['counts'] or {}
+            answer = ('HIỆU SUẤT BOT TELEGRAM\n'
+                + 'Worker thông báo: ' + str(data['workers']) + '\n'
+                + 'Tác vụ: ' + (', '.join(f'{k}={v}' for k,v in sorted(counts.items())) or 'Chưa có') + '\n'
+                + 'Độ trễ Discord API: ' + (
+                    f"{1000*data['api_latency_seconds']:.0f} ms" if data['api_latency_seconds'] is not None
+                    else 'Chưa có mẫu gửi thành công') + '\n'
+                + 'Lệnh Telegram đã đo: ' + str(stats['sample_count']) + '\n'                + 'Lệnh Zalo đã đo: ' + str(stats['zalo']['count']) + '\n'
+                + 'Thời gian xử lý p50: ' + (str(stats['p50_handler_ms'])+' ms' if stats['p50_handler_ms'] is not None else 'Chưa đo') + '\n'
+                + 'Thời gian xử lý p95: ' + (str(stats['p95_handler_ms'])+' ms' if stats['p95_handler_ms'] is not None else 'Cần ít nhất 20 mẫu') + '\n'                + 'Zalo handler p50: ' + (str(stats['zalo']['p50_ms'])+' ms' if stats['zalo']['p50_ms'] is not None else 'Chưa đo') + '\n'
+                + 'Không bao gồm thời gian mạng Zalo hoặc giao hàng Telegram.')
+        elif name == 'logs':
+            data = ext['control_snapshot'](user)
+            items = data['events'][-10:]
+            answer = ('\n'.join(
+                f"{str(item.get('status') or 'event')} · ID {str(item.get('task') or '')[:16]}"
+                for item in items) or 'Chưa có nhật ký tác vụ thông báo.')
+        elif name == 'system':
+            data = ext['control_snapshot'](user)
+            answer = ('MÁY CHỦ BOT\n' + 'Worker thông báo: '+str(data['workers'])
+                + '\\nTask thuộc tiến trình: '+str(len(ext['unified_tasks'](str(user))))
+                + '\\nĐồng bộ: '+time.strftime('%H:%M:%S',time.localtime(data['snapshot_at'])))
+        else:
+            answer = 'Hãy xem /help để biết lệnh và cú pháp hỗ trợ.'
     except (ValueError,KeyError):
         answer = 'Cấu hình hoặc tham số chưa hợp lệ. Xem /help và kiểm tra OAuth trong Mini App.'
     bot.send_text(chat,html.escape(answer))

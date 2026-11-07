@@ -112,5 +112,7 @@ class SecurityBoundaryTests(unittest.TestCase):
 
     def test_telegram_bot_token_is_environment_only(self):
         source = (Path(__file__).resolve().parents[1] / 'bot_settings.py').read_text()
-        self.assertIn('os.environ.get("TELEGRAM_BOT_TOKEN", "")', source)
+        self.assertIn("def load_bot_token(", source)
+        self.assertIn("TELEGRAM_BOT_TOKEN_ENCRYPTED", source)
+        self.assertIn("TELEGRAM_BOT_TOKEN_KEY", source)
         self.assertNotRegex(source, r'TELEGRAM_BOT_TOKEN\s*=\s*[^\n]*:[A-Za-z0-9_-]{20,}')
