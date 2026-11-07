@@ -13,7 +13,7 @@ import app
 class AssetRevisionTests(unittest.TestCase):
     def test_frontend_assets_versioned_by_content_hash(self):
         digest = hashlib.sha256()
-        for name in ("control.js", "control.css", "compact-nav.css"):
+        for name in ("control.js", "control.css", "compact-nav.css", "v11.css"):
             digest.update(name.encode("utf-8"))
             digest.update((Path(app.BASE_DIR) / "static" / name).read_bytes())
         expected = digest.hexdigest()[:16]
@@ -22,7 +22,7 @@ class AssetRevisionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("no-store", response.headers["Cache-Control"])
         body = response.get_data(as_text=True)
-        for name in ("control.js", "control.css", "compact-nav.css"):
+        for name in ("control.js", "control.css", "compact-nav.css", "v11.css"):
             self.assertIn("/static/" + name + "?v=" + expected, body)
         self.assertNotIn("/static/control.js?v=2.0.0", body)
 

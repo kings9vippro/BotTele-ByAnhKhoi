@@ -9,13 +9,27 @@
  const names={home:'Tổng quan',accounts:'Tài khoản',discord:'Discord',zalo:'Zalo',tasks:'Task',activity:'Nhật ký',music:'Âm nhạc',settings:'Cài đặt'};
  const keys=Object.keys(names), pages=$('pages');
  const element=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
+ function showAuthGate(state,reason){
+  const card=$('auth-gate');if(!card)return;
+  const variants={
+   missing:'Thiếu dữ liệu xác thực Telegram. Hãy mở Mini App từ nút của bot trong Telegram, không qua Safari.',
+   expired:'Phiên Telegram đã hết hạn. Đóng Mini App và mở lại từ bot để lấy phiên mới.',
+   forbidden:'Tài khoản Telegram này chưa được cấp quyền quản lý.',
+   server:'Máy chủ chưa có cấu hình xác thực Telegram hợp lệ. Quản trị viên cần kiểm tra hosting.',
+   invalid:'Phiên xác thực không hợp lệ. Đóng và mở lại Mini App từ bot.'
+  };
+  $('auth-message').textContent=variants[reason]||variants.invalid;
+  $('auth-heading').textContent=reason==='forbidden'?'Không đủ quyền':reason==='server'?'Chưa thể xác thực':'Mở trong Telegram';
+  card.hidden=false;document.body.classList.add('auth-locked');setConnection(state);
+ }
+ function hideAuthGate(){$('auth-gate').hidden=true;document.body.classList.remove('auth-locked');}
  function toast(text){$('toasts').replaceChildren(element('div',text,'toast'));clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toasts').replaceChildren(),4500);}
  function setConnection(state){const n=$('connection');n.dataset.state=state;n.textContent=connectionLabels[state]||connectionLabels.DISCONNECTED;n.classList.toggle('live',state==='CONNECTED');}
  function failed(error,state='DISCONNECTED'){
   if(error?.name==='AbortError')return;
-  if(error?.status===401){terminalAuth=true;state='AUTH_REQUIRED';stream?.abort();clearTimeout(reconnectTimer);}
-  else if(error?.status===403)state='ACCESS_DENIED';
-  else if(error?.code==='server_configuration'||error?.status===503)state='SERVER_ERROR';
+  if(error?.status===401){terminalAuth=true;state='AUTH_REQUIRED';stream?.abort();clearTimeout(reconnectTimer);showAuthGate(state,error?.code==='expired_init_data'?'expired':'invalid');}
+  else if(error?.status===403){terminalAuth=true;state='ACCESS_DENIED';showAuthGate(state,'forbidden');}
+  else if(error?.code==='server_configuration'||error?.status===503){terminalAuth=true;state='SERVER_ERROR';showAuthGate(state,'server');}
   $('error').hidden=false;
   $('error').textContent=error?.message||'Không thể đồng bộ dữ liệu.';
   setConnection(state);
@@ -31,7 +45,7 @@
  function button(text,fn,cls){const b=element('button',text,cls);b.type='button';b.onclick=async()=>{if(b.disabled)return;b.disabled=true;b.setAttribute('aria-busy','true');try{await fn();}catch(e){failed(e);toast(e.message);}finally{b.disabled=false;b.removeAttribute('aria-busy');}};return b;}
  function theme(){const mode=$('theme').value;document.documentElement.dataset.theme=mode==='system'?(tg?.colorScheme||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark')):mode;}
  function initTelegram(){const sdk=window.Telegram?.WebApp;if(!sdk||tg===sdk)return;tg=sdk;tg.ready();tg.expand();tg.onEvent?.('themeChanged',theme);tg.onEvent?.('viewportChanged',()=>{document.documentElement.style.setProperty('--safe',Math.max(tg.safeAreaInset?.bottom||0,tg.contentSafeAreaInset?.bottom||0)+'px');});tg.BackButton?.onClick(()=>{if($('sheet').open)$('sheet').close();else go('home');});theme();}
- initTelegram();$('telegram-sdk').addEventListener('load',initTelegram);$('theme').onchange=()=>{try{localStorage.setItem('glaze-theme',$('theme').value);}catch{}theme();};try{$('theme').value=localStorage.getItem('glaze-theme')||'light';}catch{$('theme').value='light';}theme();
+ initTelegram();$('telegram-sdk').addEventListener('load',initTelegram);$('theme').onchange=()=>{try{localStorage.setItem('glaze-theme',$('theme').value);}catch{}theme();};try{$('theme').value=localStorage.getItem('glaze-theme')||'dark';}catch{$('theme').value='dark';}theme();
  for(const [id,allowed,fallback] of [['text-size',['normal','large'],'normal'],['accent',['blue','rose','mint'],'blue']]){
   const input=$(id),key='glaze-'+id;
   try{const saved=localStorage.getItem(key);input.value=allowed.includes(saved)?saved:fallback;}catch{input.value=fallback;}
@@ -39,9 +53,17 @@
   input.addEventListener('change',apply);apply();
  }
  function select(name){active=name;document.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===name;b.setAttribute('aria-selected',on);b.setAttribute('aria-current',on?'page':'false');b.tabIndex=on?0:-1;});document.querySelectorAll('[data-bottom]').forEach(b=>b.setAttribute('aria-current',b.dataset.bottom===name?'page':'false'));keys.forEach(key=>$(key)?.setAttribute('aria-hidden',key===name?'false':'true'));$('tab-'+name)?.scrollIntoView({block:'nearest',inline:'nearest',behavior:reduced.matches?'auto':'smooth'});if(name==='music')loadMusic();if(name==='zalo'&&!terminalAuth)refreshZaloWatches().catch(failed);if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();}
- function go(name){select(name);pages.scrollTo({left:keys.indexOf(name)*pages.clientWidth,behavior:reduced.matches?'auto':'smooth'});tg?.HapticFeedback?.selectionChanged();}
+ function go(name){select(name);pages.scrollTo({left:keys.indexOf(name)*pages.clientWidth,behavior:reduced.matches?'auto':'smooth'});tg?.HapticFeedback?.selectionChanged();if(!terminalAuth&&['accounts','zalo','discord'].includes(name)&&Date.now()-lastFullSync>30000)refresh().catch(failed);}
  keys.forEach((key,i)=>{const b=button(names[key],()=>go(key));b.id='tab-'+key;b.dataset.tab=key;b.role='tab';b.setAttribute('aria-controls',key);$(key).setAttribute('aria-labelledby',b.id);$(key).tabIndex=0;b.onkeydown=e=>{const d=e.key==='ArrowRight'||e.key==='ArrowDown'?1:e.key==='ArrowLeft'||e.key==='ArrowUp'?-1:0;if(d||e.key==='Home'||e.key==='End'){e.preventDefault();const next=e.key==='Home'?keys[0]:e.key==='End'?keys[keys.length-1]:keys[(i+d+keys.length)%keys.length];go(next);$('tab-'+next).focus();}};$('tabs').append(b);});
  for(const [key,icon]of [['home','⌂'],['accounts','◎'],['tasks','◷'],['music','♫'],['settings','⚙']]){const b=button('',()=>go(key)),iconNode=element('span',icon,'bottom-icon');iconNode.setAttribute('aria-hidden','true');b.append(iconNode);b.dataset.bottom=key;b.classList.add('bottom-nav-button');b.setAttribute('aria-label',names[key]);b.title=names[key];$('bottom').append(b);}
+ for(const [id,page] of [['home-open-accounts','accounts'],['home-open-tasks','tasks'],['home-open-zalo','zalo'],['account-open-zalo','zalo'],['account-open-discord','discord'],['task-open-activity','activity'],['task-open-zalo','zalo']]){
+  const target=$(id);if(target)target.addEventListener('click',()=>go(page));
+ }
+ $('auth-retry')?.addEventListener('click',()=>{
+  initTelegram();if(!(tg?.initData||launch)){showAuthGate('AUTH_REQUIRED','missing');return;}
+  terminalAuth=false;hideAuthGate();setConnection('CONNECTING');
+  refresh().finally(()=>{if(!terminalAuth)scheduleReconnect(streamGeneration,100);});
+ });
  let musicData,musicLoading;
  async function loadMusic(){
   if(musicData||musicLoading)return musicLoading;
@@ -317,6 +339,7 @@
  const bins=Array(10).fill(0),now=Date.now()/1000;for(const e of eventRows){const i=9-Math.floor((now-e.at)/60);if(i>=0&&i<10)bins[i]++;}const max=Math.max(1,...bins);$('chart').replaceChildren();bins.forEach((n,i)=>{const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');for(const[k,v]of Object.entries({x:i*60+5,y:100-n/max*90,width:48,height:n/max*90,rx:5,fill:'currentColor'}))rect.setAttribute(k,v);$('chart').append(rect);});$('chart-summary').textContent=`${bins.reduce((a,b)=>a+b,0)} sự kiện trong 10 phút (tối đa 200 sự kiện đã tải).`;
  }
  async function refreshControl(options={}){renderControl(await api('control?cursor='+cursor,undefined,options));}
+ let lastFullSync=0;
  async function refresh(){
   if(terminalAuth)return;
   if(refreshing)return refreshing;
@@ -353,7 +376,7 @@
     accounts=[];legacyTelemetry={running_tasks:0,ram_mb:'—'};renderTaskAccounts();
     if(!$('member-notice')){const notice=element('article','Tài khoản Zalo và tệp hiện do quản trị viên chính điều khiển. Discord và task trong trang này chỉ hiển thị dữ liệu của bạn.');notice.id='member-notice';$('zalo').replaceChildren(notice);$('oauth-form').closest('article').hidden=true;$('stop-all').hidden=true;}
    }
-   await Promise.all([refreshControl(options),refreshRegistry(options)]);renderAccounts();paintMetrics();
+   await Promise.all([refreshControl(options),refreshRegistry(options)]);renderAccounts();paintMetrics();hideAuthGate();lastFullSync=Date.now();
    $('oauth-status').textContent=p.providers[0]?.configured?'OAuth đã cấu hình':'Cần quản trị viên cấu hình ứng dụng Discord';
    $('updated').textContent='Đồng bộ: '+new Date().toLocaleTimeString();
    $('error').hidden=true;if(streamConnected)setConnection('CONNECTED');
@@ -400,7 +423,7 @@
  document.addEventListener('visibilitychange',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();if(document.hidden){streamConnected=false;return;}reconnectAttempt=0;lastStreamAt=0;setConnection('CONNECTING');if(!terminalAuth)refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
  window.addEventListener('offline',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();streamConnected=false;setConnection('DISCONNECTED');});
  window.addEventListener('online',()=>{if(document.hidden)return;reconnectAttempt=0;setConnection('CONNECTING');refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
- setInterval(()=>{if(!terminalAuth&&!document.hidden&&navigator.onLine!==false)refresh();},15000);
+ setInterval(()=>{if(!terminalAuth&&!document.hidden&&navigator.onLine!==false&&Date.now()-lastFullSync>=60000)refresh();},15000);
  setInterval(()=>{if(active==='tasks'&&!terminalAuth&&!document.hidden&&navigator.onLine!==false
    &&Date.now()>=registryNextRetryAt)refreshRegistry().catch(()=>{});},4000);
  setInterval(()=>{if(active==='tasks'&&!document.hidden&&registryFetchedAt){
@@ -422,6 +445,7 @@
      });
      initTelegram();
    }
+   if(!(tg?.initData||launch)){terminalAuth=true;showAuthGate('AUTH_REQUIRED','missing');return;}
    await refresh();
    if(!terminalAuth)scheduleReconnect(streamGeneration,100);
  }
