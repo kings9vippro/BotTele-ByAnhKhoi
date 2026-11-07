@@ -13,6 +13,10 @@ class BotSecretConfigurationError(RuntimeError):
 
 def load_bot_token(environment=None):
     env = environment if environment is not None else os.environ
+    if not hasattr(env, "get"):
+        raise BotSecretConfigurationError(
+            "load_bot_token requires an environment mapping. Set TELEGRAM_BOT_TOKEN in hosting secrets."
+        )
     direct = str(env.get("TELEGRAM_BOT_TOKEN") or "").strip()
     encrypted = str(env.get("TELEGRAM_BOT_TOKEN_ENCRYPTED") or "").strip()
     key = str(env.get("TELEGRAM_BOT_TOKEN_KEY") or "").strip()
@@ -33,5 +37,5 @@ def load_bot_token(environment=None):
     return result
 
 
-TELEGRAM_BOT_TOKEN = load_bot_token("9089151186:AAHeWAKE0TeVEj2ZecCyuKBhqqE2YH9kIVI")
+TELEGRAM_BOT_TOKEN = load_bot_token()
 TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "8827605973").strip()
