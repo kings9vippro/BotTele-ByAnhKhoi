@@ -993,6 +993,55 @@ class DirectTelegramBotRunner:
         self._cached_welcome_kind = _get_db_setting("tg_welcome_kind", "animation")
         self._cached_boxes_by_user = {}
         self._boxes_refreshing_users = set()
+        self._qr_export_lock = threading.RLock()
+        self._qr_export_pending = {}  # (owner_id, private_chat_id, nonce): (expires, imei, cookie snapshot)
+
+    @staticmethod
+    def _is_private_owner_chat(chat_id, user_id):
+        return str(chat_id or "").strip() == str(user_id or "").strip() and bool(str(user_id or "").strip())
+
+    def _queue_private_qr_export(self, chat_id, user_id, imei, cookies):
+        """Never send a session credential without explicit private-chat confirmation."""
+        if not self._is_private_owner_chat(chat_id, user_id) or not isinstance(cookies, dict) or not cookies:
+            return None
+        import secrets
+        nonce = secrets.token_urlsafe(14)
+        now = time.time()
+        with self._qr_export_lock:
+            self._qr_export_pending = {k:v for k,v in self._qr_export_pending.items() if v[0] > now}
+            if len(self._qr_export_pending) >= 32:
+                self._qr_export_pending.pop(next(iter(self._qr_export_pending)), None)
+            self._qr_export_pending[(str(user_id), str(chat_id), nonce)] = (
+                now + 120, str(imei), dict(cookies))
+        return nonce
+
+    def _confirm_private_qr_export(self, chat_id, user_id, nonce, callback_id=None):
+        """One-time credential reveal, only in the initiating owner's private DM."""
+        if not self._is_private_owner_chat(chat_id, user_id):
+            if callback_id:
+                self.answer_callback(callback_id,"Chỉ dùng trong chat riêng của chính bạn.",show_alert=True)
+            return False
+        with self._qr_export_lock:
+            record = self._qr_export_pending.pop((str(user_id), str(chat_id), str(nonce)), None)
+        if not record or record[0] < time.time():
+            if callback_id:
+                self.answer_callback(callback_id,"Yêu cầu đã hết hạn. Hãy đăng nhập lại.",show_alert=True)
+            return False
+        _, imei, cookies = record
+        if callback_id:
+            self.answer_callback(callback_id,"Chỉ gửi cho bạn trong chat riêng.")
+        import html
+        cookie_line = "; ".join(f"{k}={v}" for k,v in cookies.items()
+                                if str(k).replace("_","").isalnum() and v is not None)
+        content = ("<b>THÔNG TIN PHIÊN ZALO CỦA BẠN</b>\n"
+                   "<b>IMEI:</b> <code>" + html.escape(imei) + "</code>\n"
+                   "<b>Cookie:</b> <code>" + html.escape(cookie_line) + "</code>\n\n"
+                   "<i>Đây là thông tin đăng nhập nhạy cảm. Không chuyển tiếp hoặc đưa vào GitHub.</i>")
+        if len(content) > 3900:
+            return bool(self.send_text(chat_id,
+                "Cookie quá dài để hiển thị an toàn. Hãy quản lý tài khoản đã lưu trong Mini App.",
+                protect_content=True).get("ok"))
+        return bool(self.send_text(chat_id,content,protect_content=True).get("ok"))
 
     @staticmethod
     def _sticker_key(user_id, chat_id):
@@ -1117,7 +1166,7 @@ class DirectTelegramBotRunner:
                              for name, description in COMMANDS.items()]
                             + [{"command": name, "description": description}
                                for name, description in (
-                                   ('files','Kho tệp Zalo'),('sticker','Tạo nhãn dán Zalo'),
+                                   ('files','Kho tệp Zalo'),('file_nhay','Chọn tệp Nhây'),('file_ngon','Chọn tệp Ngôn'),('sticker','Tạo nhãn dán Zalo'),
                                    ('qr','Quét QR Zalo'),('addck','Nhập phiên Zalo'),
                                    ('stopall','Quản trị viên: dừng toàn bộ'),
                                    ('status','Tình trạng Zalo'),('checkzalo','Kiểm tra phiên Zalo'),
@@ -1132,7 +1181,8 @@ class DirectTelegramBotRunner:
             self.last_error = f"Telegram initialization failed ({type(e).__name__})"
         return False
 
-    def send_text(self, chat_id, text, reply_to=None, parse_mode="HTML", reply_markup=None):
+    def send_text(self, chat_id, text, reply_to=None, parse_mode="HTML", reply_markup=None,
+                  protect_content=False):
         payload = {
             "chat_id": chat_id,
             "text": text,
@@ -1144,6 +1194,8 @@ class DirectTelegramBotRunner:
             payload["reply_to_message_id"] = reply_to
         if reply_markup:
             payload["reply_markup"] = reply_markup
+        if protect_content:
+            payload["protect_content"] = True
         return self.api_call("sendMessage", payload, timeout=12)
 
     def send_welcome_video_menu(self, chat_id, caption_html, reply_to=None, reply_markup=None):
@@ -1371,9 +1423,10 @@ class DirectTelegramBotRunner:
 
     @classmethod
     def _get_miniapp_button(cls, label="Mở Mini App GLAZE"):
-        ext_url = (os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("PUBLIC_WEB_URL") or "").strip().rstrip("/")
-        if ext_url.startswith("https://"):
-            return {"text": label, "web_app": {"url": f"{ext_url}/miniapp"}}
+        from miniapp_url import public_miniapp_url
+        url = public_miniapp_url()
+        if url:
+            return {"text": label, "web_app": {"url": url}}
         return tg_btn(label, "open_zenvyre_miniapp", emoji_key="crown")
 
     @classmethod
@@ -2462,12 +2515,18 @@ class DirectTelegramBotRunner:
                 if qr_msg_id:
                     self.delete_msg(chat_id, qr_msg_id)
 
+                nonce = self._queue_private_qr_export(chat_id, user_id, imei, cookies)
+                kb = {"inline_keyboard": [[{"text": "Xác nhận xem Cookie + IMEI (120 giây)",
+                    "callback_data": "qr_export:" + nonce}]]} if nonce else None
                 self.send_text(
                     chat_id,
-                    f"<b>Đã lưu tài khoản Zalo #{acc_id}</b>\n"
-                    f"UID: <code>{uid}</code> · Nhóm: {grp_cnt}\n"
-                    "Thông tin phiên được giữ trên máy chủ, không gửi token/cookie vào cuộc trò chuyện.",
-                    reply_to=msg_id,
+                    f"<b>Đăng nhập Zalo thành công · Tài khoản #{acc_id}</b>\n"
+                    f"UID: <code>{uid}</code> · IMEI: <code>{imei}</code>\n"
+                    f"Nhóm: <b>{grp_cnt}</b> · Đã lưu vào kho riêng.\n"
+                    + ("<i>Bấm xác nhận để nhận Cookie + IMEI trong chat riêng của bạn (hết hạn sau 120 giây).</i>"
+                       if nonce else
+                       "<i>Đây không phải chat riêng. Cookie không được gửi vào nhóm; hãy dùng /qr trong DM với bot.</i>"),
+                    reply_to=msg_id, reply_markup=kb,
                 )
 
             except Exception:
@@ -2529,7 +2588,9 @@ class DirectTelegramBotRunner:
             import app as runtime
             try:
                 _, action, task_id = data.split(':', 2)
-                status = runtime.app.extensions['notification_queue'].control(str(user_id), task_id, action)
+                ext = runtime.app.extensions
+                task_owner = ext['root_task_control_owner'](str(user_id), task_id)
+                status = ext['notification_queue'].control(task_owner, task_id, action)
                 self.answer_callback(cb_id, status)
             except ValueError:
                 self.answer_callback(cb_id, 'Không có quyền hoặc trạng thái không phù hợp', show_alert=True)
@@ -2778,6 +2839,10 @@ class DirectTelegramBotRunner:
         if data == "open_zenvyre_miniapp":
             self.answer_callback(cb_id, "Đang mở Mini App GLAZE GLAZE...")
             self.send_zenvyre_miniapp_intro(chat_id, reply_to=msg_id)
+            return
+
+        if data.startswith("qr_export:"):
+            self._confirm_private_qr_export(chat_id, user_id, data.split(":", 1)[1], cb_id)
             return
 
         if data == "canhtreo_refresh":
@@ -3031,9 +3096,10 @@ class DirectTelegramBotRunner:
             )
             return
 
-        if data == "mgmt_file_selector":
-            self.answer_callback(cb_id, "Mở Chế Độ Chọn File Nhây & File Ngôn")
-            self._render_file_selector_menu(chat_id, msg_id, user_id=user_id)
+        if data in ("mgmt_file_selector", "mgmt_file_nhay", "mgmt_file_ngon"):
+            target = "nhay" if data == "mgmt_file_nhay" else "ngon" if data == "mgmt_file_ngon" else None
+            self.answer_callback(cb_id, "Đang mở kho tệp "+("Nhây" if target == "nhay" else "Ngôn" if target else "Zalo"))
+            self._render_file_selector_menu(chat_id, msg_id, user_id=user_id, target=target)
             return
 
         if data in ("mgmt_add_file_nhay", "mgmt_add_file_ngon"):
@@ -3058,7 +3124,16 @@ class DirectTelegramBotRunner:
             fn_chosen = data.split(":", 1)[1].strip()
             try:
                 import app as _main_app
-                selected_record = _main_app.select_script_file(fn_chosen, "nhay" if is_nhay else "ngon")
+                chosen_type = "nhay" if is_nhay else "ngon"
+                records = self._get_available_txt_files()
+                record = next((r for r in records if str(r.get("filename") or "").lower() == fn_chosen.lower()), None)
+                if not record:
+                    raise ValueError("File không tồn tại")
+                current_type = str(record.get("file_type") or "").lower() or (
+                    "ngon" if "ngon" in fn_chosen.lower() else "nhay")
+                if current_type != chosen_type:
+                    raise ValueError("Không thể chọn file khác loại")
+                selected_record = _main_app.select_script_file(fn_chosen, chosen_type)
                 fn_chosen = selected_record["filename"]
             except Exception:
                 self.answer_callback(cb_id, "Không lưu được lựa chọn. Hãy tải lại kho tệp.", show_alert=True)
@@ -3070,7 +3145,8 @@ class DirectTelegramBotRunner:
             self.answer_callback(cb_id, f"Đã chọn {t_lbl}: {fn_chosen}!", show_alert=True)
             self._render_file_selector_menu(
                 chat_id, msg_id, user_id=user_id,
-                notice=f"Đã chọn <b>{t_lbl}</b>: <code>{fn_chosen}</code>!"
+                notice=f"Đã chọn <b>{t_lbl}</b>: <code>{fn_chosen}</code>!",
+                target="nhay" if is_nhay else "ngon",
             )
             return
 
@@ -3274,7 +3350,7 @@ class DirectTelegramBotRunner:
             )
         self.edit_menu_message(chat_id, msg_id, body, reply_markup={"inline_keyboard": rows})
 
-    def _render_file_selector_menu(self, chat_id, msg_id, user_id=ROOT_ADMIN_ID, notice=""):
+    def _render_file_selector_menu(self, chat_id, msg_id, user_id=ROOT_ADMIN_ID, notice="", target=None):
         files = self._get_available_txt_files()
         try:
             import app as _main_app
@@ -3285,37 +3361,49 @@ class DirectTelegramBotRunner:
             cur_nhay = "nhay.txt"
             cur_ngon = "ngon.txt"
 
-        rows = [
-            [
-                tg_btn("Thêm File Nhây (.txt)", "mgmt_add_file_nhay", emoji_key="plus"),
-                tg_btn("Thêm File Ngôn (.txt)", "mgmt_add_file_ngon", emoji_key="plus"),
-            ]
-        ]
-        file_lines = []
-        for idx, f in enumerate(files[:12], 1):
-            fn = f["filename"]
-            l_cnt = f.get("lines_count") or 1
-            f_type = f.get("file_type") or ("ngon" if "ngon" in fn.lower() else "nhay")
-            is_nhay_sel = (fn.lower() == str(cur_nhay).lower())
-            is_ngon_sel = (fn.lower() == str(cur_ngon).lower())
-            badge = "[ĐANG CHỌN NHÂY]" if is_nhay_sel else ("[ĐANG CHỌN NGÔN]" if is_ngon_sel else f"[{f_type.upper()}]")
-            file_lines.append(f"• #{idx} {badge} <code>{fn}</code> ({l_cnt} dòng)")
-            rows.append([
-                tg_btn(f"{'' if is_nhay_sel else ''}Chọn Nhây: {fn[:14]}", f"pick_nhay_file:{fn}", emoji_key="fire"),
-                tg_btn(f"{'' if is_ngon_sel else ''}Chọn Ngôn: {fn[:14]}", f"pick_ngon_file:{fn}", emoji_key="sparkle"),
-            ])
+        rows = [[
+            tg_btn("Chọn FILE NHÂY (.n)", "mgmt_file_nhay", emoji_key="fire"),
+            tg_btn("Chọn FILE NGÔN (.g)", "mgmt_file_ngon", emoji_key="sparkle"),
+        ], [
+            tg_btn("Thêm File Nhây (.txt)", "mgmt_add_file_nhay", emoji_key="plus"),
+            tg_btn("Thêm File Ngôn (.txt)", "mgmt_add_file_ngon", emoji_key="plus"),
+        ]]
+        def recorded_type(item):
+            kind = str(item.get("file_type") or "").lower()
+            if kind in ("nhay", "ngon"):
+                return kind
+            return "ngon" if "ngon" in str(item.get("filename") or "").lower() else "nhay"
+        if target not in ("nhay", "ngon"):
+            text = ("<b>KHO TỆP ZALO — CHỌN RIÊNG TỪNG CHẾ ĐỘ</b>\n"
+                    f"<blockquote>Nhây (.n): <code>{cur_nhay}</code>\n"
+                    f"Ngôn (.g): <code>{cur_ngon}</code>\n"
+                    "Mỗi loại tệp có danh sách riêng, không ghi đè lựa chọn còn lại.</blockquote>\n"
+                    "Chọn một trong hai nút ở trên để xem tệp phù hợp.")
+        else:
+            label = "NHÂY · MỖI DÒNG MỘT CÂU" if target == "nhay" else "NGÔN · GIỮ NGUYÊN ĐOẠN"
+            compatible = [item for item in files if recorded_type(item) == target]
+            text_lines = [f"<b>KHO FILE {label}</b>",
+                          f"<blockquote>Đang sử dụng: <code>{cur_nhay if target=='nhay' else cur_ngon}</code>",
+                          f"Có {len(compatible)} tệp phù hợp.</blockquote>"]
+            if notice:
+                text_lines.append(notice)
+            for idx, file in enumerate(compatible[:16],1):
+                fn = str(file.get("filename") or "")
+                if not fn:
+                    continue
+                current = cur_nhay if target == "nhay" else cur_ngon
+                mark = " ✓" if fn.lower() == str(current).lower() else ""
+                text_lines.append(f"{idx}. <code>{fn}</code> ({int(file.get('lines_count') or 0)} dòng){mark}")
+                callback = ("pick_nhay_file:" if target=="nhay" else "pick_ngon_file:") + fn
+                if len(callback.encode("utf-8")) <= 64:
+                    rows.append([tg_btn(f"Chọn {fn[:25]}{mark}", callback, emoji_key="check")])
+            if len(compatible)>16:
+                text_lines.append(f"Còn {len(compatible)-16} tệp; quản lý toàn bộ trong Mini App.")
+            if not compatible:
+                text_lines.append("Chưa có tệp phù hợp; hãy tải file .txt bằng nút Thêm ở trên.")
+            text = "\n".join(text_lines)
         rows.append([tg_btn("Quay lại Quản Lý", "tab_mgmt", emoji_key="back")])
-        notice_block = f"{notice}\n\n" if notice else ""
-        cap = (
-            f"{tg_anim('folder', '')} <b>CHẾ ĐỘ CHỌN FILE NHÂY &amp; FILE NGÔN (.TXT)</b>\n\n"
-            f"<blockquote>{notice_block}"
-            f"<b>File Nhây đang chọn (.n / .word / .xa):</b> <code>{cur_nhay}</code>\n"
-            f"<b>File Ngôn đang chọn (.g / .treodo / .damau / .gif):</b> <code>{cur_ngon}</code>"
-            f"</blockquote>\n\n"
-            + "\n".join(file_lines[:12])
-            + "\n\n<i>Bấm trực tiếp vào nút bên dưới để đổi File Nhây hoặc File Ngôn mặc định cho toàn bộ lệnh!</i>"
-        )
-        self.edit_menu_message(chat_id, msg_id, cap, reply_markup={"inline_keyboard": rows})
+        self.edit_menu_message(chat_id, msg_id, text, reply_markup={"inline_keyboard": rows})
 
     def _handle_sticker_media_message(self, chat_id, user_id, msg, msg_id):
         """Xử lý tạo Sticker Ảnh Sắc Nét 512x512 hoặc Nhãn Dán Video Ngắn <= 3.0s trên Telegram & Zalo."""
@@ -3423,7 +3511,8 @@ class DirectTelegramBotRunner:
 
     def send_zenvyre_miniapp_intro(self, chat_id, reply_to=None):
         """Hiển thị Thẻ Giới Thiệu Admin GLAZE (kèm Logo GLAZE chính chủ & nút mở Mini App GLAZE)."""
-        ext_url = (os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("PUBLIC_WEB_URL") or "").strip().rstrip("/")
+        from miniapp_url import public_miniapp_url
+        miniapp_url = public_miniapp_url()
         caption_html = (
             f"<b>GLAZE — HỆ THỐNG ĐIỀU KHIỂN TRUNG TÂM</b> \n\n"
             f"<blockquote>"
@@ -3439,8 +3528,11 @@ class DirectTelegramBotRunner:
             f"• <b>Bảo Mật Tuyệt Đối</b>: Khóa quyền <code>.cp</code> nghiêm ngặt &amp; chống Checkpoint đổi mật khẩu Facebook."
         )
         kb_rows = []
-        if ext_url.startswith("https://"):
-            kb_rows.append([{"text": "Mở Giao Diện Mini App GLAZE", "web_app": {"url": f"{ext_url}/miniapp"}}])
+        if miniapp_url:
+            kb_rows.append([{"text": "Mở Mini App GLAZE", "web_app": {"url": miniapp_url}}])
+        else:
+            caption_html += ("\n\n<i>Mini App chưa có URL HTTPS. Cấu hình MINIAPP_PUBLIC_URL "
+                             "hoặc RENDER_EXTERNAL_URL trong Environment của hosting.</i>")
         kb_rows.append([
             tg_btn("Liên Hệ Admin Dev Anh Khôi", url=f"tg://user?id={ROOT_ADMIN_ID}", emoji_key="crown"),
             tg_btn("Mở Bảng Điều Khiển", "tab_func_1", emoji_key="fire"),
@@ -3821,11 +3913,12 @@ class DirectTelegramBotRunner:
             )
             return
 
-        if cmd_raw in ("/chonfile", "/files"):
+        if cmd_raw in ("/chonfile", "/files", "/file_nhay", "/file_ngon"):
             msg_s = self.send_text(chat_id, "Đang mở Chế Độ Chọn File Nhây & File Ngôn...", reply_to=msg_id)
             mid_s = (msg_s.get("result") or {}).get("message_id")
             if mid_s:
-                self._render_file_selector_menu(chat_id, mid_s, user_id=user_id)
+                file_target = "nhay" if cmd_raw == "/file_nhay" else "ngon" if cmd_raw == "/file_ngon" else None
+                self._render_file_selector_menu(chat_id, mid_s, user_id=user_id, target=file_target)
             return
 
         if cmd_raw in ("/addck", "/cookie", "/nhapck", "/ck"):

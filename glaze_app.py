@@ -1735,7 +1735,10 @@ _PRIORITY_CMD_EXECUTOR = ThreadPoolExecutor(max_workers=12, thread_name_prefix="
 # Preserve a dedicated lane for user-visible replies and input when multiple cookies are active.
 # Menu replies should not wait behind slow media or other network requests.
 _INTERACTIVE_REPLY_EXECUTOR = ThreadPoolExecutor(max_workers=6, thread_name_prefix="InteractiveReply")
-_INTERACTIVE_INPUT_EXECUTOR = ThreadPoolExecutor(max_workers=6, thread_name_prefix="InteractiveInput")
+_INTERACTIVE_INPUT_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="InteractiveInput")
+# All in-chat commands have an independent lane from media, background event handling,
+# and remote outbound sends; provider throttles and stop-cooperation remain unchanged.
+_ZALO_COMMAND_INPUT_EXECUTOR = ThreadPoolExecutor(max_workers=10, thread_name_prefix="ZaloCommandInput")
 _STICKER_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="StickerMedia")
 
 def _zalo_input_executor(text):
@@ -1746,6 +1749,8 @@ def _zalo_input_executor(text):
     if command in (".menu", "/menu", "!menu", ".help", "/help", "!help", ".m", ".h", ".lenh", ".hdsd",
                    ".dsbox", "/dsbox", "!dsbox", ".listbox", ".dsnhom", ".tasks", ".running"):
         return _INTERACTIVE_INPUT_EXECUTOR
+    if command.startswith((".", "/", "!")) and len(command) > 1:
+        return _ZALO_COMMAND_INPUT_EXECUTOR
     return _PRIORITY_CMD_EXECUTOR
 _TYPING_BG_POOL = ThreadPoolExecutor(max_workers=8)
 
@@ -15960,6 +15965,8 @@ def api_miniapp_launch():
 def api_miniapp_files():
     refresh_script_selections()
     os.makedirs(UPLOAD_DIR, exist_ok=True)
+    file_types = {str(r.get("filename") or "").lower(): str(r.get("file_type") or "").lower()
+                  for r in get_ordered_files_with_display_num()}
     files_out = []
     for fn in sorted(os.listdir(UPLOAD_DIR)):
         if fn.lower().endswith(".txt"):
@@ -15981,6 +15988,8 @@ def api_miniapp_files():
                     "filename": fn,
                     "lines": ln_cnt,
                     "size_kb": sz_kb,
+                    "file_type": file_types.get(fn.lower()) or
+                        ("ngon" if "ngon" in fn.lower() else "nhay"),
                 })
             except Exception:
                 pass
@@ -16010,6 +16019,10 @@ def api_miniapp_select_file():
     if not fn:
         return jsonify({"ok": False, "error": "Tên file không hợp lệ"})
     try:
+        if target not in ("nhay","ngon"):
+            raise ValueError("Loại file không hợp lệ.")
+        # Existing clients may reassign a real file to another category.
+        # Keep that API backward-compatible; dedicated UI views remain separate.
         record = select_script_file(fn, target, prefer_disk_name=True)
     except ValueError as error:
         return jsonify({"ok": False, "error": str(error)}), 400

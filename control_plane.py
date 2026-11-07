@@ -14,10 +14,11 @@ from flask import Response, jsonify, request, stream_with_context
 from durable_tasks import TaskQueue, RetryAfter, UncertainDelivery
 
 COMMANDS = {
-    'menu': 'Toàn bộ lệnh', 'help': 'Hướng dẫn', 'accounts': 'Tài khoản Zalo và Discord',
+    'menu': 'Bảng điều khiển', 'help': 'Hướng dẫn', 'functions': 'Các chức năng Zalo', 'accounts': 'Tài khoản Zalo và Discord',
     'discord_login': 'Liên kết Discord OAuth2', 'discord_accounts': 'Tài khoản Discord',
     'discord_status': 'Trạng thái OAuth', 'discord_logout': 'Ngắt liên kết: ID',
-    'tasks': 'Task theo cookie: /tasks [acc_id]', 'dsbox': 'Nhóm Zalo riêng: /dsbox [acc_id] [trang]',
+    'tasks': 'Task theo cookie: /tasks [acc_id]', 'admin_tasks': 'Root: toàn bộ tác vụ',
+    'dsbox': 'Nhóm Zalo riêng: /dsbox [acc_id] [trang]',
     'watch_status': 'Canh Zalo theo cookie: /watch_status [acc_id]',
     'task_status': 'Chi tiết: ID',
     'task_pause': 'Tạm dừng tác vụ chờ: ID', 'task_resume': 'Tiếp tục: ID',
@@ -27,7 +28,7 @@ COMMANDS = {
     'delay': 'Độ trễ nhân tạo: 0 giây; API rate limit vẫn áp dụng',
     'performance': 'Hiệu suất tác vụ', 'logs': 'Nhật ký tác vụ',
     'settings': 'Cấu hình trong Mini App', 'system': 'Trạng thái máy chủ',
-    'miniapp': 'Mở Mini App', 'zalo': 'Menu Zalo', 'start': 'Khởi động',
+    'miniapp_check': 'Kiểm tra URL Mini App', 'miniapp': 'Mở Mini App', 'zalo': 'Menu Zalo', 'start': 'Khởi động',
 }
 
 
@@ -101,15 +102,25 @@ def register(app, db, owner):
         queue.start()
 
     def snapshot(user, cursor=0):
-        tasks = queue.list(user)
+        root_view = is_root(user)
+        tasks = queue.list_all_for_root() if root_view else queue.list(user)
         counts = {}
         for t in tasks:
             counts[t['status']] = counts.get(t['status'],0)+1
         c = db()
         try:
-            oldest = c.execute('SELECT MIN(seq) FROM notification_events WHERE owner=?', (str(user),)).fetchone()[0]
-            reset = bool(cursor and oldest and cursor < oldest - 1)
-            events = [dict(r) for r in c.execute('SELECT * FROM notification_events WHERE owner=? AND seq>? ORDER BY seq LIMIT 200', (str(user), 0 if reset else cursor))]
+            if root_view:
+                oldest = c.execute('SELECT MIN(seq) FROM notification_events').fetchone()[0]
+                reset = bool(cursor and oldest and cursor < oldest - 1)
+                events = [dict(r) for r in c.execute(
+                    'SELECT owner,task,status,at,seq FROM notification_events WHERE seq>? ORDER BY seq LIMIT 200',
+                    (0 if reset else cursor,))]
+            else:
+                oldest = c.execute('SELECT MIN(seq) FROM notification_events WHERE owner=?', (str(user),)).fetchone()[0]
+                reset = bool(cursor and oldest and cursor < oldest - 1)
+                events = [dict(r) for r in c.execute(
+                    'SELECT owner,task,status,at,seq FROM notification_events WHERE owner=? AND seq>? ORDER BY seq LIMIT 200',
+                    (str(user), 0 if reset else cursor))]
         finally:
             c.close()
         durations = [t['latency'] for t in tasks if t['attempts'] > 0 and t['latency'] > 0]
@@ -126,17 +137,30 @@ def register(app, db, owner):
 
     app.extensions['control_snapshot'] = snapshot
 
+    def is_root(principal):
+        return bool(os.environ.get('TELEGRAM_ADMIN_ID')) and str(principal) == str(os.environ['TELEGRAM_ADMIN_ID'])
+
+    def controlled_owner(principal, task_id):
+        """Only authenticated root can operate tasks belonging to other users."""
+        if is_root(principal):
+            return queue.owner_of_task(task_id) or str(principal)
+        return str(principal)
+
     def unified_tasks(principal, account_id=None):
         from task_registry import aggregate_tasks
         principal = str(principal)
         legacy = []
-        is_admin = bool(os.environ.get("TELEGRAM_ADMIN_ID")) and principal == str(os.environ.get("TELEGRAM_ADMIN_ID"))
+        is_admin = is_root(principal)
         if is_admin:
             import app as runtime
             # Legacy task records are process-local and may be interrupted by restart.
             legacy = runtime.task_snapshots(runtime.ACTIVE_TASKS, runtime.TASKS_RAM_STORE,
                 [], runtime.TASKS_RAM_LOCK, account_id=account_id)
-        items = aggregate_tasks(queue.list(principal), legacy, owner=principal, include_legacy=is_admin)
+        rows = queue.list_all_for_root() if is_admin else queue.list(principal)
+        if is_admin and not rows:
+            rows = queue.list(principal)  # Backward-compatible empty registry fallback.
+        items = aggregate_tasks(rows, legacy, owner=principal,
+                                include_legacy=is_admin, include_all_notifications=is_admin)
         if account_id is not None:
             # No task is silently reattributed to a cookie missing from its metadata.
             from account_views import task_belongs_to_account
@@ -144,6 +168,7 @@ def register(app, db, owner):
         return items
 
     app.extensions['unified_tasks'] = unified_tasks
+    app.extensions['root_task_control_owner'] = controlled_owner
 
     @app.get('/api/miniapp/task_registry')
     def api_task_registry():
@@ -213,7 +238,10 @@ def register(app, db, owner):
         if not isinstance(data,dict):
             return jsonify(ok=False,error='Cần một đối tượng JSON'),400
         try:
-            return jsonify(ok=True,status=queue.control(owner(),str(data.get('id','')),str(data.get('action',''))))
+            actor = str(owner())
+            task_id = str(data.get('id',''))
+            return jsonify(ok=True,status=queue.control(
+                controlled_owner(actor, task_id),task_id,str(data.get('action',''))))
         except ValueError as ex:
             return jsonify(ok=False,error=str(ex)),409
 
@@ -287,7 +315,8 @@ def register(app, db, owner):
 
 def telegram_command(bot, user, chat, name, args):
     """Caller must authorize Telegram user before invoking this shared service."""
-    if name not in COMMANDS or name in ('start','zalo','miniapp'):
+    # /menu uses the existing interactive Telegram media/card navigation.
+    if name not in COMMANDS or name in ('start','zalo','miniapp','menu'):
         return False
     import app as runtime
     import html
@@ -295,6 +324,20 @@ def telegram_command(bot, user, chat, name, args):
     queue = ext['notification_queue']
     answer = ''
     try:
+        if name == 'functions':
+            from get_ck_im_zalo import FUNCTION_ITEMS_32
+            supported = [item for item in FUNCTION_ITEMS_32 if item.get('id') and item.get('label')]
+            rows = []
+            for index in range(0,min(len(supported),24),2):
+                rows.append([{'text': str(item['label'])[:46],
+                              'callback_data': 'pickfn:'+str(item['id'])}
+                             for item in supported[index:index+2]])
+            lines = ['<b>GLAZE · CHỨC NĂNG ZALO</b>',
+                     '<blockquote>Chọn chức năng bên dưới để mở hướng dẫn và thao tác tương ứng.']
+            lines.extend(html.escape(str(item['label'])) for item in supported[:24])
+            lines.append('</blockquote>')
+            bot.send_text(chat,'\n'.join(lines), reply_markup={'inline_keyboard':rows})
+            return True
         if name in ('menu','help'):
             answer = '\n'.join('/'+key+' — '+value for key,value in COMMANDS.items())+'\n/files — Kho tệp\n/sticker — Tạo nhãn dán\n/stopall — Dừng tác vụ Zalo'
         elif name == 'dsbox':
@@ -415,8 +458,14 @@ def telegram_command(bot, user, chat, name, args):
                         runtime.TASKS_RAM_STORE, runtime.TASKS_RAM_LOCK)
                     answer = 'Không tìm thấy tác vụ.' if state is None else 'Trạng thái hiện tại: ' + state
             else:
-                answer = queue.control(user, task_id, name[5:])
-        elif name in ('tasks', 'task_status'):
+                answer = queue.control(ext['root_task_control_owner'](str(user),task_id), task_id, name[5:])
+        elif name in ('tasks', 'task_status', 'admin_tasks'):
+            if name == 'admin_tasks':
+                if str(user) != str(os.environ.get('TELEGRAM_ADMIN_ID') or '') or not os.environ.get('TELEGRAM_ADMIN_ID'):
+                    bot.send_text(chat, 'Chỉ root admin được xem toàn bộ tác vụ.')
+                    return True
+                name = 'tasks'
+                args = '' 
             if name == 'task_status' and not args.strip():
                 bot.send_text(chat, 'Cú pháp: /task_status <task_id>')
                 return True
@@ -449,7 +498,9 @@ def telegram_command(bot, user, chat, name, args):
                     keyboard.append([{'text': action + ' ' + row['source_id'][:6],
                         'callback_data': 'v4:' + action + ':' + row['source_id']}
                         for action in row['actions']])
-            bot.send_text(chat, html.escape(answer), reply_markup={'inline_keyboard': keyboard})
+            header = ('QUẢN TRỊ TÁC VỤ' if str(user) == str(os.environ.get('TELEGRAM_ADMIN_ID') or '') else 'TÁC VỤ CỦA BẠN')
+            bot.send_text(chat, '<b>GLAZE · '+header+'</b>\n<blockquote>'+html.escape(answer)+'</blockquote>',
+                          reply_markup={'inline_keyboard': keyboard})
             return True
         elif name == 'channels':
             answer = '\n'.join(f"{r['id']} · {r['name']}" for r in ext['managed_channels'](user)) or 'Thêm webhook trong Mini App → Discord'
@@ -468,6 +519,16 @@ def telegram_command(bot, user, chat, name, args):
                 else:
                     answer = '\n'.join(queue.submit_many(user,targets,content.strip()))
         elif name == 'delay': answer = 'artificial_delay_seconds = 0; Retry-After của API vẫn được tôn trọng.'
+        elif name == 'miniapp_check':
+            from miniapp_url import public_miniapp_url
+            url = public_miniapp_url()
+            if url:
+                answer = ('MINI APP GLAZE\nURL cấu hình: ' + url +
+                          '\nNếu trang chưa tải, kiểm tra DNS, HTTPS, hosting và BotFather.')
+            else:
+                answer = ('MINI APP CHƯA CẤU HÌNH\n'
+                          'Đặt MINIAPP_PUBLIC_URL bằng URL HTTPS công khai của hosting.\n'
+                          'Sau đó kiểm tra /healthz và mở lại /miniapp.')
         elif name == 'settings': answer = 'Mở /miniapp → Cài đặt để cấu hình kết nối.'
         elif name == 'performance':
             from command_metrics import snapshot as command_snapshot
@@ -499,5 +560,12 @@ def telegram_command(bot, user, chat, name, args):
             answer = 'Hãy xem /help để biết lệnh và cú pháp hỗ trợ.'
     except (ValueError,KeyError):
         answer = 'Cấu hình hoặc tham số chưa hợp lệ. Xem /help và kiểm tra OAuth trong Mini App.'
-    bot.send_text(chat,html.escape(answer))
+    section = {
+        'help':'HƯỚNG DẪN LỆNH', 'performance':'HIỆU SUẤT',
+        'logs':'NHẬT KÝ', 'system':'MÁY CHỦ', 'channels':'KÊNH',
+        'send_multi':'GỬI NHIỀU KÊNH', 'send':'GỬI THÔNG BÁO',
+        'miniapp_check':'MINI APP',
+    }.get(name, name.replace('_',' ').upper())
+    bot.send_text(chat,'<b>GLAZE · '+html.escape(section)+'</b>\n<blockquote>'
+                  +html.escape(str(answer))+'</blockquote>')
     return True

@@ -20,19 +20,20 @@ LEGACY_STATES = {
 }
 
 
-def aggregate_tasks(notification_rows, legacy_rows, *, owner, include_legacy=False):
+def aggregate_tasks(notification_rows, legacy_rows, *, owner, include_legacy=False,
+                    include_all_notifications=False):
     """Produce owner-scoped snapshots; do not fabricate progress or persistence."""
     principal = str(owner)
     tasks = []
     for record in notification_rows:
-        if str(record.get("owner") or "") != principal:
+        if not include_all_notifications and str(record.get("owner") or "") != principal:
             continue
         status = str(record.get("status") or "UNKNOWN").upper()
         actions = list(ACTIONS.get(status, ()))
         tasks.append({
             "id": "notification:" + str(record["id"]),
             "source_id": str(record["id"]), "execution_source": "durable_notifications",
-            "task_type": "notification", "owner": principal, "platform": "discord",
+            "task_type": "notification", "owner": str(record.get("owner") or principal), "platform": "discord",
             "target": str(record.get("channel") or ""), "status": status,
             "created": record.get("created"), "started": record.get("started"),
             "updated": record.get("updated"), "progress": None,
