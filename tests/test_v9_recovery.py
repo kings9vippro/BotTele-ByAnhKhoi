@@ -41,10 +41,15 @@ class TokenSecretTests(unittest.TestCase):
                             "TELEGRAM_BOT_TOKEN_KEY": Fernet.generate_key().decode()})
         self.assertNotIn("demo-secret", str(e.exception))
 
-    def test_plaintext_and_encrypted_secrets_are_mutually_exclusive(self):
-        with self.assertRaises(BotSecretConfigurationError):
-            load_bot_token({"TELEGRAM_BOT_TOKEN": "dummy",
-                            "TELEGRAM_BOT_TOKEN_ENCRYPTED": "bad"})
+    def test_direct_secret_precedes_duplicate_encrypted_configuration(self):
+        # Existing Render services may have both keys during migration.
+        # Safe direct precedence keeps Gunicorn bootable and does not log tokens.
+        with self.assertLogs("bot_settings", level="WARNING") as lines:
+            token = load_bot_token({"TELEGRAM_BOT_TOKEN": "dummy",
+                                    "TELEGRAM_BOT_TOKEN_ENCRYPTED": "bad"})
+        self.assertEqual(token, "dummy")
+        self.assertNotIn("dummy", "\n".join(lines.output))
+        self.assertNotIn("bad", "\n".join(lines.output))
 
 
 class TelegramResponseTests(unittest.TestCase):
