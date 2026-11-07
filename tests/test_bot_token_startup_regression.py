@@ -1,5 +1,6 @@
-"""Prevent a direct-string Telegram credential from breaking Gunicorn import."""
+"""Telegram startup must use exactly one environment-backed token setting."""
 import ast
+import re
 import unittest
 from pathlib import Path
 
@@ -28,38 +29,27 @@ class TelegramTokenBootstrapRegressionTests(unittest.TestCase):
         self.assertNotIn(candidate, str(raised.exception))
         self.assertIn("environment", str(raised.exception).lower())
 
-    def test_both_secrets_use_direct_and_emit_safe_warning(self):
-        env = {"TELEGRAM_BOT_TOKEN": "ci-direct-token",
+    def test_single_secret_is_read_and_trimmed(self):
+        self.assertEqual(load_bot_token({"TELEGRAM_BOT_TOKEN": "  synthetic-only  "}), "synthetic-only")
+
+    def test_obsolete_secondary_fields_are_ignored(self):
+        env = {"TELEGRAM_BOT_TOKEN_ENCRYPTED": "unused",
+               "TELEGRAM_BOT_TOKEN_KEY": "unused"}
+        self.assertEqual(load_bot_token(env), "")
+
+    def test_single_secret_wins_even_if_obsolete_keys_exist(self):
+        env = {"TELEGRAM_BOT_TOKEN": "only-fixture",
                "TELEGRAM_BOT_TOKEN_ENCRYPTED": "invalid-ciphertext"}
-        with self.assertLogs("bot_settings", level="WARNING") as logs:
-            token = load_bot_token(env)
-        self.assertEqual(token, "ci-direct-token")
-        self.assertNotIn("ci-direct-token", "\n".join(logs.output))
-        self.assertNotIn("invalid-ciphertext", "\n".join(logs.output))
+        self.assertEqual(load_bot_token(env), "only-fixture")
 
-    def test_encrypted_only_fails_safely_without_key(self):
-        with self.assertRaises(BotSecretConfigurationError) as raised:
-            load_bot_token({"TELEGRAM_BOT_TOKEN_ENCRYPTED": "some-ciphertext"})
-        self.assertIn("TELEGRAM_BOT_TOKEN_KEY", str(raised.exception))
-        self.assertNotIn("some-ciphertext", str(raised.exception))
-
-    def test_encrypted_only_supports_real_fernet_token(self):
-        from cryptography.fernet import Fernet
-        secret = Fernet.generate_key()
-        ciphertext = Fernet(secret).encrypt(b"ci-encrypted-token")
-        actual = load_bot_token({"TELEGRAM_BOT_TOKEN_ENCRYPTED": ciphertext.decode("ascii"),
-                                 "TELEGRAM_BOT_TOKEN_KEY": secret.decode("ascii")})
-        self.assertEqual(actual, "ci-encrypted-token")
-
-    def test_neither_secret_is_loaded_from_source(self):
-        self.assertEqual(load_bot_token({}), "")
+    def test_no_literal_token_in_source_and_one_lookup(self):
         source = (Path(__file__).resolve().parents[1] / "bot_settings.py").read_text()
-        import re
         self.assertIsNone(re.search(r"\b[0-9]{8,12}:[A-Za-z0-9_-]{30,}\b", source))
-        self.assertIn('env.get("TELEGRAM_BOT_TOKEN") or ""', source)
+        self.assertEqual(source.count('env.get("TELEGRAM_BOT_TOKEN")'), 1)
+        self.assertNotIn('env.get("TELEGRAM_BOT_TOKEN_ENCRYPTED")', source)
+        self.assertNotIn('env.get("TELEGRAM_BOT_TOKEN_KEY")', source)
 
-    def test_host_secret_is_loaded_without_code_fallback(self):
-        self.assertEqual(load_bot_token({"TELEGRAM_BOT_TOKEN": "test-value"}), "test-value")
+    def test_empty_secret_does_not_fabricate_bot_credential(self):
         self.assertEqual(load_bot_token({}), "")
 
 

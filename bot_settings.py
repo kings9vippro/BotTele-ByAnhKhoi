@@ -1,14 +1,13 @@
-"""Telegram configuration: secrets come from the host secret store, never source.
+"""Telegram configuration: exactly one bot token from a host secret.
 
-Supports direct secret environment variables, or optional Fernet-encrypted
-ciphertext with a *separate* key secret. Credential values are never logged.
+Set TELEGRAM_BOT_TOKEN in the service environment. Never paste a real
+Telegram bot token into a source file tracked by GitHub.
 """
 import os
-from cryptography.fernet import Fernet, InvalidToken
 
 
 class BotSecretConfigurationError(RuntimeError):
-    """A safe, non-credential-bearing deployment configuration error."""
+    """Safe startup configuration error without credential contents."""
 
 
 def load_bot_token(environment=None):
@@ -17,30 +16,7 @@ def load_bot_token(environment=None):
         raise BotSecretConfigurationError(
             "load_bot_token requires an environment mapping. Set TELEGRAM_BOT_TOKEN in hosting secrets."
         )
-    # Direct env secrets take precedence for backward-compatible hosting setup.
-    # A second encrypted value must never prevent the web process from booting.
-    direct = str(env.get("TELEGRAM_BOT_TOKEN") or "").strip()
-    encrypted = str(env.get("TELEGRAM_BOT_TOKEN_ENCRYPTED") or "").strip()
-    key = str(env.get("TELEGRAM_BOT_TOKEN_KEY") or "").strip()
-    if direct:
-        if encrypted:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Both Telegram token settings exist; using TELEGRAM_BOT_TOKEN. "
-                "Remove TELEGRAM_BOT_TOKEN_ENCRYPTED to avoid ambiguity."
-            )
-        return direct
-    if not encrypted:
-        return direct
-    if not key:
-        raise BotSecretConfigurationError("Missing TELEGRAM_BOT_TOKEN_KEY for encrypted token.")
-    try:
-        result = Fernet(key.encode("ascii")).decrypt(encrypted.encode("ascii")).decode("utf-8").strip()
-    except (InvalidToken, ValueError, TypeError, UnicodeError) as exc:
-        raise BotSecretConfigurationError("Encrypted Telegram token configuration is invalid.") from None
-    if not result:
-        raise BotSecretConfigurationError("Decrypted Telegram token is empty.")
-    return result
+    return str(env.get("TELEGRAM_BOT_TOKEN") or "").strip()
 
 
 TELEGRAM_BOT_TOKEN = load_bot_token()
