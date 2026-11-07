@@ -33,5 +33,5 @@ def load_bot_token(environment=None):
     return result
 
 
-TELEGRAM_BOT_TOKEN = load_bot_token(9089151186:AAHeWAKE0TeVEj2ZecCyuKBhqqE2YH9kIVI)
+TELEGRAM_BOT_TOKEN = load_bot_token("9089151186:AAHeWAKE0TeVEj2ZecCyuKBhqqE2YH9kIVI")
 TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "8827605973").strip()
