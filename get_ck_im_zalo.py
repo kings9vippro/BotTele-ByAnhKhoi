@@ -1155,7 +1155,18 @@ class DirectTelegramBotRunner:
         try:
             self.api_call("deleteWebhook", {"drop_pending_updates": False}, timeout=8)
             me = self.api_call("getMe", timeout=8)
-            if me.get("ok") and me.get("result"):
+            if not me.get("ok"):
+                code = me.get("error_code")
+                code = code if isinstance(code, int) and 100 <= code <= 599 else 0
+                self.last_error = "telegram_getme_auth_rejected" if code == 401 else "telegram_getme_unavailable"
+                import logging
+                logging.getLogger(__name__).error(
+                    "Telegram getMe failed: http_code=%s; verify token validity, account, and connectivity", code)
+                return False
+            if me.get("result"):
+                import logging
+                logging.getLogger(__name__).info(
+                    "Telegram getMe succeeded: bot account verified (username not logged)")
                 self.bot_username = me["result"].get("username") or ""
                 self.bot_id = me["result"].get("id")
                 self.api_call(
@@ -4065,8 +4076,13 @@ class DirectTelegramBotRunner:
     def run_forever(self):
         self.running = True
         self.last_poll_ok_ts = time.time()
-        self.clear_webhook_and_init()
+        ready = self.clear_webhook_and_init()
+        if not ready:
+            import logging
+            logging.getLogger(__name__).error(
+                "Telegram bot initialization failed: check getMe result and Render Environment")
         fail_streak = 0
+        last_poll_issue_report_at = 0.0
         while self.running:
             try:
                 self.last_poll_ok_ts = time.time()
@@ -4093,6 +4109,21 @@ class DirectTelegramBotRunner:
                             self.offset = uid_upd + 1
                 else:
                     fail_streak += 1
+                    # Do not log response descriptions; they may contain credential URLs.
+                    code = res.get("error_code")
+                    code = code if isinstance(code, int) and 100 <= code <= 599 else 0
+                    if code == 401:
+                        self.last_error = "telegram_poll_unauthorized"
+                    elif code == 409:
+                        self.last_error = "telegram_poll_conflict"
+                    else:
+                        self.last_error = "telegram_poll_unavailable"
+                    if time.monotonic() - last_poll_issue_report_at >= 30.0:
+                        import logging
+                        logging.getLogger(__name__).error(
+                            "Telegram getUpdates rejected: http_code=%s, category=%s",
+                            code, self.last_error)
+                        last_poll_issue_report_at = time.monotonic()
                     desc_err = str(res.get("description") or "").lower()
                     if "conflict" in desc_err or "webhook" in desc_err:
                         try:

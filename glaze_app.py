@@ -17798,21 +17798,47 @@ def api_permissions_remove():
 # TỰ ĐỘNG KHỞI CHẠY BOT TELEGRAM PHAN ANH KHÔI (RIKE) CÙNG WEB SERVER
 _TELEGRAM_BOT_RUNNER = None
 
+def telegram_boot_readiness():
+    # Never return, log, or include an actual token. This reports configuration
+    # readiness only, NOT successful Telegram API authentication.
+    if os.environ.get("DISABLE_TELEGRAM_BOT", "0") == "1":
+        return "disabled"
+    if not TELEGRAM_BOT_TOKEN:
+        return "missing_token"
+    if not TELEGRAM_ADMIN_ID:
+        return "missing_admin_id"
+    return "configured"
+
+
 def ensure_telegram_bot_started():
     global _TELEGRAM_BOT_RUNNER
-    if not TELEGRAM_BOT_TOKEN:
+    from logging import getLogger
+    logger = getLogger(__name__)
+    gate = telegram_boot_readiness()
+    if gate != "configured":
+        logger.error("Telegram polling NOT STARTED: %s (check Render Environment keys; no secret printed)", gate)
         return
     if _TELEGRAM_BOT_RUNNER is not None:
         return
     try:
         from get_ck_im_zalo import start_background_telegram_bot
         _TELEGRAM_BOT_RUNNER = start_background_telegram_bot(TELEGRAM_BOT_TOKEN)
+        if _TELEGRAM_BOT_RUNNER is None:
+            logger.error("Telegram polling NOT STARTED: runner_unavailable")
+        else:
+            logger.info("Telegram polling thread launched; awaiting Telegram getMe validation")
     except Exception as exc:
-        # Telegram API exceptions may contain credential-bearing URLs: log type only.
-        import logging
-        logging.getLogger(__name__).error("Telegram bot startup failed (%s)", type(exc).__name__)
+        # Never include provider exception strings: they can contain bot tokens.
+        logger.error("Telegram polling NOT STARTED: startup_exception_%s", type(exc).__name__)
 
-if TELEGRAM_BOT_TOKEN and os.environ.get("DISABLE_TELEGRAM_BOT", "0") != "1":
+
+# Log exactly one safe startup-state record even when Telegram was disabled.
+if telegram_boot_readiness() != "configured":
+    from logging import getLogger
+    getLogger(__name__).error(
+        "Telegram bot offline at startup: %s; Render web health does not reflect bot readiness",
+        telegram_boot_readiness())
+else:
     threading.Thread(target=ensure_telegram_bot_started, daemon=True).start()
 
 if __name__ == "__main__":

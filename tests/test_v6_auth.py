@@ -92,9 +92,11 @@ class TelegramAuthV6Tests(unittest.TestCase):
         self.assertNotIn("tasks", response.get_data(as_text=True))
 
     def test_bot_start_failure_is_logged_without_exception_message(self):
-        with patch.object(app, "TELEGRAM_BOT_TOKEN", "v6-fixture-token"), patch.object(
-            app, "_TELEGRAM_BOT_RUNNER", None
-        ), patch("get_ck_im_zalo.start_background_telegram_bot", side_effect=RuntimeError("sensitive-query-material")):
+        with patch.dict(os.environ, {"DISABLE_TELEGRAM_BOT":"0"}), patch.object(
+            app, "TELEGRAM_BOT_TOKEN", "v6-fixture-token"
+        ), patch.object(app, "_TELEGRAM_BOT_RUNNER", None), patch(
+            "get_ck_im_zalo.start_background_telegram_bot", side_effect=RuntimeError("sensitive-query-material")
+        ):
             with self.assertLogs("glaze_app", level="ERROR") as recorded:
                 app.ensure_telegram_bot_started()
         output = " ".join(recorded.output)
