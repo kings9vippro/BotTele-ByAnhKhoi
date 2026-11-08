@@ -35,12 +35,14 @@ class ConcurrentQRTests(unittest.TestCase):
                     state["qr_base64"] = "new-qr-image"
                     state["status"] = "waiting_scan"
 
-        with patch.object(manager, "SESSIONS", states), \\
-             patch.object(manager, "_LAST_START_TS", 0.0), \\
-             patch.object(manager, "_LAST_START_SESSION_ID", ""), \\
-             patch.object(manager, "_persist_qr_state_to_db"), \\
-             patch.object(app.ZaloWebIDGenerator, "create_random_pc_device", return_value=device), \\
-             patch.object(app.threading, "Thread") as thread_ctor:
+        with (
+            patch.object(manager, "SESSIONS", states),
+            patch.object(manager, "_LAST_START_TS", 0.0),
+            patch.object(manager, "_LAST_START_SESSION_ID", ""),
+            patch.object(manager, "_persist_qr_state_to_db"),
+            patch.object(app.ZaloWebIDGenerator, "create_random_pc_device", return_value=device),
+            patch.object(app.threading, "Thread") as thread_ctor,
+        ):
             thread_ctor.return_value.start.side_effect = mark_new_qr_ready
             status = manager.start_qr_session()
             self.assertTrue(status["ok"])
