@@ -5340,7 +5340,7 @@ class Zalo:
         return self.groups(use_cache=use_cache)
 
     def groups(self, use_cache=True):
-        cache_key = str(self.uid or self.imei)
+        cache_key = str(self.imei or self.uid)
         if use_cache:
             with self._POOL_LOCK:
                 c = self._GROUPS_CACHE.get(cache_key)
@@ -5357,8 +5357,10 @@ class Zalo:
             if _clean_zalo_id(g) and _clean_zalo_id(g) != str(self.uid or "")
         ]
         for gid in all_gids:
-            if self.uid:
-                KNOWN_GROUPS_BY_ACC[self.uid].add(gid)
+            if self.imei:
+                KNOWN_GROUPS_BY_ACC[str(self.imei)].add(gid)
+            elif self.uid:
+                KNOWN_GROUPS_BY_ACC[str(self.uid)].add(gid)
             ALL_KNOWN_ZALO_GROUP_IDS.add(gid)
 
         out = []
@@ -5582,7 +5584,7 @@ class Zalo:
         return {"msgs": [], "groupMsgs": []}
 
     def friends(self, use_cache=True):
-        cache_key = str(self.uid or self.imei)
+        cache_key = str(self.imei or self.uid)
         if use_cache:
             with self._POOL_LOCK:
                 c = self._FRIENDS_CACHE.get(cache_key)
@@ -7013,7 +7015,7 @@ class Zalo:
         gid_s = _clean_zalo_id(gid) or str(gid).strip()
         if not gid_s:
             return ""
-        cache_key = str(self.uid or self.imei)
+        cache_key = str(self.imei or self.uid)
         with self._POOL_LOCK:
             c = self._GROUPS_CACHE.get(cache_key)
             if c and isinstance(c.get("data"), list):
@@ -14078,6 +14080,7 @@ class ZaloRealtimeListener:
         self.started_at = time.time()
         self.ws_status = "Đang khởi tạo Zalo Shield..."
         self.last_event_ts = 0.0
+        self.last_poll_attempt_at = 0.0
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.poller_thread = threading.Thread(target=self._run_http_poller_loop, daemon=True)
 
@@ -14481,7 +14484,8 @@ class ZaloRealtimeListener:
             cmd_num = 0
         raw_mentions = self._extract_raw_mentions_from_msg_obj(msg_obj)
 
-        known_gids = (KNOWN_GROUPS_BY_ACC.get(client.uid, set()) | ALL_KNOWN_ZALO_GROUP_IDS) - {"0", "", my_uid, my_s2m, "null", "None"}
+        acc_group_key = str(client.imei or client.uid or self.acc_id)
+        known_gids = (KNOWN_GROUPS_BY_ACC.get(acc_group_key, set()) | ALL_KNOWN_ZALO_GROUP_IDS) - {"0", "", my_uid, my_s2m, "null", "None"}
         is_group = bool(
             default_is_group
             or bool(grid_id and grid_id not in (my_uid, my_s2m))
@@ -14511,7 +14515,7 @@ class ZaloRealtimeListener:
             if thread_id and thread_id not in (my_uid, my_s2m):
                 ALL_KNOWN_ZALO_GROUP_IDS.add(thread_id)
                 if client.uid:
-                    KNOWN_GROUPS_BY_ACC[client.uid].add(thread_id)
+                    KNOWN_GROUPS_BY_ACC[acc_group_key].add(thread_id)
         else:
             if raw_uid_from in ("0", "", my_uid, my_s2m):
                 if id_to and id_to not in (my_uid, my_s2m):
@@ -14747,6 +14751,7 @@ class ZaloRealtimeListener:
         now_t = time.time()
         now_ms = int(now_t * 1000)
         my_uid = _clean_zalo_id(client.uid or acc_now.get("uid"))
+        acc_key = str(client.imei or client.uid or self.acc_id)
 
         try:
             last_conv = client.get_last_msgs()
@@ -14785,10 +14790,10 @@ class ZaloRealtimeListener:
                             or _clean_zalo_id(m.get("idTo"))
                             or _clean_zalo_id(m.get("toid"))
                         )
-                        if (not gid_m or gid_m == my_uid) and _clean_zalo_id(m.get("uidFrom")) in KNOWN_GROUPS_BY_ACC.get(client.uid, set()):
+                        if (not gid_m or gid_m == my_uid) and _clean_zalo_id(m.get("uidFrom")) in KNOWN_GROUPS_BY_ACC.get(acc_key, set()):
                             gid_m = _clean_zalo_id(m.get("uidFrom"))
                         if gid_m and gid_m != my_uid:
-                            KNOWN_GROUPS_BY_ACC[client.uid].add(gid_m)
+                            KNOWN_GROUPS_BY_ACC[acc_key].add(gid_m)
                             ALL_KNOWN_ZALO_GROUP_IDS.add(gid_m)
                         if gid_m and gid_m != my_uid and is_direct_user_command_text(ct) and (msg_ts == 0 or abs(now_ms - msg_ts) <= 900000):
                             m_copy = dict(m)
@@ -14830,11 +14835,11 @@ class ZaloRealtimeListener:
                             or _clean_zalo_id(m.get("idTo"))
                             or _clean_zalo_id(m.get("toid"))
                         )
-                        if (not gid_m or gid_m == my_uid) and _clean_zalo_id(m.get("uidFrom")) in (KNOWN_GROUPS_BY_ACC.get(client.uid, set()) | ALL_KNOWN_ZALO_GROUP_IDS):
+                        if (not gid_m or gid_m == my_uid) and _clean_zalo_id(m.get("uidFrom")) in (KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | ALL_KNOWN_ZALO_GROUP_IDS):
                             gid_m = _clean_zalo_id(m.get("uidFrom"))
                         if not gid_m or gid_m == my_uid:
                             continue
-                        KNOWN_GROUPS_BY_ACC[client.uid].add(gid_m)
+                        KNOWN_GROUPS_BY_ACC[acc_key].add(gid_m)
                         ALL_KNOWN_ZALO_GROUP_IDS.add(gid_m)
                         rc_g = m.get("content") or m.get("message") or m.get("msg") or ""
                         if isinstance(rc_g, dict):
@@ -14867,8 +14872,7 @@ class ZaloRealtimeListener:
 
         # Quét thông minh gridVerMap delta (chỉ 1 gói tin nhẹ kiểm tra toàn bộ nhóm xem nhóm nào vừa nhảy version tin nhắn mới)
         # giúp chạy 10-30 Acc Zalo cùng lúc không bao giờ bị Zalo chặn rate-limit hay làm die Cookie/IMEI!
-        acc_key = str(client.uid or client.imei or self.acc_id)
-        acc_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(client.uid, set())
+        acc_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(acc_key, set())
         changed_gids = []
         if not hasattr(self, "_grid_ver_cache"):
             self._grid_ver_cache = {}
@@ -14881,7 +14885,7 @@ class ZaloRealtimeListener:
                     if gid_s and gid_s != my_uid:
                         KNOWN_GROUPS_BY_ACC[acc_key].add(gid_s)
                         if client.uid:
-                            KNOWN_GROUPS_BY_ACC[client.uid].add(gid_s)
+                            KNOWN_GROUPS_BY_ACC[acc_key].add(gid_s)
                         ALL_KNOWN_ZALO_GROUP_IDS.add(gid_s)
                         ver_s = str(ver_v)
                         prev_ver = self._grid_ver_cache.get(gid_s)
@@ -14896,7 +14900,7 @@ class ZaloRealtimeListener:
 
         if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 1.0:
             self._last_rot_group_poll_ts = now_t
-            own_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(client.uid, set())
+            own_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(acc_key, set())
             all_my_gids = sorted(
                 g for g in own_gids
                 if _clean_zalo_id(g) and g != my_uid and (client.imei, _clean_zalo_id(g)) not in NON_MEMBER_EXCLUDED_PAIRS
@@ -14957,6 +14961,7 @@ class ZaloRealtimeListener:
                                 client.cookies_dict[c_item.name] = c_item.value
                     except Exception:
                         pass
+                self.last_poll_attempt_at = time.time()
                 self._poll_active_groups_inline(client, acc_row)
                 if "Cần cập nhật" in self.ws_status or "Đang" in self.ws_status or time.time() < self.ws_conflict_until:
                     self.ws_status = "Đang hoạt động trong Acc (Sẵn sàng 24/7)"
@@ -14964,7 +14969,8 @@ class ZaloRealtimeListener:
                 if "Phiên đăng nhập" in str(e) or "zpw_enk" in str(e):
                     self.ws_status = "Cần cập nhật lại Cookie Zalo"
             active_z_cnt = max(1, len(ACTIVE_LISTENERS))
-            poll_sleep = 0.06 + min(0.12, max(0, active_z_cnt - 1) * 0.015)
+            # WebSocket handles live events; a 60ms HTTP loop overloads multi-ACC sessions.
+            poll_sleep = min(4.0, 0.85 + max(0, active_z_cnt - 1) * 0.24)
             self.stop_ev.wait(poll_sleep)
 
     def _run_ws_session(self, client, acc_row, ws_url):
@@ -15315,6 +15321,9 @@ def zalo_listener_status(account_id):
         "code": "running",
         "ws_state": str(getattr(listener, "ws_status", "") or "")[:120],
         "last_event_at": float(getattr(listener, "last_event_ts", 0.0) or 0.0),
+        "last_poll_attempt_at": float(getattr(listener, "last_poll_attempt_at", 0.0) or 0.0),
+        "session_hint": ("relogin_required" if "Cần cập nhật" in str(getattr(listener, "ws_status", "") or "")
+                         else "unverified"),
     }
 
 
@@ -15675,10 +15684,7 @@ def api_miniapp_stop_task():
 
 
 def _miniapp_listener_running(account_id):
-    listener = ACTIVE_LISTENERS.get(account_id)
-    thread = getattr(listener, "thread", None)
-    stop = getattr(listener, "stop_ev", None)
-    return bool(thread and thread.is_alive() and (stop is None or not stop.is_set()))
+    return zalo_listener_status(account_id).get("code") == "running"
 
 
 @app.route("/api/miniapp/accounts")
@@ -15698,6 +15704,19 @@ def api_miniapp_accounts():
             "listener_health": zalo_listener_status(a["id"]),
         })
     return jsonify({"ok": True, "accounts": out, "snapshot_at": time.time(), "storage_id": storage_identity(db())})
+
+
+@app.get("/api/miniapp/account_health")
+def api_miniapp_account_health():
+    """Lightweight non-secret account health refresh for the root Mini App."""
+    items = [
+        {"id": a["id"], "name": a.get("name") or f"ACC-{a['id']}",
+         "listener_health": zalo_listener_status(a["id"]),
+         "chat_cmd_enabled": bool(a.get("chat_cmd_enabled", 1)),
+         "enabled": bool(a.get("enabled", 1))}
+        for a in get_all_accounts_from_ram(platform="zalo")
+    ]
+    return jsonify({"ok": True, "accounts": items, "snapshot_at": time.time()})
 
 
 @app.route("/api/miniapp/add_cookie", methods=["POST"])
@@ -15790,8 +15809,11 @@ def _cached_miniapp_boxes(requested_acc=''):
                 continue
             plat = (a.get("platform") or "zalo").lower()
             uid_s = str(a.get("uid") or "").strip()
+            imei_s = str(a.get("imei") or "").strip()
+            group_key = imei_s or uid_s
             if plat == "zalo":
-                g_c = Zalo._GROUPS_CACHE.get(uid_s)
+                # Never reuse another device session with a shared UID.
+                g_c = Zalo._GROUPS_CACHE.get(group_key)
                 g_data = g_c.get("data") if isinstance(g_c, dict) else (g_c[1] if isinstance(g_c, (list, tuple)) and len(g_c) > 1 else [])
                 for g in (g_data or []):
                     gid = str(g.get("id") or "").strip()
@@ -15799,7 +15821,7 @@ def _cached_miniapp_boxes(requested_acc=''):
                     if gid and key not in seen:
                         seen.add(key)
                         boxes.append({"id": gid, "name": g.get("name") or f"Nhóm {gid[-6:]}", "platform": "zalo", "account_id": a['id']})
-                for gid_k in KNOWN_GROUPS_BY_ACC.get(uid_s, set()):
+                for gid_k in KNOWN_GROUPS_BY_ACC.get(group_key, set()):
                     gid_s = str(gid_k).strip()
                     key = (str(a['id']), gid_s)
                     if gid_s and key not in seen and gid_s != uid_s:
