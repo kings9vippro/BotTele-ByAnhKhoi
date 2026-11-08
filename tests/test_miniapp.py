@@ -60,10 +60,24 @@ class MiniAppTests(unittest.TestCase):
         state = {"auto_save": True, "status": "confirmed"}
         fake_zalo = Mock(uid="123456", secret_key="key", display_name="User", cookies_dict={})
         connection = Mock()
-        connection.execute.side_effect = [Mock(), Mock(fetchone=Mock(return_value=None)), Mock(fetchall=Mock(return_value=[])), Mock(lastrowid=7)]
+        def execute_qr_test_sql(statement, *_args):
+            # Match the purpose of SQL, not an implementation-specific number
+            # of reads: the IMEI-first flow may inspect legacy UID records.
+            sql = " ".join(str(statement).lower().split())
+            if sql.startswith("begin immediate"):
+                return Mock()
+            if sql.startswith("select") and "imei=?" in sql:
+                return Mock(fetchone=Mock(return_value=None))
+            if sql.startswith("select") and "uid=?" in sql:
+                return Mock(fetchall=Mock(return_value=[]))
+            if sql.startswith("insert into accounts"):
+                return Mock(lastrowid=7)
+            raise AssertionError("Unexpected QR SQL: " + sql[:160])
+        connection.execute.side_effect = execute_qr_test_sql
         statuses = []
         with patch.object(app.Zalo, "get_pooled_client", return_value=fake_zalo), patch.object(ZaloPCSessionKeeper, "register_and_keep_alive"), patch.object(app.ZaloCookieVaultEngine, "save_zalo_vault_record"), patch.object(app.ZaloQRLoginManager, "_persist_qr_state_to_db", side_effect=lambda st, **kw: statuses.append(st["status"])), patch.object(app, "db", return_value=connection), patch.object(app, "refresh_accounts_ram_cache"), patch.object(app, "sync_all_zalo_listeners"), patch.object(app, "log_system_command"):
             app.ZaloQRLoginManager._finalize_zalo_credentials(state, "device", {"zpsid": "abcdefghijklmnop"}, user_info_dict={"uid": "123456", "zpw_enk": "key", "_groups_count": 1})
+        self.assertEqual(state["status"], "success", repr(connection.execute.call_args_list))
         connection.commit.assert_called_once()
         self.assertEqual(statuses, ["confirmed", "success"])
 
