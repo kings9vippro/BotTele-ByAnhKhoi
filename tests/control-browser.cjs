@@ -23,13 +23,16 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.waitForFunction(()=>document.querySelector('#metrics').getAttribute('aria-busy')==='false');
  assert.equal(await page.locator('#tabs button').count(),8);
  assert.equal(await page.locator('#bottom .bottom-nav-button').count(),5);
- assert.deepEqual(await page.locator('#bottom .bottom-nav-button').evaluateAll(buttons=>buttons.map(button=>({label:button.getAttribute('aria-label'),visibleText:button.innerText.trim(),icon:button.querySelector('.bottom-icon')?.textContent,iconHidden:button.querySelector('.bottom-icon')?.getAttribute('aria-hidden')}))),[
-  {label:'Tổng quan',visibleText:'⌂',icon:'⌂',iconHidden:'true'},
-  {label:'Tài khoản',visibleText:'◎',icon:'◎',iconHidden:'true'},
-  {label:'Task',visibleText:'◷',icon:'◷',iconHidden:'true'},
-  {label:'Âm nhạc',visibleText:'♫',icon:'♫',iconHidden:'true'},
-  {label:'Cài đặt',visibleText:'⚙',icon:'⚙',iconHidden:'true'}
- ]);
+ const nav=await page.locator('#bottom .bottom-nav-button').evaluateAll(buttons=>buttons.map(button=>{
+   const svg=button.querySelector('svg.bottom-icon');
+   const rect=svg?.getBoundingClientRect(),buttonRect=button.getBoundingClientRect();
+   return {label:button.getAttribute('aria-label'),width:rect?.width,height:rect?.height,
+    centered:!!rect&&Math.abs(rect.x+rect.width/2-(buttonRect.x+buttonRect.width/2))<2,
+    aria:svg?.getAttribute('aria-hidden')};
+ }));
+ assert.deepEqual(nav.map(i=>i.label),['Tổng quan','Tài khoản','Task','Âm nhạc','Cài đặt']);
+ assert(nav.every(i=>i.width===24&&i.height===24&&i.centered&&i.aria==='true'),
+        'all five mobile icons should be identically sized and centered');
  await page.locator('#bottom button[aria-label="Âm nhạc"]').click();
  await page.waitForFunction(()=>document.querySelector('#music-tracks').getAttribute('aria-busy')==='false');
  assert.equal(await page.locator('#music-tracks article').count(),10);
@@ -79,7 +82,7 @@ const crypto=require('crypto'),assert=require('assert/strict');
  for(const width of [320,390,768,1280]){await page.setViewportSize({width,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));}
  await page.setViewportSize({width:390,height:844});
  let launchBody;
- await page.route('**/api/miniapp/accounts',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,accounts:[{id:2,name:'Second',uid:'uid-second',platform:'zalo',enabled:true,chat_cmd_enabled:true}]})}));
+ await page.route('**/api/miniapp/accounts',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,accounts:[{id:2,name:'Second',uid:'uid-second',platform:'zalo',enabled:true,chat_cmd_enabled:true,listener_health:{code:'running'}},{id:3,name:'Third',uid:'uid-third',platform:'zalo',enabled:true,chat_cmd_enabled:true,listener_health:{code:'listener_start_failed'}}]})}));
  await page.route('**/api/miniapp/boxes?account_id=2',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,page:1,total:2,total_pages:2,boxes:[{id:'box-two',name:'Box Two',account_id:2,platform:'zalo'}]})}));
  await page.route('**/api/miniapp/boxes?account_id=2&page=2',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,page:2,total:2,total_pages:2,boxes:[{id:'box-three',name:'Box Three',account_id:2,platform:'zalo'}]})}));
  await page.route('**/api/miniapp/launch',async r=>{launchBody=r.request().postDataJSON();await r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,task_id:'task-fixture',message:'Đã chạy'})});});
@@ -107,6 +110,9 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.locator('#bottom button[aria-label="Tài khoản"]').click();
  await page.locator('#account-open-zalo').click();
  await page.locator('#launch-account').selectOption('2');
+ assert.equal(await page.locator('#launch-account option[value="2"]').count(),1);
+ assert.equal(await page.locator('#launch-account option[value="3"]').count(),1);
+ assert.equal(await page.locator('#task-account-filter option[value="3"]').count(),1);
  await page.getByText('Box Two · box-two').waitFor();
  await page.getByText('Watcher account two').waitFor();
  assert.match(await page.locator('#zalo-watch-status').innerText(),/API Zalo lỗi/);

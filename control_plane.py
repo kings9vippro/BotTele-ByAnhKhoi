@@ -17,7 +17,7 @@ COMMANDS = {
     'menu': 'Bảng điều khiển', 'help': 'Hướng dẫn', 'functions': 'Các chức năng Zalo', 'accounts': 'Tài khoản Zalo và Discord',
     'discord_login': 'Liên kết Discord OAuth2', 'discord_accounts': 'Tài khoản Discord',
     'discord_status': 'Trạng thái OAuth', 'discord_logout': 'Ngắt liên kết: ID',
-    'tasks': 'Task theo cookie: /tasks [acc_id]', 'admin_tasks': 'Root: toàn bộ tác vụ',
+    'tasks': 'Task theo cookie: /tasks [acc_id] [trang]', 'task_accounts': 'Chọn số ACC Zalo + task', 'admin_tasks': 'Root: toàn bộ tác vụ',
     'dsbox': 'Nhóm Zalo riêng: /dsbox [acc_id] [trang]',
     'watch_status': 'Canh Zalo theo cookie: /watch_status [acc_id]',
     'task_status': 'Chi tiết: ID',
@@ -353,6 +353,8 @@ def telegram_command(bot, user, chat, name, args):
             visible = get_user_visible_accounts(user, enabled_only=True, platform='zalo', strict=True)
             allowed = {str(a['id']): a for a in visible}
             parts = args.strip().split()
+            if parts and re.fullmatch(r"(?i:ACC-)[0-9]+",parts[0]):
+                parts[0] = parts[0].split('-',1)[1]
             if not parts:
                 answer = ('Các tài khoản Zalo được phép xem:\n' +
                     '\n'.join(f"#{a['id']} · {a['name']}" for a in visible) +
@@ -451,7 +453,7 @@ def telegram_command(bot, user, chat, name, args):
                 answer += '\nZalo: mở /zalo để quản lý tài khoản của bạn.'
         elif name == 'discord_logout':
             answer = ext['discord_oauth_disconnect'](str(user), int(args))
-        elif name.startswith('task_') and name != 'task_status':
+        elif name.startswith('task_') and name not in ('task_status','task_accounts'):
             task_id = args.strip()
             if not task_id:
                 answer = 'Cú pháp: /' + name + ' <task_id>'
@@ -466,6 +468,50 @@ def telegram_command(bot, user, chat, name, args):
                     answer = 'Không tìm thấy tác vụ.' if state is None else 'Trạng thái hiện tại: ' + state
             else:
                 answer = queue.control(ext['root_task_control_owner'](str(user),task_id), task_id, name[5:])
+        elif name == 'task_accounts':
+            from get_ck_im_zalo import get_user_visible_accounts
+            accounts = sorted(
+                get_user_visible_accounts(user, enabled_only=False, platform='zalo', strict=True),
+                key=lambda a: int(a['id']),
+            )
+            try:
+                page = int(args.strip() or '1')
+            except ValueError:
+                page = 0
+            per_page = 8
+            total_pages = max(1, (len(accounts) + per_page - 1) // per_page)
+            if page < 1 or page > total_pages:
+                bot.send_text(chat, 'Trang không hợp lệ. Dùng /task_accounts 1')
+                return True
+            visible = accounts[(page-1)*per_page:page*per_page]
+            all_tasks = ext['unified_tasks'](str(user))
+            from collections import Counter
+            counts = Counter()
+            for task in all_tasks:
+                for acc_id in task.get('account_ids') or []:
+                    if task.get('status') in ('RUNNING','QUEUED','PAUSED','RETRYING'):
+                        counts[str(acc_id)] += 1
+            report = [f'<b>GLAZE · ACC & TASK ZALO</b>',
+                      f'<blockquote>Trang {page}/{total_pages} · {len(accounts)} tài khoản. '
+                      'Chọn số tài khoản bên dưới để xem task.']
+            keyboard = []
+            for account in visible:
+                aid = str(account['id'])
+                health = runtime.zalo_listener_status(account['id'])
+                status = health.get('code') or 'unknown'
+                label = 'LIVE' if status == 'running' else ('OFF' if not account.get('chat_cmd_enabled',1) else status)
+                name = html.escape(str(account.get('name') or 'Zalo')[:70])
+                report.append(f"#{aid} · <b>{name}</b> · {label} · {counts[aid]} task")
+                keyboard.append([{'text': f"#{aid} · {str(account.get('name') or 'Zalo')[:20]} · {counts[aid]} task",
+                                  'callback_data': f'v12:tasks:{aid}:1'}])
+            report.append('</blockquote>')
+            nav=[]
+            if page>1:nav.append({'text':'‹ Trang trước','callback_data':f'v12:task_accounts:{page-1}'})
+            if page<total_pages:nav.append({'text':'Trang sau ›','callback_data':f'v12:task_accounts:{page+1}'})
+            if nav:keyboard.append(nav)
+            keyboard.append([{'text':'↻ Cập nhật trạng thái','callback_data':f'v12:task_accounts:{page}'}])
+            bot.send_text(chat,'\n'.join(report),reply_markup={'inline_keyboard':keyboard})
+            return True
         elif name in ('tasks', 'task_status', 'admin_tasks'):
             if name == 'admin_tasks':
                 if str(user) != str(os.environ.get('TELEGRAM_ADMIN_ID') or '') or not os.environ.get('TELEGRAM_ADMIN_ID'):
@@ -476,37 +522,74 @@ def telegram_command(bot, user, chat, name, args):
             if name == 'task_status' and not args.strip():
                 bot.send_text(chat, 'Cú pháp: /task_status <task_id>')
                 return True
-            requested_account = args.strip() if name == 'tasks' else ''
+            parts = args.strip().split() if name == 'tasks' else []
+            if parts and re.fullmatch(r"(?i:ACC-)[0-9]+",parts[0]):
+                parts[0] = parts[0].split('-',1)[1]
+            if len(parts) > 2:
+                bot.send_text(chat, 'Cú pháp: /tasks <acc_id> [trang] hoặc /task_accounts')
+                return True
+            requested_account = parts[0] if parts and parts[0] != 'all' else ''
+            try:
+                page = int(parts[1]) if len(parts) == 2 else 1
+            except ValueError:
+                page = 0
+            if page < 1 or page > 1000:
+                bot.send_text(chat,'Trang không hợp lệ. Dùng /tasks <acc_id> 1')
+                return True
+            selected_name = ''
             if requested_account:
                 from get_ck_im_zalo import get_user_visible_accounts
-                allowed = {str(a['id']) for a in get_user_visible_accounts(
+                allowed = {str(a['id']): a for a in get_user_visible_accounts(
                     user, enabled_only=False, platform='zalo', strict=True)}
-                if not requested_account.isdigit() or requested_account not in allowed or str(user) != str(os.environ.get('TELEGRAM_ADMIN_ID') or ''):
-                    bot.send_text(chat,'Tài khoản Zalo không được cấp quyền. Cú pháp: /tasks <acc_id>')
+                if not requested_account.isdigit() or requested_account not in allowed:
+                    bot.send_text(chat,'Tài khoản Zalo không thuộc quyền của bạn. Xem /task_accounts')
                     return True
+                selected_name = str(allowed[requested_account].get('name') or 'Zalo')
             rows = ext['unified_tasks'](str(user), account_id=requested_account) if requested_account else ext['unified_tasks'](str(user))
             if name == 'task_status':
                 rows = [row for row in rows if row['id'] == args.strip() or row['source_id'] == args.strip()]
+            per_page = 10
+            total_pages = max(1, (len(rows) + per_page - 1) // per_page)
+            if name == 'tasks' and page > total_pages:
+                bot.send_text(chat,'Trang không hợp lệ. Tổng số trang: '+str(total_pages))
+                return True
+            if name == 'task_status':
+                shown = rows[:10]
+            else:
+                shown = rows[(page-1)*per_page:page*per_page]
             answer = '\n'.join(
-                f"{row['id']} · " + ("ACC #"+",".join(row['account_ids']) if row.get('account_ids') else row['platform'].upper()) +
-                f" · {row['status']}" +
-                (' · tạm thời theo tiến trình' if row['persistence'] == 'process_local' else '')
-                for row in rows[:15]
+                f"{row['id']} · " +
+                ("ACC #"+",".join(map(str,row.get('account_ids') or []))
+                 if row.get('account_ids') else str(row.get('platform') or '?').upper()) +
+                f" · {row.get('status') or 'UNKNOWN'}" +
+                (' · chỉ trong RAM' if row.get('persistence') == 'process_local' else '')
+                for row in shown
             ) or ('Không tìm thấy tác vụ.' if name == 'task_status' else 'Chưa có tác vụ')
-            if name == 'tasks' and not requested_account:
-                answer = 'TÁC VỤ HIỆN CÓ\nLọc riêng: /tasks <acc_id>\n' + answer
-            if name == 'tasks' and requested_account:
-                answer = 'TÁC VỤ ACC #' + requested_account + '\n' + answer
-            if not rows and name == 'tasks':
-                answer += '\nLưu ý: task Zalo trong RAM có thể mất sau khi hosting khởi động lại.' 
+            if name == 'tasks':
+                title = ('ACC #'+requested_account+' · '+selected_name) if requested_account else 'TẤT CẢ TASK'
+                answer = title+'\nTrang '+str(page)+'/'+str(total_pages)+' · '+str(len(rows))+' task\n'+answer
+                if not requested_account:
+                    answer += '\nChọn tài khoản: /task_accounts · Lọc: /tasks <acc_id> [trang]'
+                if not rows:
+                    answer += '\nTask Zalo trong RAM có thể mất sau khi hosting khởi động lại.'
             keyboard = []
-            for row in rows[:5]:
-                if row['execution_source'] == 'durable_notifications' and row['actions']:
+            for row in shown[:5]:
+                if row.get('execution_source') == 'durable_notifications' and row.get('actions'):
                     keyboard.append([{'text': action + ' ' + row['source_id'][:6],
                         'callback_data': 'v4:' + action + ':' + row['source_id']}
                         for action in row['actions']])
+            if name == 'tasks':
+                nav=[]
+                aid = requested_account
+                if page > 1:
+                    nav.append({'text':'‹ Trước','callback_data':f'v12:tasks:{aid or "all"}:{page-1}'})
+                if page < total_pages:
+                    nav.append({'text':'Sau ›','callback_data':f'v12:tasks:{aid or "all"}:{page+1}'})
+                if nav:keyboard.append(nav)
+                keyboard.append([{'text':'↻ Cập nhật','callback_data':f'v12:tasks:{aid or "all"}:{page}'},
+                                 {'text':'Chọn ACC','callback_data':'v12:task_accounts:1'}])
             header = ('QUẢN TRỊ TÁC VỤ' if str(user) == str(os.environ.get('TELEGRAM_ADMIN_ID') or '') else 'TÁC VỤ CỦA BẠN')
-            bot.send_text(chat, '<b>GLAZE · '+header+'</b>\n<blockquote>'+html.escape(answer)+'</blockquote>',
+            bot.send_text(chat,'<b>GLAZE · '+header+'</b>\n<blockquote>'+html.escape(answer)+'</blockquote>',
                           reply_markup={'inline_keyboard': keyboard})
             return True
         elif name == 'channels':

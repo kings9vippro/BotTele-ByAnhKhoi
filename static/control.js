@@ -55,7 +55,27 @@
  function select(name){active=name;document.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===name;b.setAttribute('aria-selected',on);b.setAttribute('aria-current',on?'page':'false');b.tabIndex=on?0:-1;});document.querySelectorAll('[data-bottom]').forEach(b=>b.setAttribute('aria-current',b.dataset.bottom===name?'page':'false'));keys.forEach(key=>$(key)?.setAttribute('aria-hidden',key===name?'false':'true'));$('tab-'+name)?.scrollIntoView({block:'nearest',inline:'nearest',behavior:reduced.matches?'auto':'smooth'});if(name==='music')loadMusic();if(name==='zalo'&&!terminalAuth)refreshZaloWatches().catch(failed);if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();}
  function go(name){select(name);pages.scrollTo({left:keys.indexOf(name)*pages.clientWidth,behavior:reduced.matches?'auto':'smooth'});tg?.HapticFeedback?.selectionChanged();if(!terminalAuth&&['accounts','zalo','discord'].includes(name)&&Date.now()-lastFullSync>30000)refresh().catch(failed);}
  keys.forEach((key,i)=>{const b=button(names[key],()=>go(key));b.id='tab-'+key;b.dataset.tab=key;b.role='tab';b.setAttribute('aria-controls',key);$(key).setAttribute('aria-labelledby',b.id);$(key).tabIndex=0;b.onkeydown=e=>{const d=e.key==='ArrowRight'||e.key==='ArrowDown'?1:e.key==='ArrowLeft'||e.key==='ArrowUp'?-1:0;if(d||e.key==='Home'||e.key==='End'){e.preventDefault();const next=e.key==='Home'?keys[0]:e.key==='End'?keys[keys.length-1]:keys[(i+d+keys.length)%keys.length];go(next);$('tab-'+next).focus();}};$('tabs').append(b);});
- for(const [key,icon]of [['home','⌂'],['accounts','◎'],['tasks','◷'],['music','♫'],['settings','⚙']]){const b=button('',()=>go(key)),iconNode=element('span',icon,'bottom-icon');iconNode.setAttribute('aria-hidden','true');b.append(iconNode);b.dataset.bottom=key;b.classList.add('bottom-nav-button');b.setAttribute('aria-label',names[key]);b.title=names[key];$('bottom').append(b);}
+ // Consistent 24×24 outline SVG icons prevent iOS font glyph misalignment.
+ const navPaths={
+  home:'M3 11.5 12 4l9 7.5V21h-6v-7H9v7H3z',
+  accounts:'M16 19v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2h14z M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M18 10a3 3 0 0 1 0 6 M18 4a3 3 0 0 1 0 6',
+  tasks:'M12 3v9l5 3 M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z',
+  music:'M9 18V5l12-2v13 M9 8l12-2 M9 18a3 2 0 1 1-6 0 3 2 0 0 1 6 0z M21 16a3 2 0 1 1-6 0 3 2 0 0 1 6 0z',
+  settings:'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z M12 2v3 M12 19v3 M4.9 4.9 7 7 M17 17l2.1 2.1 M2 12h3 M19 12h3 M4.9 19.1 7 17 M17 7l2.1-2.1'
+ };
+ const ns='http://www.w3.org/2000/svg';
+ for(const key of ['home','accounts','tasks','music','settings']){
+  const b=button('',()=>go(key));
+  const svg=document.createElementNS(ns,'svg');
+  svg.classList.add('bottom-icon');svg.setAttribute('viewBox','0 0 24 24');
+  svg.setAttribute('width','24');svg.setAttribute('height','24');
+  svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');
+  svg.setAttribute('stroke-width','1.8');svg.setAttribute('stroke-linejoin','round');
+  svg.setAttribute('stroke-linecap','round');svg.setAttribute('aria-hidden','true');
+  const path=document.createElementNS(ns,'path');path.setAttribute('d',navPaths[key]);svg.append(path);
+  b.append(svg);b.dataset.bottom=key;b.classList.add('bottom-nav-button');
+  b.setAttribute('aria-label',names[key]);b.title=names[key];$('bottom').append(b);
+ }
  for(const [id,page] of [['home-open-accounts','accounts'],['home-open-tasks','tasks'],['home-open-zalo','zalo'],['account-open-zalo','zalo'],['account-open-discord','discord'],['task-open-activity','activity'],['task-open-zalo','zalo']]){
   const target=$(id);if(target)target.addEventListener('click',()=>go(page));
  }
@@ -102,7 +122,11 @@
  $('sheet-handle').onpointerdown=e=>{dragY=e.clientY;e.target.setPointerCapture(e.pointerId);};$('sheet-handle').onpointermove=e=>{if(dragY!==undefined)$('sheet').style.transform=`translateY(${Math.max(0,e.clientY-dragY)}px)`;};$('sheet-handle').onpointerup=e=>{if(e.clientY-dragY>90)closeSheet();dragY=undefined;$('sheet').style.transform='';};$('sheet-handle').onpointercancel=()=>{dragY=undefined;$('sheet').style.transform='';};
  function confirmAction(title,fn){sheet(title,'Thao tác này áp dụng trên máy chủ.',[button('Xác nhận',async()=>{await fn();$('sheet').close();await refresh();},'danger')]);}
  function row(title,detail){const r=element('article',undefined,'card');r.append(element('strong',title),element('p',detail));return r;}
- function renderAccounts(){const target=$('account-list'),q=$('account-search').value.toLowerCase();target.replaceChildren();for(const a of [...accounts.map(a=>({...a,kind:'Zalo',label:a.name,state:a.listener_started?'Luồng đã khởi chạy':'Đã lưu'})),...identities.map(a=>({...a,kind:'Discord',label:a.display_name,state:a.status}))]){if(!`${a.label} ${a.id} ${a.uid||a.provider_uid}`.toLowerCase().includes(q))continue;const r=row(a.label,`${a.kind} · #${a.id} · ${a.state}`);if(a.kind==='Zalo')r.append(button(a.chat_cmd_enabled?'Tắt lệnh':'Bật lệnh',async()=>{await api('toggle_acc_cmd',{acc_id:a.id});await refresh();}));r.append(button(a.kind==='Discord'?'Ngắt liên kết':'Xóa',()=>confirmAction('Xác nhận '+a.label,()=>api(a.kind==='Discord'?'oauth/disconnect':'delete_acc',a.kind==='Discord'?{id:a.id}:{acc_id:a.id})),'danger'));target.append(r);}if(!target.children.length)target.append(element('p','Chưa có tài khoản phù hợp.'));}
+ function renderAccounts(){const target=$('account-list'),q=$('account-search').value.toLowerCase();target.replaceChildren();for(const a of [...accounts.map(a=>({...a,kind:'Zalo',label:a.name,state:a.listener_health?.code==='running'?'Đang nhận lệnh':
+   a.listener_health?.code==='duplicate_imei'?'Trùng phiên với ACC #'+a.listener_health.conflicting_acc_id:
+   a.listener_health?.code==='listener_start_failed'?'Lỗi khởi chạy (xem Logs)':
+   a.listener_health?.code==='worker_unavailable'?'Luồng gián đoạn':
+   !a.chat_cmd_enabled?'Đang tắt lệnh':'Chưa nhận lệnh'})),...identities.map(a=>({...a,kind:'Discord',label:a.display_name,state:a.status}))]){if(!`${a.label} ${a.id} ${a.uid||a.provider_uid}`.toLowerCase().includes(q))continue;const r=row(a.label,`${a.kind} · #${a.id} · ${a.state}`);if(a.kind==='Zalo')r.append(button(a.chat_cmd_enabled?'Tắt lệnh':'Bật lệnh',async()=>{await api('toggle_acc_cmd',{acc_id:a.id});await refresh();}));r.append(button(a.kind==='Discord'?'Ngắt liên kết':'Xóa',()=>confirmAction('Xác nhận '+a.label,()=>api(a.kind==='Discord'?'oauth/disconnect':'delete_acc',a.kind==='Discord'?{id:a.id}:{acc_id:a.id})),'danger'));target.append(r);}if(!target.children.length)target.append(element('p','Chưa có tài khoản phù hợp.'));}
  $('account-search').oninput=renderAccounts;
  let boxRequest=0,boxPage=1,boxPages=1,boxSelected=new Set(),boxOwner='';
  function renderLaunchAccounts(){
@@ -280,7 +304,7 @@
   const signature=JSON.stringify([f,acc,registryTasks,registryState]);
   const scope=acc==='discord'?'Chỉ hiển thị tác vụ thông báo Discord.':acc==='unassigned'?
     'Task cũ chưa lưu ID cookie.':
-    'Cookie Zalo #'+acc+' · Tác vụ đa cookie không thể dừng riêng.';
+    'Cookie Zalo #'+acc+' · '+(accounts.find(a=>String(a.id)===acc)?.name||'')+' · Tác vụ đa cookie không thể dừng riêng.';
   const age=registryFetchedAt?Math.floor((Date.now()-registryFetchedAt)/1000):null;
   $('task-account-status').textContent=scope+' · '+(age===null?'Chưa đồng bộ':
     registryState!=='ready'?'Không có dữ liệu mới; ảnh chụp cũ từ '+age+'s trước':

@@ -732,15 +732,27 @@ def sync_zalo_account_to_web_db(uid, display_name, imei, cookies_dict, zpw_enk="
 
         cur = conn.cursor()
         conn.execute('BEGIN IMMEDIATE')
+        # IMEI/device session is the primary key for updating existing credentials.
+        # A stale or shared UID hint must not overwrite another device session.
         existing = None
-        if uid_str:
-            existing = cur.execute(
-                "SELECT id, owner_tg_id FROM accounts WHERE platform='zalo' AND uid=?", (uid_str,)
-            ).fetchone()
-        if not existing and imei_str:
+        if imei_str:
             existing = cur.execute(
                 "SELECT id, owner_tg_id FROM accounts WHERE platform='zalo' AND imei=?", (imei_str,)
             ).fetchone()
+        if uid_str:
+            uid_matches = cur.execute(
+                "SELECT id, owner_tg_id, imei FROM accounts WHERE platform='zalo' AND uid=? ORDER BY id",
+                (uid_str,)
+            ).fetchall()
+            for candidate in uid_matches:
+                old_owner = str(candidate[1] or "").strip()
+                if not can_user_access_account(owner_str or ROOT_ADMIN_ID, old_owner):
+                    raise ValueError("UID Zalo đã thuộc người quản lý khác")
+                # A legacy row with no device identifier can be safely updated;
+                # a different IMEI is a separate device session under this owner.
+                if existing is None and (not str(candidate[2] or "").strip() or
+                                         str(candidate[2] or "").strip() == imei_str):
+                    existing = (candidate[0], candidate[1])
 
         acc_label = dname_str or f"Zalo_{(uid_str or imei_str)[-4:]}"
         if existing:
@@ -1352,8 +1364,11 @@ class DirectTelegramBotRunner:
         files = {"sticker": (filename, sticker_bytes, mime)}
         return self.api_call("sendSticker", data=data, files=files, timeout=18)
 
-    def send_doc_bytes(self, chat_id, content_bytes, filename, caption="", reply_to=None):
+    def send_doc_bytes(self, chat_id, content_bytes, filename, caption="", reply_to=None,
+                       protect_content=False):
         data = {"chat_id": str(chat_id), "parse_mode": "HTML"}
+        if protect_content:
+            data["protect_content"] = True
         if caption:
             data["caption"] = caption
         if reply_to:
@@ -2529,16 +2544,42 @@ class DirectTelegramBotRunner:
                 nonce = self._queue_private_qr_export(chat_id, user_id, imei, cookies)
                 kb = {"inline_keyboard": [[{"text": "Xác nhận xem Cookie + IMEI (120 giây)",
                     "callback_data": "qr_export:" + nonce}]]} if nonce else None
+                import html
+                is_private_receipt = self._is_private_owner_chat(chat_id, user_id)
+                imei_to_show = str(imei) if is_private_receipt else ("••••"+str(imei)[-4:])
                 self.send_text(
                     chat_id,
-                    f"<b>Đăng nhập Zalo thành công · Tài khoản #{acc_id}</b>\n"
-                    f"UID: <code>{uid}</code> · IMEI: <code>{imei}</code>\n"
-                    f"Nhóm: <b>{grp_cnt}</b> · Đã lưu vào kho riêng.\n"
+                    f"<b>Đăng nhập Zalo thành công · ACC #{acc_id}</b>\n"
+                    f"Tên Zalo: <b>{html.escape(str(dname))}</b>\n"
+                    f"UID: <code>{html.escape(uid if is_private_receipt else 'đã lưu riêng')}</code>\n"
+                    f"IMEI đầy đủ (chat riêng): <code>{html.escape(imei_to_show)}</code>\n"
+                    f"Mã sử dụng trong bot: <code>ACC-{acc_id}</code>\n"
+                    f"Nhóm: <b>{grp_cnt}</b> · Phiên được lưu riêng trên máy chủ.\n"
+                    f"Xem task: <code>/tasks {acc_id}</code> · Danh sách ACC: <code>/task_accounts</code>\n"
                     + ("<i>Bấm xác nhận để nhận Cookie + IMEI trong chat riêng của bạn (hết hạn sau 120 giây).</i>"
                        if nonce else
                        "<i>Đây không phải chat riêng. Cookie không được gửi vào nhóm; hãy dùng /qr trong DM với bot.</i>"),
                     reply_to=msg_id, reply_markup=kb,
                 )
+                # A human-readable account receipt is safe to save for later use.
+                # It intentionally contains NO bearer-session cookies or keys.
+                if is_private_receipt:
+                    receipt = (
+                        "GLAZE — THÔNG TIN TÀI KHOẢN ZALO CỦA BẠN\n"
+                        f"Mã nội bộ: ACC-{acc_id}\n"
+                        f"Tên Zalo: {dname}\n"
+                        f"UID: {uid}\n"
+                        f"IMEI đầy đủ: {imei}\n"
+                        "Cookie: ĐÃ LƯU TRÊN MÁY CHỦ (không nằm trong file)\n"
+                        f"Xem task: /tasks ACC-{acc_id}\n"
+                        f"Xem box: /dsbox ACC-{acc_id} 1\n"
+                        "Mã ACC là tham chiếu nội bộ, không phải cookie đăng nhập.\n"
+                    )
+                    self.send_doc_bytes(
+                        chat_id, receipt.encode("utf-8"), f"zalo-acc-{acc_id}-receipt.txt",
+                        caption="Biên nhận ACC và IMEI riêng tư; không chứa cookie đăng nhập.",
+                        protect_content=True,
+                    )
 
             except Exception:
                 if wait_msg_id:
@@ -2583,6 +2624,30 @@ class DirectTelegramBotRunner:
                 f"🆔 ID của bạn: <code>{user_id}</code>\n"
                 f"Liên hệ Admin chính để cấp quyền: <a href=\"tg://user?id={ROOT_ADMIN_ID}\">Bấm vào đây ↗</a>",
             )
+            return
+
+        if data.startswith('v12:task_accounts:'):
+            page = data.rsplit(':', 1)[-1]
+            if not page.isdigit():
+                self.answer_callback(cb_id, 'Trang không hợp lệ', show_alert=True)
+                return
+            self.answer_callback(cb_id, 'Đang cập nhật danh sách ACC')
+            from control_plane import telegram_command
+            telegram_command(self, user_id, chat_id, 'task_accounts', page)
+            return
+        if data.startswith('v12:tasks:'):
+            parts = data.split(':')
+            if len(parts) != 4 or not parts[3].isdigit():
+                self.answer_callback(cb_id, 'Yêu cầu không hợp lệ', show_alert=True)
+                return
+            account = parts[2]
+            if account != 'all' and not account.isdigit():
+                self.answer_callback(cb_id,'Tài khoản không hợp lệ',show_alert=True)
+                return
+            self.answer_callback(cb_id, 'Đang cập nhật task')
+            from control_plane import telegram_command
+            args = (account + ' ' + parts[3]).strip()
+            telegram_command(self,user_id,chat_id,'tasks',args)
             return
 
         if data.startswith('v8:dsbox:'):
