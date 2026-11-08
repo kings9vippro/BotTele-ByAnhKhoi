@@ -479,7 +479,30 @@
  $('upload-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');if(b.disabled)return;b.disabled=true;try{await uploadFile(e.currentTarget);toast('Đã tải tệp lên');await refresh();}catch(error){failed(error);}finally{b.disabled=false;}};
  $('send-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;try{await api('notifications',{channels:[...$('channel-options').querySelectorAll(':checked')].map(x=>x.value),content:e.currentTarget.elements.content.value});toast('Đã đưa vào hàng chờ');await refreshControl();}catch(e){failed(e);}finally{b.disabled=false;}};
  $('discord-login').onclick=async()=>{try{const r=await api('oauth/start',{provider:'discord'});$('oauth-link').href=r.url;$('oauth-link').hidden=false;if(tg?.openLink)tg.openLink(r.url);}catch(e){failed(e);}};
- let qrTimer;$('qr').onclick=async()=>{clearTimeout(qrTimer);try{const r=await api('start_qr',{});const poll=async()=>{try{const s=await api('qr_status/'+encodeURIComponent(r.session_id));$('qr-status').textContent=s.message||s.status;if(s.qr_base64){$('qr-image').src=s.qr_base64.startsWith('data:')?s.qr_base64:'data:image/png;base64,'+s.qr_base64;$('qr-image').hidden=false;}if(['success','expired','failed','cancelled','error','declined'].includes(s.status)){await refresh();return;}qrTimer=setTimeout(poll,document.hidden?8000:2000);}catch(e){failed(e);}};await poll();}catch(e){failed(e);}};
+ function renderQrReceipt(status){
+  let holder=$('qr-receipt');
+  if(!holder){holder=element('div',undefined,'qr-receipt');holder.id='qr-receipt';$('qr-status').after(holder);}
+  holder.replaceChildren();
+  if(status.status!=='success'||!status.imei)return;
+  const fields=[
+   'Tài khoản: '+(status.account_name||'Zalo'),
+   'Mã ACC: '+(status.account_handle||'Chưa lưu'),
+   'IMEI đầy đủ: '+status.imei,
+   'UID: '+(status.uid||'Chưa nhận diện'),
+  ];
+  holder.append(element('pre',fields.join('\\n')));
+  holder.append(button('Tải biên nhận thiết bị .txt',()=>{
+   const receipt=['GLAZE · Biên nhận thiết bị đăng nhập Zalo',...fields,
+     'Mã ACC chỉ tham chiếu phiên đã lưu ở backend, không phải cookie rút gọn.',
+     'Không bao gồm cookie hoặc khóa đăng nhập.'].join('\\n');
+   const blob=new Blob([receipt],{type:'text/plain;charset=utf-8'});
+   const uri=URL.createObjectURL(blob),link=document.createElement('a');
+   link.href=uri;link.download=(status.account_handle||'zalo-acc')+'-device.txt';
+   document.body.append(link);link.click();link.remove();
+   setTimeout(()=>URL.revokeObjectURL(uri),1000);
+  },'primary'));
+ }
+ let qrTimer;$('qr').onclick=async()=>{clearTimeout(qrTimer);$('qr-receipt')?.replaceChildren();try{const r=await api('start_qr',{});const poll=async()=>{try{const s=await api('qr_status/'+encodeURIComponent(r.session_id));$('qr-status').textContent=s.message||s.status;if(s.qr_base64){$('qr-image').src=s.qr_base64.startsWith('data:')?s.qr_base64:'data:image/png;base64,'+s.qr_base64;$('qr-image').hidden=false;}if(s.status==='success')renderQrReceipt(s);if(['success','expired','failed','cancelled','error','declined'].includes(s.status)){await refresh();return;}qrTimer=setTimeout(poll,document.hidden?8000:2000);}catch(e){failed(e);}};await poll();}catch(e){failed(e);}};
  $('stop-all').onclick=()=>confirmAction('Dừng tất cả tác vụ?',async()=>{await api('notifications/stop_all',{});await api('quick_action',{action:'stop_all'});});$('refresh').onclick=refresh;
  function reconnectDelay(){const exponential=Math.min(STREAM_MAX_DELAY_MS,STREAM_BASE_DELAY_MS*2**Math.min(reconnectAttempt,6));reconnectAttempt=Math.min(reconnectAttempt+1,10);return Math.round(exponential*(1-STREAM_JITTER+Math.random()*STREAM_JITTER*2));}
  function scheduleReconnect(generation,delay){if(terminalAuth||document.hidden||navigator.onLine===false||generation!==streamGeneration)return;clearTimeout(reconnectTimer);const wait=delay===undefined?reconnectDelay():delay;setConnection('RECONNECTING');reconnectTimer=setTimeout(connect,wait);}
