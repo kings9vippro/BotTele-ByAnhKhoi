@@ -9161,22 +9161,34 @@ class ZaloQRLoginManager:
             conn = None
             try:
                 conn = db()
-                existing = None
-                if uid:
-                    existing = conn.execute("SELECT id FROM accounts WHERE platform='zalo' AND uid=?", (uid,)).fetchone()
-                if not existing and imei:
-                    existing = conn.execute("SELECT id FROM accounts WHERE platform='zalo' AND imei=?", (imei,)).fetchone()
+                conn.execute("BEGIN IMMEDIATE")
+                # A QR scan may belong to a second device of the same Zalo UID.
+                # Prefer IMEI; never replace a different IMEI merely because UID matches.
+                existing = conn.execute(
+                    "SELECT id, owner_tg_id FROM accounts WHERE platform='zalo' AND imei=?",
+                    (imei,)
+                ).fetchone() if imei else None
+                if not existing and uid:
+                    legacy_rows = conn.execute(
+                        "SELECT id, imei, owner_tg_id FROM accounts WHERE platform='zalo' AND uid=? ORDER BY id",
+                        (uid,)
+                    ).fetchall()
+                    existing = next((row for row in legacy_rows
+                                     if not str(row["imei"] or "").strip()), None)
                 if existing:
+                    old_owner = str(existing["owner_tg_id"] or "").strip()
+                    if old_owner and old_owner != str(TELEGRAM_ADMIN_ID):
+                        raise ValueError("Tài khoản thuộc một người quản lý khác")
                     saved_acc_id = existing["id"]
                     conn.execute(
-                        "UPDATE accounts SET name=?, imei=?, cookies=?, uid=?, user_agent=?, zpw_enk=?, pc_name=?, chat_cmd_enabled=1, allow_all_cmd=0, enabled=1 WHERE id=?",
-                        (d_name, imei, json.dumps(clean_c, ensure_ascii=False), uid, ua_bound, zpw_enk, pc_name, saved_acc_id)
+                        "UPDATE accounts SET name=?, imei=?, cookies=?, uid=?, user_agent=?, zpw_enk=?, pc_name=?, chat_cmd_enabled=1, allow_all_cmd=0, enabled=1, owner_tg_id=CASE WHEN owner_tg_id='' THEN ? ELSE owner_tg_id END WHERE id=?",
+                        (d_name, imei, json.dumps(clean_c, ensure_ascii=False), uid, ua_bound, zpw_enk, pc_name, str(TELEGRAM_ADMIN_ID), saved_acc_id)
                     )
                 else:
                     cur = conn.execute(
-                        """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, user_agent, zpw_enk, pc_name, created_at)
-                           VALUES (?, 'zalo', ?, ?, '', 0, ?, 1, '.', 0, 1, ?, ?, ?, ?)""",
-                        (d_name, imei, json.dumps(clean_c, ensure_ascii=False), uid, ua_bound, zpw_enk, pc_name, time.time())
+                        """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, user_agent, zpw_enk, pc_name, created_at, owner_tg_id)
+                           VALUES (?, 'zalo', ?, ?, '', 0, ?, 1, '.', 0, 1, ?, ?, ?, ?, ?)""",
+                        (d_name, imei, json.dumps(clean_c, ensure_ascii=False), uid, ua_bound, zpw_enk, pc_name, time.time(), str(TELEGRAM_ADMIN_ID))
                     )
                     saved_acc_id = cur.lastrowid
                 conn.commit()
@@ -15625,7 +15637,29 @@ def route_zenvyre_miniapp():
 @app.route("/api/miniapp/qr_status/<session_id>")
 def api_miniapp_qr_status(session_id):
     status = ZaloQRLoginManager.get_session_status(session_id)
-    return jsonify({key: status.get(key) for key in ("ok", "status", "message", "qr_base64", "remaining_sec")})
+    payload = {key: status.get(key) for key in ("ok", "status", "message", "qr_base64", "remaining_sec")}
+    if status.get("ok") and status.get("status") == "success":
+        imei = str(status.get("imei") or "")
+        account_row = None
+        if imei:
+            connection = db()
+            try:
+                account_row = connection.execute(
+                    "SELECT id, name FROM accounts WHERE platform='zalo' AND imei=? ORDER BY id DESC LIMIT 1",
+                    (imei,)
+                ).fetchone()
+            finally:
+                connection.close()
+        payload.update({
+            "imei": imei,
+            "account_id": account_row["id"] if account_row else None,
+            "account_handle": f"ACC-{account_row['id']}" if account_row else "",
+            "account_name": account_row["name"] if account_row else str(status.get("display_name") or ""),
+            "uid": str(status.get("uid") or ""),
+        })
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get("/api/miniapp/commands")
@@ -15732,7 +15766,7 @@ def api_miniapp_add_cookie():
             return jsonify({"ok": False, "error": "Vui lòng nhập đầy đủ cả IMEI và Cookie Zalo (IMEI | Cookie)"})
         probe = check_zalo_cookie_imei_live(imei_str, ck_dict, user_agent=(meta or {}).get("user_agent", ""))
         uid = str(probe.get("uid") or (meta or {}).get("uid") or "").strip()
-        name = str(probe.get("name") or (meta or {}).get("name") or f"Zalo_{imei_str[:6]}").strip()
+        name = str(probe.get("display_name") or probe.get("name") or (meta or {}).get("name") or f"Zalo_{imei_str[:6]}").strip()
         enk = str(probe.get("zpw_enk") or (meta or {}).get("zpw_enk") or "").strip()
         acc_id = sync_zalo_account_to_web_db(
             uid=uid, display_name=name, imei=imei_str, cookies_dict=ck_dict,
