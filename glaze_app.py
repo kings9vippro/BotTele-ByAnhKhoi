@@ -8947,9 +8947,13 @@ class ZaloQRLoginManager:
             "stop_ev": threading.Event(),
         }
         with cls.LOCK:
+            # Do not cancel a pending first-account QR when another account
+            # starts logging in. Only clean up stale QR workers.
             for old_k, old_v in list(cls.SESSIONS.items()):
-                old_v["stop_ev"].set()
-                if time.time() - old_v.get("created_at", 0) > 60:
+                if time.time() - old_v.get("created_at", 0) > 180:
+                    old_stop = old_v.get("stop_ev")
+                    if hasattr(old_stop, "set"):
+                        old_stop.set()
                     cls.SESSIONS.pop(old_k, None)
             cls.SESSIONS[session_id] = st
             cls._LAST_START_TS = now_t
