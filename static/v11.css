@@ -191,3 +191,8 @@ header{padding:13px 15px;}
 #zalo .zalo-group-row{font-size:14px;min-height:47px;}
 #music #music-player iframe{min-height:380px;}
 @media(max-width:360px){#bottom{padding:5px 3px;column-gap:2px;}#bottom .nav-caption{font-size:9px;}#pages section{padding-left:12px;padding-right:12px;}}
+
+
+#zalo .qr-receipt{margin-top:14px;padding:13px;border-radius:14px;background:var(--panel);border:1px solid var(--line);}
+#zalo .qr-receipt pre{overflow-wrap:anywhere;white-space:pre-wrap;word-break:break-word;margin:0 0 12px;color:var(--fg);font:650 13px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+#zalo .qr-receipt button{width:100%;min-height:48px;font-weight:780;}
