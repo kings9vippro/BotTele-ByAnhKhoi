@@ -106,3 +106,42 @@ body.auth-locked{overflow:auto;}
 @media(max-width:350px){#bottom,#bottom.bottom-nav{column-gap:2px;}#bottom button.bottom-nav-button{min-height:46px;}}
 #bottom button.bottom-nav-button .bottom-icon,
 #bottom button.bottom-nav-button[aria-current=page] .bottom-icon{transform:none!important;transition:none; }
+
+
+/* V12 operational layout: compact, dense, readable and safe in Telegram WebView. */
+#home .eyebrow,#accounts .eyebrow,#tasks .eyebrow,#zalo .eyebrow{letter-spacing:.13em;font-size:10px;font-weight:800;}
+#home>h1,#accounts>h1,#tasks>h1,#zalo>h1{margin:6px 0 10px;letter-spacing:-.045em;line-height:1.22;}
+#home #metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0 16px;}
+#home .metric{min-width:0;min-height:83px;padding:10px 11px;overflow-wrap:anywhere;}
+#home .metric strong{font-size:clamp(18px,5vw,25px);font-weight:850;}
+#home .metric span{font-size:10px;letter-spacing:.02em;}
+#home>article{border-radius:16px;padding:13px;margin-top:10px;overflow:hidden;}
+#home #chart{height:68px;width:100%;max-height:68px;}
+#home #chart:empty{display:none;}
+#account-list,#task-list{display:grid;grid-template-columns:minmax(0,1fr);gap:9px;padding-bottom:20px;}
+#account-list article,#task-list article{margin:0;border-radius:15px;border-left:3px solid color-mix(in srgb,var(--accent) 58%,var(--line));}
+#account-list article strong,#task-list article strong{font-size:15px;letter-spacing:-.02em;}
+#account-list article p,#task-list article p{color:var(--muted);font-size:12px;}
+#account-list .actions,#task-list .actions{display:flex;gap:7px;flex-wrap:wrap;}
+#account-list .actions button,#task-list .actions button{flex:1 1 auto;min-height:38px;}
+#tasks>label{display:grid;gap:5px;min-width:0;margin:9px 0 12px;}
+#task-account-filter,#task-filter{width:100%;font-weight:700;min-height:46px;}
+#tasks #task-account-status{border-left:3px solid var(--accent);padding:8px 11px;background:var(--panel);border-radius:0 9px 9px 0;line-height:1.55;}
+#zalo>article{padding:14px;border-radius:16px;}
+#zalo #launch-form{display:grid;grid-template-columns:minmax(0,1fr);gap:7px;}
+#zalo #launch-form>*{min-width:0;margin:0;}
+#zalo #launch-form textarea{min-height:84px;font-size:14px;}
+#zalo #launch-account{min-height:47px;font-size:15px;font-weight:750;}
+#zalo #launch-boxes{max-height:225px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:12px;}
+#zalo .zalo-watch-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;}
+#zalo .zalo-watch-actions button{width:100%;min-width:0;}
+#zalo #zalo-watch-status .card{border-radius:12px;border-left:3px solid var(--accent);}
+#music #music-player iframe{width:100%;border:0;border-radius:12px;min-height:355px;}
+#music #music-tracks article{padding:10px 12px;margin:0;}
+@media(min-width:580px){
+ #account-list,#task-list{grid-template-columns:repeat(2,minmax(0,1fr));}
+ #tasks>label{width:calc(50% - 10px);display:inline-grid;vertical-align:top;margin-right:10px;}
+ #zalo #launch-form{grid-template-columns:repeat(2,minmax(0,1fr));}
+ #zalo #launch-form fieldset,#zalo #launch-form textarea,#zalo #launch-form button.primary{grid-column:1/-1;}
+}
+@media(max-width:340px){#home #metrics{gap:5px;}#home .metric{padding:10px 7px;}#home .metric strong{font-size:18px;}}
