@@ -15202,52 +15202,120 @@ class DiscordRealtimeListener:
     def __init__(self, *args, **kwargs):
         raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
+# This map contains ONLY operational status and numeric account IDs, never cookies.
+_ZALO_LISTENER_FAILURES = {}
+
+
+def _plan_zalo_listener_rows(rows):
+    """Plan independent listeners without confusing two different IMEIs with a stale UID.
+
+    Multiple device records with the same IMEI share a Zalo session and must not
+    create two competing WebSockets; distinct IMEIs receive separate listeners,
+    even when a stored UID hint coincides. Reconciliation exposes skipped rows.
+    """
+    active = []
+    duplicate_by_id = {}
+    seen = {}
+    for row in rows:
+        aid = int(row["id"])
+        if not row["chat_cmd_enabled"]:
+            continue
+        imei = str(row["imei"] or "").strip()
+        uid = str(row["uid"] or "").strip()
+        key = ("imei", imei) if imei else (("uid", uid) if uid else ("row", aid))
+        previous = seen.get(key)
+        if previous is not None:
+            duplicate_by_id[aid] = previous
+            continue
+        seen[key] = aid
+        active.append(aid)
+    return active, duplicate_by_id
+
+
 def _sync_all_zalo_listeners_locked():
     refresh_accounts_ram_cache()
     refresh_owner_uids()
     try:
         conn = db()
-        rows = conn.execute("SELECT id, platform, chat_cmd_enabled, uid, imei, token FROM accounts WHERE COALESCE(enabled,1)=1 AND platform='zalo' ORDER BY id ASC").fetchall()
-        conn.close()
-        active_ids = set()
-        seen_cred_keys = set()
-        for r in rows:
-            aid = r["id"]
-            plat = (r["platform"] or "zalo").lower()
-            if r["chat_cmd_enabled"]:
-                cred_val = str(r["token"] if plat == "discord" else (r["uid"] or r["imei"] or aid)).strip()
-                cred_key = f"{plat}:{cred_val}"
-                if cred_val and cred_key in seen_cred_keys:
-                    # Ngăn chặn tuyệt đối 2 bản ghi trùng cùng 1 tài khoản chạy 2 Listener gây nhân đôi .menu!
-                    continue
-                if cred_val:
-                    seen_cred_keys.add(cred_key)
-                active_ids.add(aid)
-                lst = ACTIVE_LISTENERS.get(aid)
-                need_start = (lst is None) or (not lst.thread.is_alive())
-                if not need_start and plat in ("zalo", "discord") and hasattr(lst, "poller_thread"):
-                    if not lst.poller_thread.is_alive():
-                        need_start = True
-                if need_start:
-                    if lst is not None:
-                        try:
-                            lst.stop()
-                        except Exception:
-                            pass
-                    if plat == "discord":
-                        listener = DiscordRealtimeListener(aid)
-                    elif plat == "messenger":
-                        listener = MessengerRealtimeListener(aid)
-                    else:
-                        listener = ZaloRealtimeListener(aid)
-                    ACTIVE_LISTENERS[aid] = listener
-                    listener.start()
-        for aid in list(ACTIVE_LISTENERS.keys()):
-            if aid not in active_ids:
-                ACTIVE_LISTENERS[aid].stop()
-                ACTIVE_LISTENERS.pop(aid, None)
+        try:
+            rows = conn.execute(
+                "SELECT id, platform, chat_cmd_enabled, uid, imei, token "
+                "FROM accounts WHERE COALESCE(enabled,1)=1 AND platform='zalo' ORDER BY id ASC"
+            ).fetchall()
+        finally:
+            conn.close()
     except Exception as error:
-        app.logger.error('Zalo listener reconciliation failed: %s', type(error).__name__)
+        app.logger.error("Zalo listener account inventory failed: %s", type(error).__name__)
+        return
+
+    planned, duplicates = _plan_zalo_listener_rows(rows)
+    active_ids = set(planned)
+    known_ids = {int(row["id"]) for row in rows}
+
+    for aid, original in duplicates.items():
+        _ZALO_LISTENER_FAILURES[aid] = {
+            "code": "duplicate_imei", "conflicting_acc_id": original,
+        }
+        app.logger.warning("Zalo account #%d skipped: same session/device as account #%d", aid, original)
+
+    # A broken cookie must not prevent other accounts from starting.
+    for aid in planned:
+        try:
+            listener = ACTIVE_LISTENERS.get(aid)
+            thread = getattr(listener, "thread", None)
+            poller = getattr(listener, "poller_thread", None)
+            needs_start = (listener is None or not thread or not thread.is_alive()
+                           or not poller or not poller.is_alive()
+                           or bool(listener.stop_ev.is_set()))
+            if needs_start:
+                if listener is not None:
+                    listener.stop()
+                fresh = ZaloRealtimeListener(aid)
+                fresh.start()
+                ACTIVE_LISTENERS[aid] = fresh
+            _ZALO_LISTENER_FAILURES.pop(aid, None)
+        except Exception as error:
+            _ZALO_LISTENER_FAILURES[aid] = {
+                "code": "listener_start_failed", "error_type": type(error).__name__,
+            }
+            app.logger.error(
+                "Zalo listener account #%d failed to start: %s",
+                aid, type(error).__name__,
+            )
+
+    for aid in list(ACTIVE_LISTENERS):
+        if aid not in active_ids:
+            try:
+                ACTIVE_LISTENERS[aid].stop()
+            finally:
+                ACTIVE_LISTENERS.pop(aid, None)
+
+    for aid in list(_ZALO_LISTENER_FAILURES):
+        if aid not in known_ids:
+            _ZALO_LISTENER_FAILURES.pop(aid, None)
+
+
+def zalo_listener_status(account_id):
+    """Credential-free per-account liveness for authenticated UI/Telegram views."""
+    aid = int(account_id)
+    failure = _ZALO_LISTENER_FAILURES.get(aid)
+    if failure:
+        return dict(failure)
+    listener = ACTIVE_LISTENERS.get(aid)
+    if listener is None:
+        return {"code": "not_started"}
+    thread = getattr(listener, "thread", None)
+    poller = getattr(listener, "poller_thread", None)
+    stop_ev = getattr(listener, "stop_ev", None)
+    if stop_ev is not None and stop_ev.is_set():
+        return {"code": "stopped"}
+    if not thread or not thread.is_alive() or not poller or not poller.is_alive():
+        return {"code": "worker_unavailable"}
+    return {
+        "code": "running",
+        "ws_state": str(getattr(listener, "ws_status", "") or "")[:120],
+        "last_event_at": float(getattr(listener, "last_event_ts", 0.0) or 0.0),
+    }
 
 
 def sync_all_zalo_listeners():
@@ -15627,6 +15695,7 @@ def api_miniapp_accounts():
             "chat_cmd_enabled": bool(a.get("chat_cmd_enabled", 1)),
             "saved": True,
             "listener_started": _miniapp_listener_running(a["id"]),
+            "listener_health": zalo_listener_status(a["id"]),
         })
     return jsonify({"ok": True, "accounts": out, "snapshot_at": time.time(), "storage_id": storage_identity(db())})
 

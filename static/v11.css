@@ -94,3 +94,15 @@ body.auth-locked{overflow:auto;}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important;}}
 
 #task-quick-actions{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 14px;}#task-quick-actions button{flex:1;background:var(--panel);color:var(--fg);border:1px solid var(--line);}\n
+/* V12: all bottom icons share identical geometry, center alignment and hit area. */
+#bottom,#bottom.bottom-nav {display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr));align-items:center;justify-items:stretch;column-gap:4px;}
+#bottom button.bottom-nav-button{width:100%;min-width:0;max-width:none;display:flex!important;align-items:center;justify-content:center;padding:0;border-radius:13px;line-height:1;}
+#bottom button.bottom-nav-button .bottom-icon{display:block;flex:0 0 24px;width:24px;height:24px;color:var(--muted);overflow:visible;}
+#bottom button.bottom-nav-button[aria-current=page] .bottom-icon{color:var(--accent);}
+#zalo .card strong,#zalo .row strong,#zalo .zalo-group-row strong{font-size:15px;line-height:1.45;font-weight:780;}
+#zalo .card p,#zalo .zalo-group-row p,#zalo label{font-size:14px;line-height:1.5;}
+#zalo button,#zalo select,#zalo input{font-size:14px;font-weight:680;}
+#account-list .card,#task-list .card{line-height:1.5;}
+@media(max-width:350px){#bottom,#bottom.bottom-nav{column-gap:2px;}#bottom button.bottom-nav-button{min-height:46px;}}
+#bottom button.bottom-nav-button .bottom-icon,
+#bottom button.bottom-nav-button[aria-current=page] .bottom-icon{transform:none!important;transition:none; }
