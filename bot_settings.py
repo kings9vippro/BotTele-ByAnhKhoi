@@ -16,7 +16,7 @@ def load_bot_token(environment=None):
         raise BotSecretConfigurationError(
             "load_bot_token requires an environment mapping. Set TELEGRAM_BOT_TOKEN in hosting secrets."
         )
-    return str(env.get("TELEGRAM_BOT_TOKEN") or "9089151186:AAHeWAKE0TeVEj2ZecCyuKBhqqE2YH9kIVI").strip()
+    return str(env.get("TELEGRAM_BOT_TOKEN") or "089151186:AAHeWAKE0TeVEj2ZecCyuKBhqqE2YH9kIVI").strip()
 
 
 TELEGRAM_BOT_TOKEN = load_bot_token()
