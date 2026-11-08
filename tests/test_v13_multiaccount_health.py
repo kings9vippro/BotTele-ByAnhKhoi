@@ -98,5 +98,39 @@ class UIContractTests(unittest.TestCase):
         self.assertNotIn("document.cookie", js)
 
 
+    def test_qr_success_exports_imei_without_session_cookie(self):
+        status = {
+            "ok": True, "status": "success", "message": "Saved",
+            "imei": "complete-synthetic-imei", "uid": "919191919",
+            "display_name": "Synthetic Test", "cookies": {"zpsid": "SENSITIVE-NOT-IN-JSON"},
+        }
+        class FakeConnection:
+            def execute(self, *args):
+                return self
+            def fetchone(self):
+                return {"id": 42, "name": "Synthetic Test"}
+            def close(self):
+                pass
+
+        with app.app.test_request_context("/api/miniapp/qr_status/example"), \
+             patch.object(app.ZaloQRLoginManager, "get_session_status", return_value=status), \
+             patch.object(app, "db", return_value=FakeConnection()):
+            response = app.api_miniapp_qr_status("example")
+        data = response.get_json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["imei"], "complete-synthetic-imei")
+        self.assertEqual(data["account_handle"], "ACC-42")
+        self.assertNotIn("cookies", data)
+        self.assertNotIn("SENSITIVE", str(data))
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_qr_auto_save_matches_imei_before_uid(self):
+        source = Path("glaze_app.py").read_text(encoding="utf-8")
+        section = source.split("        saved_acc_id = 0", 1)[1].split("        st[\"status\"] = \"success\"", 1)[0]
+        self.assertLess(section.index("AND imei=?"), section.index("AND uid=?"))
+        self.assertIn("if not str(row[\"imei\"] or \"\").strip()", section)
+
+
+
 if __name__ == "__main__":
     unittest.main()
