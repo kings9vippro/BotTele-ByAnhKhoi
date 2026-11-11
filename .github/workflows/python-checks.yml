@@ -7,7 +7,7 @@ jobs:
       DISABLE_TELEGRAM_BOT: '1'
       DISABLE_BACKGROUND_WORKERS: '1'
       TELEGRAM_BOT_TOKEN: ci-test-token
-      TELEGRAM_ADMIN_ID: '999999999'
+      TELEGRAM_ADMIN_ID: "321"
       SECRET_KEY: ci-test-only
     steps:
       - uses: actions/checkout@v4
@@ -16,6 +16,8 @@ jobs:
           python-version: '3.11.9'
       - run: python scripts/check_secrets.py
       - run: python scripts/verify_startup.py
+      - run: node --check static/control.js
+      - run: node --check tests/control-browser.cjs
       - run: pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p 'test_*.py' -v
       - run: gunicorn --check-config app:app --config gunicorn.conf.py

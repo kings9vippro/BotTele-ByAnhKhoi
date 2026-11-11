@@ -99,7 +99,7 @@ def cancel_one(task_id, active_tasks, saved_tasks, lock):
         return state
 
 
-def task_snapshots(active_tasks, saved_tasks, accounts, lock):
+def task_snapshots(active_tasks, saved_tasks, accounts, lock, account_id=None):
     """Return legacy task snapshots with explicit execution/persistence facts.
 
     ``status`` remains the existing lower-case legacy status for backwards
@@ -119,7 +119,10 @@ def task_snapshots(active_tasks, saved_tasks, accounts, lock):
             mode = saved.get("type") or active.get("mode") or (active.get("opts") or {}).get("mode") or active.get("source") or "task"
             targets = list(meta.get("targets") or active.get("targets") or [])
             target_names = list(meta.get("target_names") or targets)
-            ids = list(meta.get("account_ids") or ([active["acc_id"]] if active.get("acc_id") else []))
+            ids = list(meta.get("account_ids") or active.get("acc_ids") or
+                       ([active["acc_id"]] if active.get("acc_id") else []))
+            if account_id is not None and str(account_id) not in {str(x) for x in ids}:
+                continue
             started_at = float(saved.get("started_at") or active.get("started_at") or now)
             state = task_state(active, saved)
             if saved and saved.get("status") != state:
@@ -134,6 +137,7 @@ def task_snapshots(active_tasks, saved_tasks, accounts, lock):
                 "can_stop": state == "running",
                 "targets": [str(target) for target in targets], "target_names": [str(name) for name in target_names],
                 "target_label": ", ".join(str(name) for name in target_names) or "Chưa có đích",
+                "account_ids": [str(account_id) for account_id in ids],
                 "account_names": [names.get(str(account_id), f"#{account_id}") for account_id in ids],
                 "uptime_s": int(max(0, float(saved.get("finished_at") or now) - started_at)), "started_at": started_at,
                 "last_updated": float(saved.get("updated_at") or saved.get("finished_at") or started_at),
@@ -201,7 +205,7 @@ def durable_task_snapshots(queue, owner):
 
 
 def unified_task_snapshots(active_tasks, saved_tasks, accounts, lock, *, queue=None,
-                           owner=None, include_legacy=True, limit=200):
+                           owner=None, include_legacy=True, account_id=None, limit=200):
     """Aggregate independent engines into a stable, honest read contract.
 
     Legacy tasks are intentionally included only when the caller has already
@@ -210,7 +214,7 @@ def unified_task_snapshots(active_tasks, saved_tasks, accounts, lock, *, queue=N
     """
     items = []
     if include_legacy:
-        items.extend(task_snapshots(active_tasks, saved_tasks, accounts, lock))
+        items.extend(task_snapshots(active_tasks, saved_tasks, accounts, lock, account_id=account_id))
     items.extend(durable_task_snapshots(queue, owner))
     return sorted(items, key=lambda item: (float(item.get("last_updated") or item.get("started_at") or 0), item["task_ref"]), reverse=True)[:max(1, min(int(limit), 500))]
 

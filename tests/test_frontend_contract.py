@@ -41,13 +41,13 @@ class FrontendContractTests(unittest.TestCase):
             "AUTH_REQUIRED",
             "SERVER_CONFIG",
             "Retry-After",
-            "startApplication",
+            "bootstrap",
             "checkStreamHealth",
         ):
             self.assertIn(marker, source)
         self.assertIn("Math.min(STREAM_MAX_DELAY_MS", source)
         self.assertIn("refreshController?.abort()", source)
-        self.assertIn("terminalFailureKind", source)
+        self.assertIn("terminalAuth", source)
 
 
 if __name__ == "__main__":

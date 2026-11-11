@@ -85,7 +85,7 @@ class TelegramBotCommandTests(unittest.TestCase):
         runner = self.runner_shell()
         runner.api_call = Mock(side_effect=[{"ok": True}, {"ok": False, "description": "private failure"}])
         self.assertFalse(runner.clear_webhook_and_init())
-        self.assertEqual(runner.last_error, "Telegram initialization failed (API rejected)")
+        self.assertEqual(runner.last_error, "telegram_getme_unavailable")
 
     def test_legacy_discord_token_import_is_not_reintroduced(self):
         source = (Path(__file__).resolve().parents[1] / "get_ck_im_zalo.py").read_text(encoding="utf-8")

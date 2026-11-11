@@ -1,11 +1,22 @@
-"""Shared Telegram settings. Author: Dev Anh Khôi. Version: 1.3.0."""
+"""Telegram configuration: exactly one bot token from a host secret.
+
+Set TELEGRAM_BOT_TOKEN in the service environment. Never paste a real
+Telegram bot token into a source file tracked by GitHub.
+"""
 import os
 
-# Secrets must be supplied by the deployment environment.  Never ship a
-# fallback token in source control: even a revoked token can be replayed from
-# an old commit or build artifact.
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-# Authorization must be configured by the deployment.  A source-code default
-# would silently grant an unrelated Telegram identity administrator access when
-# an environment is incomplete or a service is cloned.
+class BotSecretConfigurationError(RuntimeError):
+    """Safe startup configuration error without credential contents."""
+
+
+def load_bot_token(environment=None):
+    env = environment if environment is not None else os.environ
+    if not hasattr(env, "get"):
+        raise BotSecretConfigurationError(
+            "load_bot_token requires an environment mapping. Set TELEGRAM_BOT_TOKEN in hosting secrets."
+        )
+    return str(env.get("TELEGRAM_BOT_TOKEN") or "").strip()
+
+
+TELEGRAM_BOT_TOKEN = load_bot_token()
 TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "").strip()

@@ -252,17 +252,23 @@ def get_or_create_csrf_token():
         session["csrf_token"] = tok
     return tok
 
+def _miniapp_auth_failure(code):
+    """Store only a non-sensitive diagnosis for the current request."""
+    g.miniapp_auth_error = code
+    return False
+
+
 def is_miniapp_request_authorized():
-    """Authorize a Mini App call without accepting a browser-provided user ID."""
-    g.miniapp_auth_error = "invalid_init_data"
+    """Authorize browser sessions or verified Telegram Web App launch data.
+
+    No token fallback, no anonymous admin, no signature bypass.
+    """
     configured_token = str(os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
     configured_admin = str(TELEGRAM_ADMIN_ID or "").strip()
     if not configured_token or not configured_admin:
-        g.miniapp_auth_error = "server_misconfigured"
-        return False
-    # The legacy password dashboard is an admin-only compatibility path. It
-    # must not create an identity when Telegram administrator configuration is
-    # missing or invalid.
+        return _miniapp_auth_failure("server_configuration")
+    # The compatibility password dashboard is admin-only; it must never create
+    # an implicit identity when Telegram configuration is incomplete.
     if session.get("logged_in"):
         g.miniapp_owner = configured_admin
         return True
@@ -274,33 +280,29 @@ def is_miniapp_request_authorized():
         if owner == configured_admin:
             g.miniapp_owner = owner
             return True
-        # Delegates can manage only their OAuth identities and webhook queue.
-        scoped = request.path.startswith('/api/miniapp/oauth/') and request.path != '/api/miniapp/oauth/configure'
-        scoped = scoped or request.path in {'/api/miniapp/session', '/api/miniapp/control', '/api/miniapp/events',
-            '/api/miniapp/channels', '/api/miniapp/channels/delete', '/api/miniapp/notifications',
-            '/api/miniapp/notifications/stop_all', '/api/miniapp/notification_control',
-            '/api/miniapp/task_control'}
+        # Delegates can operate only on explicitly authorized, scoped resources.
+        scoped = request.path.startswith("/api/miniapp/oauth/") and request.path != "/api/miniapp/oauth/configure"
+        scoped = scoped or request.path in {"/api/miniapp/session", "/api/miniapp/control", "/api/miniapp/events",
+            "/api/miniapp/channels", "/api/miniapp/channels/delete", "/api/miniapp/notifications",
+            "/api/miniapp/notifications/stop_all", "/api/miniapp/notification_control",
+            "/api/miniapp/task_registry", "/api/miniapp/task_control"}
         if not scoped or not owner.isdigit():
-            g.miniapp_auth_error = "unauthorized_user"
-            return False
-        c = db()
+            return _miniapp_auth_failure("unauthorized_account")
+        connection = db()
         try:
-            authorized = c.execute('SELECT 1 FROM tg_authorized_users WHERE uid=?', (owner,)).fetchone()
+            authorized = connection.execute("SELECT 1 FROM tg_authorized_users WHERE uid=?", (owner,)).fetchone()
         except sqlite3.Error:
-            authorized = None
+            return _miniapp_auth_failure("storage_unavailable")
         finally:
-            c.close()
+            connection.close()
         if authorized:
             g.miniapp_owner = owner
             return True
-        g.miniapp_auth_error = "unauthorized_user"
-        return False
     except TelegramInitDataError as error:
-        g.miniapp_auth_error = error.code
-        return False
+        return _miniapp_auth_failure(error.code)
     except (TypeError, ValueError, json.JSONDecodeError):
-        g.miniapp_auth_error = "invalid_init_data"
-        return False
+        return _miniapp_auth_failure("invalid_init_data")
+    return _miniapp_auth_failure("unauthorized_account")
 
 
 def miniapp_request_owner():
@@ -323,17 +325,18 @@ def security_middleware():
     protected = request.path.startswith(("/api/", "/task/", "/account/", "/file/"))
     public_assets = {"/api/logo", "/api/glaze_logo.png", "/api/zenvyre_logo.png", "/api/menu_banner.png"}
     if protected and request.path not in public_assets and not is_miniapp_request_authorized():
-        code = str(getattr(g, "miniapp_auth_error", "invalid_init_data"))
-        if code == "server_misconfigured":
-            return jsonify(ok=False, error="Máy chủ chưa cấu hình xác thực Telegram.", code=code), 503
-        if code == "unauthorized_user":
-            return jsonify(ok=False, error="Tài khoản Telegram không có quyền truy cập.", code=code), 403
-        messages = {
-            "missing_init_data": "Hãy mở Mini App từ Telegram để tạo phiên hợp lệ.",
-            "expired_init_data": "Phiên Telegram đã hết hạn. Hãy đóng Mini App và mở lại từ bot.",
-            "clock_skew": "Thời gian phiên Telegram không hợp lệ. Hãy mở lại Mini App.",
+        reason = getattr(g, "miniapp_auth_error", "invalid_init_data")
+        failures = {
+            "missing_init_data": (401, "Thiếu dữ liệu xác thực Telegram. Hãy mở Mini App trực tiếp từ Telegram."),
+            "expired_init_data": (401, "Phiên Telegram đã hết hạn. Hãy đóng và mở lại Mini App từ Telegram."),
+            "invalid_signature": (401, "Chữ ký Telegram không hợp lệ. Hãy mở lại Mini App từ bot."),
+            "invalid_init_data": (401, "Dữ liệu xác thực Telegram không hợp lệ."),
+            "unauthorized_account": (403, "Tài khoản Telegram chưa được cấp quyền truy cập chức năng này."),
+            "server_configuration": (503, "Máy chủ chưa được cấu hình xác thực Telegram."),
+            "storage_unavailable": (503, "Không thể kiểm tra quyền truy cập do kho dữ liệu tạm gián đoạn."),
         }
-        return jsonify(ok=False, error=messages.get(code, "Phiên Telegram không hợp lệ hoặc đã hết hạn."), code=code), 401
+        status, message = failures.get(reason, failures["invalid_init_data"])
+        return jsonify(ok=False, code=reason, error=message), status
     if protected:
         origin = request.headers.get("Origin")
         if (request.method not in ("GET", "HEAD", "OPTIONS") and origin and origin.rstrip("/") != request.host_url.rstrip("/")) or request.headers.get("Sec-Fetch-Site") == "cross-site":
@@ -1213,8 +1216,57 @@ class CanhTreoWatchdogEngine:
          về thẳng Bot Telegram cho Admin biết chính xác ở Box nào, ai đã không nhắn tin trong vòng 1p30s kèm tin nhắn cuối cùng!"""
 
     _LOCK = threading.RLock()
+    # Watchers are keyed by (cookie account, group ID), never only the group ID.
+    # Retain lookup of legacy keys for in-memory test fixtures and migration.
     _WATCHED_BOXES = {}
     _DAEMON_STARTED = False
+    _SYNC_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="ZaloWatchSync")
+    _SYNC_INFLIGHT = set()
+    _SYNC_MAX_INFLIGHT = 6
+
+    @classmethod
+    def _storage_key(cls, box_id, acc_id=0):
+        bid = _clean_zalo_id(box_id) or str(box_id or "").strip()
+        return f"{int(acc_id)}:{bid}" if acc_id else bid
+
+    @classmethod
+    def _resolve_key(cls, box_id, acc_id=None):
+        """Return one watch key. Refuse ambiguous cross-account operations."""
+        bid = _clean_zalo_id(box_id) or str(box_id or "").strip()
+        if acc_id is not None:
+            exact = cls._storage_key(bid, acc_id)
+            if exact in cls._WATCHED_BOXES:
+                return exact
+            legacy = cls._WATCHED_BOXES.get(bid)
+            return bid if legacy and str(legacy.get("acc_id") or 0) == str(acc_id) else None
+        if bid in cls._WATCHED_BOXES:
+            return bid
+        candidates = [key for key, state in cls._WATCHED_BOXES.items()
+                      if str(state.get("box_id") or "") == bid]
+        return candidates[0] if len(candidates) == 1 else None
+
+    @classmethod
+    def _schedule_sync(cls, watch_key):
+        """Bound remote reads; a slow provider must not block the watch clock."""
+        with cls._LOCK:
+            if watch_key in cls._SYNC_INFLIGHT or len(cls._SYNC_INFLIGHT) >= cls._SYNC_MAX_INFLIGHT:
+                return False
+            if watch_key not in cls._WATCHED_BOXES:
+                return False
+            cls._SYNC_INFLIGHT.add(watch_key)
+        try:
+            job = cls._SYNC_POOL.submit(cls._sync_box_latest_messages, watch_key)
+        except RuntimeError:
+            with cls._LOCK:
+                cls._SYNC_INFLIGHT.discard(watch_key)
+            return False
+        job.add_done_callback(lambda _: cls._sync_completed(watch_key))
+        return True
+
+    @classmethod
+    def _sync_completed(cls, watch_key):
+        with cls._LOCK:
+            cls._SYNC_INFLIGHT.discard(watch_key)
 
     @classmethod
     def enable_watch(cls, box_id, box_name="", platform="zalo", acc_id=0, timeout_sec=90.0, notify_chat_id=None):
@@ -1223,7 +1275,8 @@ class CanhTreoWatchdogEngine:
             return None
         now = time.time()
         with cls._LOCK:
-            existing = cls._WATCHED_BOXES.get(bid) or {}
+            key = cls._storage_key(bid, acc_id)
+            existing = cls._WATCHED_BOXES.get(key) or {}
             bname = str(box_name or existing.get("box_name") or f"Box #{bid[-6:]}").strip()
             state = {
                 "box_id": bid,
@@ -1232,59 +1285,79 @@ class CanhTreoWatchdogEngine:
                 "acc_id": int(acc_id or existing.get("acc_id") or 0),
                 "timeout_sec": float(timeout_sec or 90.0),
                 "enabled": True,
-                "started_at": now,
-                "last_activity_ts": now,
+                "started_at": existing.get("started_at") or now,
+                # Reopening an existing watch is NOT a new message: retain its clock.
+                "last_activity_ts": float(existing.get("last_activity_ts") or now),
                 "last_msg_id": existing.get("last_msg_id") or "",
                 "last_sender_uid": existing.get("last_sender_uid") or "",
                 "last_sender_name": existing.get("last_sender_name") or "Chưa có ai nhắn",
-                "last_msg_text": existing.get("last_msg_text") or "(Đang canh tin nhắn mới...)",
-                "last_msg_time_str": existing.get("last_msg_time_str") or time.strftime("%H:%M:%S"),
+                "last_msg_text": existing.get("last_msg_text") or "(Đang chờ dữ liệu tin nhắn...)",
+                "last_msg_time_str": existing.get("last_msg_time_str") or "Chưa có tin nhắn",
+                "last_sync_at": existing.get("last_sync_at"),
+                "last_sync_ok": existing.get("last_sync_ok"),
                 "participants": dict(existing.get("participants") or {}),
                 "known_members": dict(existing.get("known_members") or {}),
                 "alerted_for_activity_ts": 0.0,
                 "alerts_sent": int(existing.get("alerts_sent") or 0),
                 "notify_chat_id": str(notify_chat_id or existing.get("notify_chat_id") or TELEGRAM_ADMIN_ID).strip(),
             }
-            cls._WATCHED_BOXES[bid] = state
+            cls._WATCHED_BOXES[key] = state
         cls.ensure_daemon_started()
-        # Quét ngay tin nhắn cuối cùng hiện có trong Box để nạp tức thì không cần chờ!
-        threading.Thread(target=cls._sync_box_latest_messages, args=(bid,), daemon=True).start()
+        cls._schedule_sync(key)
         return dict(state)
 
     @classmethod
-    def disable_watch(cls, box_id=None):
+    def disable_watch(cls, box_id=None, acc_id=None):
         with cls._LOCK:
             if not box_id or str(box_id).upper() == "ALL":
+                if acc_id is not None:
+                    keys = [key for key, state in cls._WATCHED_BOXES.items()
+                            if str(state.get("acc_id") or "") == str(acc_id)]
+                    for key in keys:
+                        cls._WATCHED_BOXES.pop(key, None)
+                    return len(keys)
                 cnt = len(cls._WATCHED_BOXES)
                 cls._WATCHED_BOXES.clear()
                 return cnt
-            bid = _clean_zalo_id(box_id) or str(box_id).strip()
-            popped = cls._WATCHED_BOXES.pop(bid, None)
-            return 1 if popped else 0
+            key = cls._resolve_key(box_id, acc_id)
+            return 1 if key and cls._WATCHED_BOXES.pop(key, None) else 0
 
     @classmethod
     def get_watched_boxes(cls):
+        from zalo_group_checker import activity_clock, vietnam_time
         with cls._LOCK:
             now = time.time()
-            out = []
+            output = []
             for bid, st in cls._WATCHED_BOXES.items():
                 if not st.get("enabled"):
                     continue
-                d = dict(st)
-                elapsed = max(0.0, now - float(d.get("last_activity_ts") or now))
-                d["silence_sec"] = round(elapsed, 1)
-                d["remaining_sec"] = max(0.0, round(float(d.get("timeout_sec") or 90.0) - elapsed, 1))
-                out.append(d)
-            return out
+                # No participant lists or raw cookies in the frontend status payload.
+                clock = activity_clock(st.get("last_activity_ts"), st.get("timeout_sec", 90),
+                    now=now, has_message=bool(st.get("last_msg_id")))
+                output.append({
+                    "box_id": bid, "box_name": st.get("box_name"), "platform": st.get("platform"),
+                    "acc_id": st.get("acc_id"), "timeout_sec": st.get("timeout_sec"),
+                    "last_sync_at": st.get("last_sync_at"),
+                    "last_sync_ok": st.get("last_sync_ok"),
+                    "last_sync_age_seconds": round(now-st["last_sync_at"], 1) if st.get("last_sync_at") else None,
+                    "last_sender_name": st.get("last_sender_name"),
+                    "last_msg_text": st.get("last_msg_text"), "alerts_sent": st.get("alerts_sent", 0),
+                    "last_message_at_label": vietnam_time(clock["last_message_at"]),
+                    "inactive_since_label": vietnam_time(clock["inactive_since"]) if clock["inactive_since"] else None,
+                    **clock,
+                    "silence_sec": clock["silence_seconds"], "remaining_sec": clock["remaining_seconds"],
+                })
+            return output
 
     @classmethod
-    def record_incoming_message(cls, box_id, sender_uid, sender_name, msg_text, msg_id="", platform="zalo", box_name=""):
+    def record_incoming_message(cls, box_id, sender_uid, sender_name, msg_text, msg_id="", platform="zalo", box_name="", account_id=None):
         """Cập nhật tức thì (0.00ms) mỗi khi có bất kỳ ai nhắn tin vào Box đang được Canh Treo."""
         bid = _clean_zalo_id(box_id) or str(box_id or "").strip()
         if not bid:
             return
         with cls._LOCK:
-            st = cls._WATCHED_BOXES.get(bid)
+            key = cls._resolve_key(bid, account_id)
+            st = cls._WATCHED_BOXES.get(key)
             if not st or not st.get("enabled"):
                 return
             clean_txt = strip_invisible_chars(str(msg_text or "")).strip()
@@ -1315,15 +1388,16 @@ class CanhTreoWatchdogEngine:
                 st["known_members"][s_uid] = s_name
 
     @classmethod
-    def _sync_box_latest_messages(cls, bid):
-        """Chủ động lấy danh sách thành viên & tin nhắn cuối cùng trong Box từ API Zalo để thông tin luôn chuẩn xác 100%."""
+    def _sync_box_latest_messages(cls, watch_key):
+        """Synchronize one account-scoped watcher without blocking the clock."""
         with cls._LOCK:
-            st = cls._WATCHED_BOXES.get(bid)
+            st = cls._WATCHED_BOXES.get(watch_key)
             if not st or not st.get("enabled"):
                 return
+            bid = str(st.get("box_id") or "")
             plat = st.get("platform", "zalo")
             aid = st.get("acc_id", 0)
-        if plat != "zalo":
+        if plat != "zalo" or not bid:
             return
         try:
             accs = get_all_accounts_from_ram(platform="zalo", enabled_only=True)
@@ -1339,17 +1413,17 @@ class CanhTreoWatchdogEngine:
             real_gname = zc.get_group_real_name(bid)
             if real_gname:
                 with cls._LOCK:
-                    if bid in cls._WATCHED_BOXES:
-                        cls._WATCHED_BOXES[bid]["box_name"] = real_gname
+                    if watch_key in cls._WATCHED_BOXES:
+                        cls._WATCHED_BOXES[watch_key]["box_name"] = real_gname
             mems = zc.get_members_full(bid, use_cache=True) or []
             if mems:
                 with cls._LOCK:
-                    if bid in cls._WATCHED_BOXES:
+                    if watch_key in cls._WATCHED_BOXES:
                         for m in mems:
                             mu = _clean_zalo_id(m.get("uid") or m.get("id"))
                             mn = str(m.get("name") or "").strip()
                             if mu and mn and mu != str(zc.uid or ""):
-                                cls._WATCHED_BOXES[bid]["known_members"][mu] = mn
+                                cls._WATCHED_BOXES[watch_key]["known_members"][mu] = mn
             msgs = zc.get_recent_group_messages(bid) or []
             if msgs:
                 last_m = msgs[-1]
@@ -1362,19 +1436,30 @@ class CanhTreoWatchdogEngine:
                         rc = rc.get("title") or rc.get("text") or rc.get("msg") or "[Media/Sticker]"
                     clean_c = strip_invisible_chars(str(rc)).strip() or "[Media/Sticker]"
                     with cls._LOCK:
-                        st_now = cls._WATCHED_BOXES.get(bid)
+                        st_now = cls._WATCHED_BOXES.get(watch_key)
                         if st_now and st_now.get("enabled"):
                             prev_mid = st_now.get("last_msg_id")
                             if mid and mid != prev_mid:
-                                if prev_mid:
-                                    # Có tin nhắn mới thực sự!
-                                    st_now["last_activity_ts"] = time.time()
+                                # A Zalo fetch can lag behind the message event: use actual message timestamp.
+                                raw_ts = last_m.get("ts") or last_m.get("timestamp") or last_m.get("time")
+                                try:
+                                    observed = float(raw_ts)
+                                    if observed > 1e11:
+                                        observed /= 1000.0
+                                    if not 946684800 < observed <= time.time() + 300:
+                                        observed = time.time()
+                                except (TypeError, ValueError):
+                                    observed = time.time()
+                                # Never roll the clock back when polling delivers old records.
+                                if not prev_mid or observed > float(st_now.get("last_activity_ts") or 0):
+                                    st_now["last_activity_ts"] = observed
                                     st_now["alerted_for_activity_ts"] = 0.0
                                 st_now["last_msg_id"] = mid
                                 st_now["last_sender_uid"] = u_from
                                 st_now["last_sender_name"] = d_name
                                 st_now["last_msg_text"] = clean_c[:350]
-                                st_now["last_msg_time_str"] = time.strftime("%H:%M:%S %d/%m/%Y")
+                                from zalo_group_checker import vietnam_time
+                                st_now["last_msg_time_str"] = vietnam_time(st_now["last_activity_ts"])
                                 if u_from and u_from != "0":
                                     st_now["participants"][u_from] = {
                                         "uid": u_from,
@@ -1384,25 +1469,40 @@ class CanhTreoWatchdogEngine:
                                         "time_str": time.strftime("%H:%M:%S"),
                                     }
         except Exception:
-            pass
+            with cls._LOCK:
+                if watch_key in cls._WATCHED_BOXES:
+                    cls._WATCHED_BOXES[watch_key]["last_sync_ok"] = False
+        else:
+            with cls._LOCK:
+                if watch_key in cls._WATCHED_BOXES:
+                    cls._WATCHED_BOXES[watch_key]["last_sync_ok"] = True
+        finally:
+            with cls._LOCK:
+                if watch_key in cls._WATCHED_BOXES:
+                    cls._WATCHED_BOXES[watch_key]["last_sync_at"] = time.time()
 
     @classmethod
     def _send_telegram_inactivity_alert(cls, st_snapshot):
         """Đẩy thông báo Canh Treo 1p30s siêu chi tiết về thẳng Bot Telegram."""
         try:
             import get_ck_im_zalo as _tg_mod
-            bot = getattr(_tg_mod, "_BOT_INSTANCE", None)
+            # Never start a competing Telegram poller just to deliver an alert.
+            bot = getattr(_tg_mod, "_BOT_INSTANCE", None) or globals().get("_TELEGRAM_BOT_RUNNER")
             if bot is None:
-                bot = _tg_mod.start_background_telegram_bot(TELEGRAM_BOT_TOKEN)
+                return
             target_chat = st_snapshot.get("notify_chat_id") or getattr(_tg_mod, "ROOT_ADMIN_ID", TELEGRAM_ADMIN_ID)
-            bid = st_snapshot["box_id"]
-            bname = st_snapshot["box_name"]
+            from html import escape
+            bid = escape(str(st_snapshot["box_id"]))
+            bname = escape(str(st_snapshot.get("box_name") or "Box Zalo"))
             timeout_s = float(st_snapshot.get("timeout_sec") or 90.0)
             silence_s = round(time.time() - float(st_snapshot.get("last_activity_ts") or time.time()), 1)
-            last_sender = st_snapshot.get("last_sender_name") or "Không rõ"
-            last_uid = st_snapshot.get("last_sender_uid") or "-"
-            last_msg = st_snapshot.get("last_msg_text") or "(Không có nội dung)"
-            last_time = st_snapshot.get("last_msg_time_str") or time.strftime("%H:%M:%S")
+            from zalo_group_checker import vietnam_time
+            stop_at = float(st_snapshot.get("last_activity_ts") or time.time()) + timeout_s
+            last_time = vietnam_time(st_snapshot.get("last_activity_ts"))
+            last_sender = escape(str(st_snapshot.get("last_sender_name") or "Không rõ"))
+            last_uid = escape(str(st_snapshot.get("last_sender_uid") or "-"))
+            last_msg = escape(str(st_snapshot.get("last_msg_text") or "(Không có nội dung)"))
+            # last_time is derived above from the original timestamp (GMT+7).
 
             # Xác định danh sách những người trong Box đã im lặng không nhắn tin tiếp theo trong vòng 1p30s
             now = time.time()
@@ -1412,19 +1512,19 @@ class CanhTreoWatchdogEngine:
             for p_uid, p_info in parts.items():
                 p_Wait = round(now - float(p_info.get("last_ts") or 0), 1)
                 if p_Wait >= timeout_s - 1.0:
-                    silent_people.append(f"• <b>{p_info['name']}</b> (<code>{p_uid}</code>) — Ngưng nhắn: <b>{int(p_Wait)}s</b> (Tin cuối: <i>{p_info.get('last_msg', '')[:45]}</i>)")
-            for km_uid, km_name in list(known_m.items())[:12]:
-                if km_uid not in parts:
-                    silent_people.append(f"• <b>{km_name}</b> (<code>{km_uid}</code>) — Không nhắn câu nào trong <b>1p30s</b> qua!")
+                    silent_people.append(f"• <b>{escape(str(p_info.get('name') or p_uid))}</b> (<code>{escape(str(p_uid))}</code>) — Ngưng nhắn: <b>{int(p_Wait)}s</b> (Tin cuối: <i>{escape(str(p_info.get('last_msg', ''))[:45])}</i>)")
+            # Group membership alone does not establish when someone last messaged;
+            # never label a member inactive without observing an actual message timestamp.
 
             if not silent_people:
-                silent_people.append(f"• Toàn bộ thành viên trong Box <b>{bname}</b> đã im lặng suốt <b>1 phút 30 giây ({int(silence_s)}s)</b> sau tin nhắn của <b>{last_sender}</b>!")
+                silent_people.append(f"• Không có tin nhắn mới trong Box <b>{bname}</b> suốt <b>{int(silence_s)}s</b> kể từ tin cuối của <b>{last_sender}</b>.")
 
             silent_block = "\n".join(silent_people[:10])
             alert_html = (
                 f"🚨 <b>[ZENVYRE CANH TREO 1P30S — PHÁT HIỆN NGƯNG NHẮN!]</b> 🚨\n\n"
                 f"📦 <b>Box đang canh:</b> <b>{bname}</b> (ID: <code>{bid}</code>)\n"
-                f"⏱️ <b>Thời gian không nhắn tiếp:</b> <b>1 phút 30 giây ({silence_s:.0f}s)</b>\n\n"
+                f"⏱️ <b>Im lặng:</b> <b>{silence_s:.0f}s / {timeout_s:.0f}s</b>\n"
+                f"🕒 <b>Ngừng nhắn từ:</b> <code>{vietnam_time(stop_at)}</code>\n\n"
                 f"🔇 <b>Ai không nhắn tin tiếp theo trong 1p30s:</b>\n"
                 f"<blockquote>{silent_block}</blockquote>\n\n"
                 f"💬 <b>TIN NHẮN CUỐI CÙNG TRONG BOX:</b>\n"
@@ -1439,13 +1539,35 @@ class CanhTreoWatchdogEngine:
                 "inline_keyboard": [
                     [
                         {"text": "🔄 Xem Trạng Thái Canh Treo", "callback_data": "pickfn:fn_canh_treo"},
-                        {"text": f"🛑 Tắt Canh Box {bid[-4:]}", "callback_data": f"canhtreo_stop:{bid}"},
+                        {"text": f"🛑 Tắt Canh Box {bid[-4:]}",
+                         "callback_data": (f"canhtreo_stop:{st_snapshot.get('acc_id') or 0}:{st_snapshot['box_id']}"
+                             if len(f"canhtreo_stop:{st_snapshot.get('acc_id') or 0}:{st_snapshot['box_id']}".encode()) <= 64
+                             else "pickfn:fn_canh_treo")},
                     ]
                 ]
             }
             bot.send_text(target_chat, alert_html, reply_markup=kb)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Provider exception messages may include private content; log the class only.
+            import logging
+            logging.getLogger(__name__).error("Zalo inactivity alert failed (%s)", type(exc).__name__)
+
+    @classmethod
+    def collect_due_alerts(cls, now=None):
+        """Pure watchdog transition: one alert per unchanged last message."""
+        now = time.time() if now is None else float(now)
+        pending = []
+        with cls._LOCK:
+            for st in cls._WATCHED_BOXES.values():
+                if not st.get("enabled") or not st.get("last_msg_id"):
+                    continue
+                last = float(st.get("last_activity_ts") or 0)
+                timeout = float(st.get("timeout_sec") or 90)
+                if now - last >= timeout and st.get("alerted_for_activity_ts") != last:
+                    st["alerted_for_activity_ts"] = last
+                    st["alerts_sent"] = int(st.get("alerts_sent") or 0) + 1
+                    pending.append(dict(st))
+        return pending
 
     @classmethod
     def ensure_daemon_started(cls):
@@ -1456,6 +1578,7 @@ class CanhTreoWatchdogEngine:
 
         def _watchdog_worker():
             poll_tick = 0
+            scan_cursor = 0
             while True:
                 try:
                     with cls._LOCK:
@@ -1464,26 +1587,16 @@ class CanhTreoWatchdogEngine:
                         poll_tick += 1
                         # Mỗi 1.0s đồng bộ lịch sử mới nhất từ API Zalo cho các Box đang canh treo
                         if poll_tick % 2 == 0:
-                            for bid in active_ids[:10]:
-                                cls._sync_box_latest_messages(bid)
-                        now = time.time()
-                        to_alert = []
-                        with cls._LOCK:
-                            for bid in active_ids:
-                                st = cls._WATCHED_BOXES.get(bid)
-                                if not st or not st.get("enabled"):
-                                    continue
-                                last_act = float(st.get("last_activity_ts") or st.get("started_at") or now)
-                                t_out = float(st.get("timeout_sec") or 90.0)
-                                if (now - last_act >= t_out) and (st.get("alerted_for_activity_ts") != last_act):
-                                    st["alerted_for_activity_ts"] = last_act
-                                    st["alerts_sent"] = int(st.get("alerts_sent") or 0) + 1
-                                    # Đặt lại mốc để nếu tiếp tục im lặng thêm 1p30s nữa sẽ báo tiếp
-                                    st["last_activity_ts"] = now
-                                    st["alerted_for_activity_ts"] = 0.0
-                                    to_alert.append(dict(st))
-                        for alert_st in to_alert:
-                            threading.Thread(target=cls._send_telegram_inactivity_alert, args=(alert_st,), daemon=True).start()
+                            # Round-robin: every monitored box gets a turn, unlike the old [:10].
+                            count = len(active_ids)
+                            chunk = [active_ids[(scan_cursor + i) % count]
+                                for i in range(min(2, count))]
+                            scan_cursor = (scan_cursor + len(chunk)) % count
+                            for watch_key in chunk:
+                                cls._schedule_sync(watch_key)
+                        for alert_st in cls.collect_due_alerts():
+                            threading.Thread(target=cls._send_telegram_inactivity_alert,
+                                args=(alert_st,), daemon=True, name="ZaloInactivityAlert").start()
                 except Exception:
                     pass
                 time.sleep(0.5)
@@ -1657,10 +1770,14 @@ def refresh_owner_uids():
 AUTHORIZED_USERS_RAM_CACHE = {}
 AUTHORIZED_USERS_LOCK = threading.RLock()
 _AUTHORIZED_USERS_LOADED = False
-_PRIORITY_CMD_EXECUTOR = ThreadPoolExecutor(max_workers=32)
+_PRIORITY_CMD_EXECUTOR = ThreadPoolExecutor(max_workers=12, thread_name_prefix="ZaloCommands")
+# Preserve a dedicated lane for user-visible replies and input when multiple cookies are active.
 # Menu replies should not wait behind slow media or other network requests.
-_INTERACTIVE_REPLY_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="InteractiveReply")
-_INTERACTIVE_INPUT_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="InteractiveInput")
+_INTERACTIVE_REPLY_EXECUTOR = ThreadPoolExecutor(max_workers=6, thread_name_prefix="InteractiveReply")
+_INTERACTIVE_INPUT_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="InteractiveInput")
+# All in-chat commands have an independent lane from media, background event handling,
+# and remote outbound sends; provider throttles and stop-cooperation remain unchanged.
+_ZALO_COMMAND_INPUT_EXECUTOR = ThreadPoolExecutor(max_workers=10, thread_name_prefix="ZaloCommandInput")
 _STICKER_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="StickerMedia")
 
 def _zalo_input_executor(text):
@@ -1668,8 +1785,11 @@ def _zalo_input_executor(text):
         text = text.get("title") or text.get("text") or text.get("msg") or ""
     parts = str(text or "").strip().lower().split(None, 1)
     command = parts[0] if parts else ""
-    if command in (".menu", "/menu", "!menu", ".help", "/help", "!help", ".m", ".h", ".lenh", ".hdsd"):
+    if command in (".menu", "/menu", "!menu", ".help", "/help", "!help", ".m", ".h", ".lenh", ".hdsd",
+                   ".dsbox", "/dsbox", "!dsbox", ".listbox", ".dsnhom", ".tasks", ".running"):
         return _INTERACTIVE_INPUT_EXECUTOR
+    if command.startswith((".", "/", "!")) and len(command) > 1:
+        return _ZALO_COMMAND_INPUT_EXECUTOR
     return _PRIORITY_CMD_EXECUTOR
 _TYPING_BG_POOL = ThreadPoolExecutor(max_workers=8)
 
@@ -5259,7 +5379,7 @@ class Zalo:
         return self.groups(use_cache=use_cache)
 
     def groups(self, use_cache=True):
-        cache_key = str(self.uid or self.imei)
+        cache_key = str(self.imei or self.uid)
         if use_cache:
             with self._POOL_LOCK:
                 c = self._GROUPS_CACHE.get(cache_key)
@@ -5276,8 +5396,10 @@ class Zalo:
             if _clean_zalo_id(g) and _clean_zalo_id(g) != str(self.uid or "")
         ]
         for gid in all_gids:
-            if self.uid:
-                KNOWN_GROUPS_BY_ACC[self.uid].add(gid)
+            if self.imei:
+                KNOWN_GROUPS_BY_ACC[str(self.imei)].add(gid)
+            elif self.uid:
+                KNOWN_GROUPS_BY_ACC[str(self.uid)].add(gid)
             ALL_KNOWN_ZALO_GROUP_IDS.add(gid)
 
         out = []
@@ -5501,7 +5623,7 @@ class Zalo:
         return {"msgs": [], "groupMsgs": []}
 
     def friends(self, use_cache=True):
-        cache_key = str(self.uid or self.imei)
+        cache_key = str(self.imei or self.uid)
         if use_cache:
             with self._POOL_LOCK:
                 c = self._FRIENDS_CACHE.get(cache_key)
@@ -6932,7 +7054,7 @@ class Zalo:
         gid_s = _clean_zalo_id(gid) or str(gid).strip()
         if not gid_s:
             return ""
-        cache_key = str(self.uid or self.imei)
+        cache_key = str(self.imei or self.uid)
         with self._POOL_LOCK:
             c = self._GROUPS_CACHE.get(cache_key)
             if c and isinstance(c.get("data"), list):
@@ -8864,9 +8986,13 @@ class ZaloQRLoginManager:
             "stop_ev": threading.Event(),
         }
         with cls.LOCK:
+            # Do not cancel a pending first-account QR when another account
+            # starts logging in. Only clean up stale QR workers.
             for old_k, old_v in list(cls.SESSIONS.items()):
-                old_v["stop_ev"].set()
-                if time.time() - old_v.get("created_at", 0) > 60:
+                if time.time() - old_v.get("created_at", 0) > 180:
+                    old_stop = old_v.get("stop_ev")
+                    if hasattr(old_stop, "set"):
+                        old_stop.set()
                     cls.SESSIONS.pop(old_k, None)
             cls.SESSIONS[session_id] = st
             cls._LAST_START_TS = now_t
@@ -9078,22 +9204,34 @@ class ZaloQRLoginManager:
             conn = None
             try:
                 conn = db()
-                existing = None
-                if uid:
-                    existing = conn.execute("SELECT id FROM accounts WHERE platform='zalo' AND uid=?", (uid,)).fetchone()
-                if not existing and imei:
-                    existing = conn.execute("SELECT id FROM accounts WHERE platform='zalo' AND imei=?", (imei,)).fetchone()
+                conn.execute("BEGIN IMMEDIATE")
+                # A QR scan may belong to a second device of the same Zalo UID.
+                # Prefer IMEI; never replace a different IMEI merely because UID matches.
+                existing = conn.execute(
+                    "SELECT id, owner_tg_id FROM accounts WHERE platform='zalo' AND imei=?",
+                    (imei,)
+                ).fetchone() if imei else None
+                if not existing and uid:
+                    legacy_rows = conn.execute(
+                        "SELECT id, imei, owner_tg_id FROM accounts WHERE platform='zalo' AND uid=? ORDER BY id",
+                        (uid,)
+                    ).fetchall()
+                    existing = next((row for row in legacy_rows
+                                     if not str(row["imei"] or "").strip()), None)
                 if existing:
+                    old_owner = str(existing["owner_tg_id"] or "").strip()
+                    if old_owner and old_owner != str(TELEGRAM_ADMIN_ID):
+                        raise ValueError("Tài khoản thuộc một người quản lý khác")
                     saved_acc_id = existing["id"]
                     conn.execute(
-                        "UPDATE accounts SET name=?, imei=?, cookies=?, uid=?, user_agent=?, zpw_enk=?, pc_name=?, chat_cmd_enabled=1, allow_all_cmd=0, enabled=1 WHERE id=?",
-                        (d_name, imei, json.dumps(clean_c, ensure_ascii=False), uid, ua_bound, zpw_enk, pc_name, saved_acc_id)
+                        "UPDATE accounts SET name=?, imei=?, cookies=?, uid=?, user_agent=?, zpw_enk=?, pc_name=?, chat_cmd_enabled=1, allow_all_cmd=0, enabled=1, owner_tg_id=CASE WHEN owner_tg_id='' THEN ? ELSE owner_tg_id END WHERE id=?",
+                        (d_name, imei, json.dumps(clean_c, ensure_ascii=False), uid, ua_bound, zpw_enk, pc_name, str(TELEGRAM_ADMIN_ID), saved_acc_id)
                     )
                 else:
                     cur = conn.execute(
-                        """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, user_agent, zpw_enk, pc_name, created_at)
-                           VALUES (?, 'zalo', ?, ?, '', 0, ?, 1, '.', 0, 1, ?, ?, ?, ?)""",
-                        (d_name, imei, json.dumps(clean_c, ensure_ascii=False), uid, ua_bound, zpw_enk, pc_name, time.time())
+                        """INSERT INTO accounts (name, platform, imei, cookies, token, is_bot, uid, chat_cmd_enabled, cmd_prefix, allow_all_cmd, enabled, user_agent, zpw_enk, pc_name, created_at, owner_tg_id)
+                           VALUES (?, 'zalo', ?, ?, '', 0, ?, 1, '.', 0, 1, ?, ?, ?, ?, ?)""",
+                        (d_name, imei, json.dumps(clean_c, ensure_ascii=False), uid, ua_bound, zpw_enk, pc_name, time.time(), str(TELEGRAM_ADMIN_ID))
                     )
                     saved_acc_id = cur.lastrowid
                 conn.commit()
@@ -11698,9 +11836,9 @@ def parse_and_execute_inchat_command(
         "ta": "stopall",
         "soifull": "soi",
         "scanbox": "soi",
-        "dsbox": "soi",
-        "listbox": "soi",
-        "dsnhom": "soi",
+        "dsbox": "dsbox",
+        "listbox": "dsbox",
+        "dsnhom": "dsbox",
         "gll": "gall",
         "ngonall": "gall",
         "nll": "nall",
@@ -11828,14 +11966,15 @@ def parse_and_execute_inchat_command(
         with SYSTEM_CFG_LOCK:
             acc_filter_cfg = SYSTEM_RUNTIME_CONFIG.get("active_acc_filter", "ALL")
             single_rep_cfg = bool(SYSTEM_RUNTIME_CONFIG.get("single_reply_mode", True))
-        if str(acc_filter_cfg).upper() != "ALL" and str(acc_filter_cfg).isdigit():
+        account_local_reply = cmd_token in ("menu", "help", "lenh", "bot", "hdsd", "dsbox", "listbox", "dsnhom", "running", "tasks")
+        if not account_local_reply and str(acc_filter_cfg).upper() != "ALL" and str(acc_filter_cfg).isdigit():
             if int(eff_acc_row.get("id") or 0) != int(acc_filter_cfg):
                 only_acc = get_account_from_ram(int(acc_filter_cfg))
                 if only_acc:
                     eff_acc_row = only_acc
         if broadcast_all_accs is None:
             # Mặc định phản hồi gọn gàng bằng đúng Acc nhận lệnh (tránh nhiều Acc cùng nhắn bảng thông báo gây loạn/rối!)
-            broadcast_all_accs = (not single_rep_cfg) and (cmd_token not in ("menu", "help", "lenh", "hdsd", "files", "dsfile", "listfile"))
+            broadcast_all_accs = (not single_rep_cfg) and not account_local_reply and (cmd_token not in ("files", "dsfile", "listfile"))
         if not broadcast_all_accs:
             target_accs = [eff_acc_row]
         else:
@@ -11867,8 +12006,11 @@ def parse_and_execute_inchat_command(
                         use_emoji=False, icon_count=0, auto_retry_thread_type=True,
                         parse_auto_tags=False, priority_bypass=True
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Never log source content/cookies/provider exception strings.
+                    app.logger.warning(
+                        "Zalo interactive reply failed: account_id=%s, exception=%s",
+                        a_item.get("id"), type(exc).__name__)
             elif platform == "discord":
                 DiscordStealthAntiBanEngine.ACTIVE_DISCORD_POLL_CHANNELS[a_item.get("id", acc_id)].add(str(thread_id))
                 try:
@@ -11894,7 +12036,7 @@ def parse_and_execute_inchat_command(
                     pass
 
         for idx_a, a_item in enumerate(target_accs[:12]):
-            executor = _INTERACTIVE_REPLY_EXECUTOR if cmd_token in ("menu", "help", "lenh", "bot", "hdsd") else _PRIORITY_CMD_EXECUTOR
+            executor = _INTERACTIVE_REPLY_EXECUTOR if account_local_reply else _PRIORITY_CMD_EXECUTOR
             executor.submit(_reply_for_acc, idx_a, a_item)
 
     if cmd_token in ("menu", "help", "lenh", "bot", "hdsd"):
@@ -11987,6 +12129,45 @@ def parse_and_execute_inchat_command(
                 }
             _send_reply(f"Đã bật chế độ Bám Sát & Chặn Mục Tiêu 0s ({len(blocks_c)} câu) tại box {thread_id}: Ai nhắn vào sẽ tự động bị tag và phản đòn tức thì!", broadcast_all_accs=False)
         log_system_command(acc_id, thread_id, sender_id, text, f"Bật/Tắt chế độ .chan/.bam ({platform})")
+        return True
+
+    if cmd_token == "dsbox" and platform == "zalo":
+        from account_views import groups_for_account, paginate
+        try:
+            page = int(arg_body.strip() or "1")
+        except ValueError:
+            _send_reply("Cú pháp: .dsbox [trang] · Ví dụ .dsbox 2", broadcast_all_accs=False)
+            return True
+        records = groups_for_account(acc_row, Zalo._GROUPS_CACHE, KNOWN_GROUPS_BY_ACC)
+        try:
+            result = paginate(records, page, size=12)
+        except ValueError:
+            _send_reply("Số trang không hợp lệ. Dùng .dsbox 1 để xem từ đầu.", broadcast_all_accs=False)
+            return True
+        lines = [f"DS BOX RIÊNG ACC #{acc_id} · {acc_row.get('name') or 'Zalo'}",
+                 f"Trang {result['page']}/{result['total_pages']} · {result['total']} nhóm"]
+        lines.extend(f"{(page-1)*12+i}. {r['name']} · ID: {r['id']}" for i,r in enumerate(result["rows"],1))
+        cache_record = Zalo._GROUPS_CACHE.get(str(acc_row.get("uid") or "")) or Zalo._GROUPS_CACHE.get(str(acc_row.get("imei") or ""))
+        cache_timestamp = cache_record.get("ts", 0) if isinstance(cache_record, dict) else 0
+        stale = not records or not cache_record or bool(cache_timestamp and time.time()-float(cache_timestamp)>180)
+        if stale:
+            from account_views import request_group_refresh
+            if zalo_client is not None:
+                queued = request_group_refresh(acc_id,
+                    lambda: zalo_client.get_groups(use_cache=False),
+                    lambda ok: _send_reply("Đã cập nhật nhóm của acc #%s. Gõ .dsbox 1 để xem." % acc_id,
+                        broadcast_all_accs=False) if ok else None)
+                if queued:
+                    lines.append("Đang cập nhật nhóm của cookie này trong nền...")
+                elif not records:
+                    lines.append("Chưa có cache nhóm. Thử lại .dsbox 1 sau khi kết nối Zalo.")
+            else:
+                lines.append("Tài khoản này chưa có phiên Zalo hoạt động.")
+        if result["has_next"]:
+            lines.append(f"Trang tiếp: .dsbox {page+1}")
+        if result["has_previous"]:
+            lines.append(f"Trang trước: .dsbox {page-1}")
+        _send_reply("\n".join(lines), broadcast_all_accs=False, reply_color_mode="none")
         return True
 
     if cmd_token in ("soi",):
@@ -12172,7 +12353,7 @@ def parse_and_execute_inchat_command(
     if cmd_token in ("canhtreo",):
         sub_ct = arg_body.strip().lower()
         if sub_ct in ("off", "tat", "0", "stop", "dung"):
-            CanhTreoWatchdogEngine.disable_watch(thread_id)
+            CanhTreoWatchdogEngine.disable_watch(thread_id, acc_id=acc_id)
             _send_reply(f"🛑 Đã TẮT chế độ Canh Treo 1p30s tại Box {thread_id}!", broadcast_all_accs=False)
         elif sub_ct in ("status", "check", "ds", "list"):
             w_list = CanhTreoWatchdogEngine.get_watched_boxes()
@@ -13919,7 +14100,26 @@ def parse_and_execute_inchat_command(
     return True
 
 # LISTENER 24/7 TRÊN ZALO (WEBSOCKET + HTTP FALLBACK)
-_SHARED_ZALO_POLLER_POOL = ThreadPoolExecutor(max_workers=16)
+_SHARED_ZALO_POLLER_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="ZaloBackgroundPoll")
+_ZALO_POLL_SLOTS = threading.BoundedSemaphore(24)
+
+
+def _submit_zalo_background_poll(fn, *args):
+    """Drop redundant discovery work when saturated; never queue unlimited HTTP jobs."""
+    if not _ZALO_POLL_SLOTS.acquire(blocking=False):
+        return False
+    def run():
+        try:
+            return fn(*args)
+        finally:
+            _ZALO_POLL_SLOTS.release()
+    try:
+        _SHARED_ZALO_POLLER_POOL.submit(run)
+    except RuntimeError:
+        _ZALO_POLL_SLOTS.release()
+        return False
+    return True
+
 
 class ZaloRealtimeListener:
     def __init__(self, acc_id):
@@ -13935,6 +14135,7 @@ class ZaloRealtimeListener:
         self.started_at = time.time()
         self.ws_status = "Đang khởi tạo Zalo Shield..."
         self.last_event_ts = 0.0
+        self.last_poll_attempt_at = 0.0
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.poller_thread = threading.Thread(target=self._run_http_poller_loop, daemon=True)
 
@@ -14338,7 +14539,8 @@ class ZaloRealtimeListener:
             cmd_num = 0
         raw_mentions = self._extract_raw_mentions_from_msg_obj(msg_obj)
 
-        known_gids = (KNOWN_GROUPS_BY_ACC.get(client.uid, set()) | ALL_KNOWN_ZALO_GROUP_IDS) - {"0", "", my_uid, my_s2m, "null", "None"}
+        acc_group_key = str(client.imei or client.uid or self.acc_id)
+        known_gids = (KNOWN_GROUPS_BY_ACC.get(acc_group_key, set()) | ALL_KNOWN_ZALO_GROUP_IDS) - {"0", "", my_uid, my_s2m, "null", "None"}
         is_group = bool(
             default_is_group
             or bool(grid_id and grid_id not in (my_uid, my_s2m))
@@ -14368,7 +14570,7 @@ class ZaloRealtimeListener:
             if thread_id and thread_id not in (my_uid, my_s2m):
                 ALL_KNOWN_ZALO_GROUP_IDS.add(thread_id)
                 if client.uid:
-                    KNOWN_GROUPS_BY_ACC[client.uid].add(thread_id)
+                    KNOWN_GROUPS_BY_ACC[acc_group_key].add(thread_id)
         else:
             if raw_uid_from in ("0", "", my_uid, my_s2m):
                 if id_to and id_to not in (my_uid, my_s2m):
@@ -14431,6 +14633,7 @@ class ZaloRealtimeListener:
                 msg_text=content,
                 msg_id=msg_id or cli_msg_id,
                 platform="zalo",
+                account_id=self.acc_id,
             )
         except Exception:
             pass
@@ -14442,6 +14645,7 @@ class ZaloRealtimeListener:
         elif cmd_Quick in (".ta", ".stopall", ".dunghet", ".tathet", "/stopall", "!ta", "!stopall"):
             if is_true_account_owner(sender_for_auth, client_uid=my_uid, client_send2me_id=my_s2m, platform="zalo") or is_user_authorized_for_cmd(sender_for_auth, my_uid, my_s2m, allow_all=False, sender_name=d_name, platform="zalo"):
                 stop_tasks_for_thread(None, acc_id=self.acc_id)
+        command_started_at = time.monotonic()
         was_cmd = parse_and_execute_inchat_command(
             zalo_client=client,
             acc_row=acc_row,
@@ -14458,6 +14662,11 @@ class ZaloRealtimeListener:
             reply_target=reply_target,
             raw_msg_obj=msg_obj
         )
+        if was_cmd:
+            from command_metrics import record_command
+            command_text = content.strip().split(None, 1)[0]
+            record_command("." + command_text.lstrip("./!").lower(),
+                1000 * (time.monotonic()-command_started_at))
         if not was_cmd and str(thread_id) in AUTO_INTERCEPT_BOXES:
             ic_cfg = AUTO_INTERCEPT_BOXES.get(str(thread_id))
             if ic_cfg and ic_cfg.get("enabled") and uid_from and uid_from not in ("0", my_uid, my_s2m) and uid_from not in OWNER_UIDS_CACHE:
@@ -14597,6 +14806,7 @@ class ZaloRealtimeListener:
         now_t = time.time()
         now_ms = int(now_t * 1000)
         my_uid = _clean_zalo_id(client.uid or acc_now.get("uid"))
+        acc_key = str(client.imei or client.uid or self.acc_id)
 
         try:
             last_conv = client.get_last_msgs()
@@ -14635,10 +14845,10 @@ class ZaloRealtimeListener:
                             or _clean_zalo_id(m.get("idTo"))
                             or _clean_zalo_id(m.get("toid"))
                         )
-                        if (not gid_m or gid_m == my_uid) and _clean_zalo_id(m.get("uidFrom")) in KNOWN_GROUPS_BY_ACC.get(client.uid, set()):
+                        if (not gid_m or gid_m == my_uid) and _clean_zalo_id(m.get("uidFrom")) in KNOWN_GROUPS_BY_ACC.get(acc_key, set()):
                             gid_m = _clean_zalo_id(m.get("uidFrom"))
                         if gid_m and gid_m != my_uid:
-                            KNOWN_GROUPS_BY_ACC[client.uid].add(gid_m)
+                            KNOWN_GROUPS_BY_ACC[acc_key].add(gid_m)
                             ALL_KNOWN_ZALO_GROUP_IDS.add(gid_m)
                         if gid_m and gid_m != my_uid and is_direct_user_command_text(ct) and (msg_ts == 0 or abs(now_ms - msg_ts) <= 900000):
                             m_copy = dict(m)
@@ -14680,11 +14890,11 @@ class ZaloRealtimeListener:
                             or _clean_zalo_id(m.get("idTo"))
                             or _clean_zalo_id(m.get("toid"))
                         )
-                        if (not gid_m or gid_m == my_uid) and _clean_zalo_id(m.get("uidFrom")) in (KNOWN_GROUPS_BY_ACC.get(client.uid, set()) | ALL_KNOWN_ZALO_GROUP_IDS):
+                        if (not gid_m or gid_m == my_uid) and _clean_zalo_id(m.get("uidFrom")) in (KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | ALL_KNOWN_ZALO_GROUP_IDS):
                             gid_m = _clean_zalo_id(m.get("uidFrom"))
                         if not gid_m or gid_m == my_uid:
                             continue
-                        KNOWN_GROUPS_BY_ACC[client.uid].add(gid_m)
+                        KNOWN_GROUPS_BY_ACC[acc_key].add(gid_m)
                         ALL_KNOWN_ZALO_GROUP_IDS.add(gid_m)
                         rc_g = m.get("content") or m.get("message") or m.get("msg") or ""
                         if isinstance(rc_g, dict):
@@ -14717,12 +14927,11 @@ class ZaloRealtimeListener:
 
         # Quét thông minh gridVerMap delta (chỉ 1 gói tin nhẹ kiểm tra toàn bộ nhóm xem nhóm nào vừa nhảy version tin nhắn mới)
         # giúp chạy 10-30 Acc Zalo cùng lúc không bao giờ bị Zalo chặn rate-limit hay làm die Cookie/IMEI!
-        acc_key = str(client.uid or client.imei or self.acc_id)
-        acc_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(client.uid, set())
+        acc_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(acc_key, set())
         changed_gids = []
         if not hasattr(self, "_grid_ver_cache"):
             self._grid_ver_cache = {}
-        if not acc_gids or (now_t - getattr(self, "_last_gmap_check_ts", 0.0) >= 0.22):
+        if not acc_gids or (now_t - getattr(self, "_last_gmap_check_ts", 0.0) >= 1.5):
             self._last_gmap_check_ts = now_t
             try:
                 gmap = client.get_grid_ver_map() or {}
@@ -14731,7 +14940,7 @@ class ZaloRealtimeListener:
                     if gid_s and gid_s != my_uid:
                         KNOWN_GROUPS_BY_ACC[acc_key].add(gid_s)
                         if client.uid:
-                            KNOWN_GROUPS_BY_ACC[client.uid].add(gid_s)
+                            KNOWN_GROUPS_BY_ACC[acc_key].add(gid_s)
                         ALL_KNOWN_ZALO_GROUP_IDS.add(gid_s)
                         ver_s = str(ver_v)
                         prev_ver = self._grid_ver_cache.get(gid_s)
@@ -14742,13 +14951,13 @@ class ZaloRealtimeListener:
                 pass
 
         for c_gid in changed_gids[:10]:
-            _PRIORITY_CMD_EXECUTOR.submit(self._poll_single_group, client, acc_now, c_gid, True)
+            _submit_zalo_background_poll(self._poll_single_group, client, acc_now, c_gid, True)
 
-        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 0.22:
+        if now_t - getattr(self, "_last_rot_group_poll_ts", 0.0) >= 1.0:
             self._last_rot_group_poll_ts = now_t
-            own_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(client.uid, set())
+            own_gids = KNOWN_GROUPS_BY_ACC.get(acc_key, set()) | KNOWN_GROUPS_BY_ACC.get(acc_key, set())
             all_my_gids = sorted(
-                g for g in (own_gids if own_gids else ALL_KNOWN_ZALO_GROUP_IDS)
+                g for g in own_gids
                 if _clean_zalo_id(g) and g != my_uid and (client.imei, _clean_zalo_id(g)) not in NON_MEMBER_EXCLUDED_PAIRS
             )
             if all_my_gids:
@@ -14756,7 +14965,7 @@ class ZaloRealtimeListener:
                 for h_gid in list(HOT_ACTIVE_ZALO_GROUPS):
                     if h_gid in all_my_gids and h_gid not in changed_gids and len(batch_gids) < 2:
                         batch_gids.append(h_gid)
-                batch_size = min(8, len(all_my_gids))
+                batch_size = min(3, len(all_my_gids))
                 for _ in range(len(all_my_gids)):
                     if len(batch_gids) >= batch_size:
                         break
@@ -14765,7 +14974,7 @@ class ZaloRealtimeListener:
                     if cand_g not in batch_gids and cand_g not in changed_gids:
                         batch_gids.append(cand_g)
                 for gid_target in batch_gids:
-                    _SHARED_ZALO_POLLER_POOL.submit(self._poll_single_group, client, acc_now, gid_target)
+                    _submit_zalo_background_poll(self._poll_single_group, client, acc_now, gid_target)
 
     def _run_http_poller_loop(self):
         stagger_init = (int(self.acc_id or 1) % 7) * 0.06
@@ -14807,6 +15016,7 @@ class ZaloRealtimeListener:
                                 client.cookies_dict[c_item.name] = c_item.value
                     except Exception:
                         pass
+                self.last_poll_attempt_at = time.time()
                 self._poll_active_groups_inline(client, acc_row)
                 if "Cần cập nhật" in self.ws_status or "Đang" in self.ws_status or time.time() < self.ws_conflict_until:
                     self.ws_status = "Đang hoạt động trong Acc (Sẵn sàng 24/7)"
@@ -14814,7 +15024,8 @@ class ZaloRealtimeListener:
                 if "Phiên đăng nhập" in str(e) or "zpw_enk" in str(e):
                     self.ws_status = "Cần cập nhật lại Cookie Zalo"
             active_z_cnt = max(1, len(ACTIVE_LISTENERS))
-            poll_sleep = 0.06 + min(0.12, max(0, active_z_cnt - 1) * 0.015)
+            # WebSocket handles live events; a 60ms HTTP loop overloads multi-ACC sessions.
+            poll_sleep = min(4.0, 0.85 + max(0, active_z_cnt - 1) * 0.24)
             self.stop_ev.wait(poll_sleep)
 
     def _run_ws_session(self, client, acc_row, ws_url):
@@ -15052,52 +15263,123 @@ class DiscordRealtimeListener:
     def __init__(self, *args, **kwargs):
         raise ValueError("Legacy integration retired; use official OAuth2/webhooks")
 
+# This map contains ONLY operational status and numeric account IDs, never cookies.
+_ZALO_LISTENER_FAILURES = {}
+
+
+def _plan_zalo_listener_rows(rows):
+    """Plan independent listeners without confusing two different IMEIs with a stale UID.
+
+    Multiple device records with the same IMEI share a Zalo session and must not
+    create two competing WebSockets; distinct IMEIs receive separate listeners,
+    even when a stored UID hint coincides. Reconciliation exposes skipped rows.
+    """
+    active = []
+    duplicate_by_id = {}
+    seen = {}
+    for row in rows:
+        aid = int(row["id"])
+        if not row["chat_cmd_enabled"]:
+            continue
+        imei = str(row["imei"] or "").strip()
+        uid = str(row["uid"] or "").strip()
+        key = ("imei", imei) if imei else (("uid", uid) if uid else ("row", aid))
+        previous = seen.get(key)
+        if previous is not None:
+            duplicate_by_id[aid] = previous
+            continue
+        seen[key] = aid
+        active.append(aid)
+    return active, duplicate_by_id
+
+
 def _sync_all_zalo_listeners_locked():
     refresh_accounts_ram_cache()
     refresh_owner_uids()
     try:
         conn = db()
-        rows = conn.execute("SELECT id, platform, chat_cmd_enabled, uid, imei, token FROM accounts WHERE COALESCE(enabled,1)=1 AND platform='zalo' ORDER BY id ASC").fetchall()
-        conn.close()
-        active_ids = set()
-        seen_cred_keys = set()
-        for r in rows:
-            aid = r["id"]
-            plat = (r["platform"] or "zalo").lower()
-            if r["chat_cmd_enabled"]:
-                cred_val = str(r["token"] if plat == "discord" else (r["uid"] or r["imei"] or aid)).strip()
-                cred_key = f"{plat}:{cred_val}"
-                if cred_val and cred_key in seen_cred_keys:
-                    # Ngăn chặn tuyệt đối 2 bản ghi trùng cùng 1 tài khoản chạy 2 Listener gây nhân đôi .menu!
-                    continue
-                if cred_val:
-                    seen_cred_keys.add(cred_key)
-                active_ids.add(aid)
-                lst = ACTIVE_LISTENERS.get(aid)
-                need_start = (lst is None) or (not lst.thread.is_alive())
-                if not need_start and plat in ("zalo", "discord") and hasattr(lst, "poller_thread"):
-                    if not lst.poller_thread.is_alive():
-                        need_start = True
-                if need_start:
-                    if lst is not None:
-                        try:
-                            lst.stop()
-                        except Exception:
-                            pass
-                    if plat == "discord":
-                        listener = DiscordRealtimeListener(aid)
-                    elif plat == "messenger":
-                        listener = MessengerRealtimeListener(aid)
-                    else:
-                        listener = ZaloRealtimeListener(aid)
-                    ACTIVE_LISTENERS[aid] = listener
-                    listener.start()
-        for aid in list(ACTIVE_LISTENERS.keys()):
-            if aid not in active_ids:
-                ACTIVE_LISTENERS[aid].stop()
-                ACTIVE_LISTENERS.pop(aid, None)
+        try:
+            rows = conn.execute(
+                "SELECT id, platform, chat_cmd_enabled, uid, imei, token "
+                "FROM accounts WHERE COALESCE(enabled,1)=1 AND platform='zalo' ORDER BY id ASC"
+            ).fetchall()
+        finally:
+            conn.close()
     except Exception as error:
-        app.logger.error('Zalo listener reconciliation failed: %s', type(error).__name__)
+        app.logger.error("Zalo listener account inventory failed: %s", type(error).__name__)
+        return
+
+    planned, duplicates = _plan_zalo_listener_rows(rows)
+    active_ids = set(planned)
+    known_ids = {int(row["id"]) for row in rows}
+
+    for aid, original in duplicates.items():
+        _ZALO_LISTENER_FAILURES[aid] = {
+            "code": "duplicate_imei", "conflicting_acc_id": original,
+        }
+        app.logger.warning("Zalo account #%d skipped: same session/device as account #%d", aid, original)
+
+    # A broken cookie must not prevent other accounts from starting.
+    for aid in planned:
+        try:
+            listener = ACTIVE_LISTENERS.get(aid)
+            thread = getattr(listener, "thread", None)
+            poller = getattr(listener, "poller_thread", None)
+            needs_start = (listener is None or not thread or not thread.is_alive()
+                           or not poller or not poller.is_alive()
+                           or bool(listener.stop_ev.is_set()))
+            if needs_start:
+                if listener is not None:
+                    listener.stop()
+                fresh = ZaloRealtimeListener(aid)
+                fresh.start()
+                ACTIVE_LISTENERS[aid] = fresh
+            _ZALO_LISTENER_FAILURES.pop(aid, None)
+        except Exception as error:
+            _ZALO_LISTENER_FAILURES[aid] = {
+                "code": "listener_start_failed", "error_type": type(error).__name__,
+            }
+            app.logger.error(
+                "Zalo listener account #%d failed to start: %s",
+                aid, type(error).__name__,
+            )
+
+    for aid in list(ACTIVE_LISTENERS):
+        if aid not in active_ids:
+            try:
+                ACTIVE_LISTENERS[aid].stop()
+            finally:
+                ACTIVE_LISTENERS.pop(aid, None)
+
+    for aid in list(_ZALO_LISTENER_FAILURES):
+        if aid not in known_ids:
+            _ZALO_LISTENER_FAILURES.pop(aid, None)
+
+
+def zalo_listener_status(account_id):
+    """Credential-free per-account liveness for authenticated UI/Telegram views."""
+    aid = int(account_id)
+    failure = _ZALO_LISTENER_FAILURES.get(aid)
+    if failure:
+        return dict(failure)
+    listener = ACTIVE_LISTENERS.get(aid)
+    if listener is None:
+        return {"code": "not_started"}
+    thread = getattr(listener, "thread", None)
+    poller = getattr(listener, "poller_thread", None)
+    stop_ev = getattr(listener, "stop_ev", None)
+    if stop_ev is not None and stop_ev.is_set():
+        return {"code": "stopped"}
+    if not thread or not thread.is_alive() or not poller or not poller.is_alive():
+        return {"code": "worker_unavailable"}
+    return {
+        "code": "running",
+        "ws_state": str(getattr(listener, "ws_status", "") or "")[:120],
+        "last_event_at": float(getattr(listener, "last_event_ts", 0.0) or 0.0),
+        "last_poll_attempt_at": float(getattr(listener, "last_poll_attempt_at", 0.0) or 0.0),
+        "session_hint": ("relogin_required" if "Cần cập nhật" in str(getattr(listener, "ws_status", "") or "")
+                         else "unverified"),
+    }
 
 
 def sync_all_zalo_listeners():
@@ -15358,6 +15640,20 @@ def route_zenvyre_logo_png():
     except Exception:
         return Response(b"", status=404)
 
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def miniapp_asset_revision():
+    """Fingerprint the deployed frontend assets, invalidating previous caches."""
+    digest = hashlib.sha256()
+    for filename in ("control.js", "control.css", "compact-nav.css", "v11.css"):
+        digest.update(filename.encode("utf-8"))
+        with open(os.path.join(BASE_DIR, "static", filename), "rb") as asset:
+            digest.update(asset.read())
+    return digest.hexdigest()[:16]
+
+
 @app.route("/miniapp")
 @app.route("/zenvyre")
 @app.route("/admin")
@@ -15369,6 +15665,7 @@ def route_zenvyre_miniapp():
     ctx = {
         "author": APP_AUTHOR,
         "version": APP_VERSION,
+        "asset_revision": miniapp_asset_revision(),
         "admin_id": TELEGRAM_ADMIN_ID,
         "live_accs": live_accs,
         "running_tasks": running_tasks,
@@ -15383,7 +15680,29 @@ def route_zenvyre_miniapp():
 @app.route("/api/miniapp/qr_status/<session_id>")
 def api_miniapp_qr_status(session_id):
     status = ZaloQRLoginManager.get_session_status(session_id)
-    return jsonify({key: status.get(key) for key in ("ok", "status", "message", "qr_base64", "remaining_sec")})
+    payload = {key: status.get(key) for key in ("ok", "status", "message", "qr_base64", "remaining_sec")}
+    if status.get("ok") and status.get("status") == "success":
+        imei = str(status.get("imei") or "")
+        account_row = None
+        if imei:
+            connection = db()
+            try:
+                account_row = connection.execute(
+                    "SELECT id, name FROM accounts WHERE platform='zalo' AND imei=? ORDER BY id DESC LIMIT 1",
+                    (imei,)
+                ).fetchone()
+            finally:
+                connection.close()
+        payload.update({
+            "imei": imei,
+            "account_id": account_row["id"] if account_row else None,
+            "account_handle": f"ACC-{account_row['id']}" if account_row else "",
+            "account_name": account_row["name"] if account_row else str(status.get("display_name") or ""),
+            "uid": str(status.get("uid") or ""),
+        })
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get("/api/miniapp/commands")
@@ -15453,10 +15772,7 @@ def api_miniapp_stop_task():
 
 
 def _miniapp_listener_running(account_id):
-    listener = ACTIVE_LISTENERS.get(account_id)
-    thread = getattr(listener, "thread", None)
-    stop = getattr(listener, "stop_ev", None)
-    return bool(thread and thread.is_alive() and (stop is None or not stop.is_set()))
+    return zalo_listener_status(account_id).get("code") == "running"
 
 
 @app.route("/api/miniapp/accounts")
@@ -15473,8 +15789,22 @@ def api_miniapp_accounts():
             "chat_cmd_enabled": bool(a.get("chat_cmd_enabled", 1)),
             "saved": True,
             "listener_started": _miniapp_listener_running(a["id"]),
+            "listener_health": zalo_listener_status(a["id"]),
         })
     return jsonify({"ok": True, "accounts": out, "snapshot_at": time.time(), "storage_id": storage_identity(db())})
+
+
+@app.get("/api/miniapp/account_health")
+def api_miniapp_account_health():
+    """Lightweight non-secret account health refresh for the root Mini App."""
+    items = [
+        {"id": a["id"], "name": a.get("name") or f"ACC-{a['id']}",
+         "listener_health": zalo_listener_status(a["id"]),
+         "chat_cmd_enabled": bool(a.get("chat_cmd_enabled", 1)),
+         "enabled": bool(a.get("enabled", 1))}
+        for a in get_all_accounts_from_ram(platform="zalo")
+    ]
+    return jsonify({"ok": True, "accounts": items, "snapshot_at": time.time()})
 
 
 @app.route("/api/miniapp/add_cookie", methods=["POST"])
@@ -15490,7 +15820,7 @@ def api_miniapp_add_cookie():
             return jsonify({"ok": False, "error": "Vui lòng nhập đầy đủ cả IMEI và Cookie Zalo (IMEI | Cookie)"})
         probe = check_zalo_cookie_imei_live(imei_str, ck_dict, user_agent=(meta or {}).get("user_agent", ""))
         uid = str(probe.get("uid") or (meta or {}).get("uid") or "").strip()
-        name = str(probe.get("name") or (meta or {}).get("name") or f"Zalo_{imei_str[:6]}").strip()
+        name = str(probe.get("display_name") or probe.get("name") or (meta or {}).get("name") or f"Zalo_{imei_str[:6]}").strip()
         enk = str(probe.get("zpw_enk") or (meta or {}).get("zpw_enk") or "").strip()
         acc_id = sync_zalo_account_to_web_db(
             uid=uid, display_name=name, imei=imei_str, cookies_dict=ck_dict,
@@ -15567,8 +15897,11 @@ def _cached_miniapp_boxes(requested_acc=''):
                 continue
             plat = (a.get("platform") or "zalo").lower()
             uid_s = str(a.get("uid") or "").strip()
+            imei_s = str(a.get("imei") or "").strip()
+            group_key = imei_s or uid_s
             if plat == "zalo":
-                g_c = Zalo._GROUPS_CACHE.get(uid_s)
+                # Never reuse another device session with a shared UID.
+                g_c = Zalo._GROUPS_CACHE.get(group_key)
                 g_data = g_c.get("data") if isinstance(g_c, dict) else (g_c[1] if isinstance(g_c, (list, tuple)) and len(g_c) > 1 else [])
                 for g in (g_data or []):
                     gid = str(g.get("id") or "").strip()
@@ -15576,7 +15909,7 @@ def _cached_miniapp_boxes(requested_acc=''):
                     if gid and key not in seen:
                         seen.add(key)
                         boxes.append({"id": gid, "name": g.get("name") or f"Nhóm {gid[-6:]}", "platform": "zalo", "account_id": a['id']})
-                for gid_k in KNOWN_GROUPS_BY_ACC.get(uid_s, set()):
+                for gid_k in KNOWN_GROUPS_BY_ACC.get(group_key, set()):
                     gid_s = str(gid_k).strip()
                     key = (str(a['id']), gid_s)
                     if gid_s and key not in seen and gid_s != uid_s:
@@ -15584,12 +15917,90 @@ def _cached_miniapp_boxes(requested_acc=''):
                         boxes.append({"id": gid_s, "name": f"Box Zalo {gid_s[-6:]}", "platform": "zalo", "account_id": a['id']})
     except Exception:
         pass
-    return boxes[:80]
+    return boxes
+
+
+_BOX_SCAN_LOCK = threading.Lock()
+_BOX_SCAN_LAST = {}
 
 
 @app.route("/api/miniapp/boxes")
 def api_miniapp_boxes():
-    return jsonify({"ok": True, "boxes": _cached_miniapp_boxes(str(request.args.get('account_id') or '').strip())})
+    from zalo_group_checker import paginate_groups
+    account_id = str(request.args.get("account_id") or "").strip()
+    if not account_id.isdigit():
+        return jsonify(ok=False, error="Chọn tài khoản Zalo trước khi xem nhóm."), 400
+    try:
+        result = paginate_groups(_cached_miniapp_boxes(account_id),
+            page=request.args.get("page", 1), page_size=request.args.get("page_size", 20))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    return jsonify(ok=True, **result)
+
+
+@app.route("/api/miniapp/scan_boxes", methods=["POST"])
+def api_miniapp_scan_boxes():
+    """Read group names from an already authorized saved Zalo account; never return cookies."""
+    data = request.get_json(silent=True) or {}
+    account_id = str(data.get("account_id") or "").strip()
+    if not account_id.isdigit():
+        return jsonify(ok=False, error="Chọn một tài khoản Zalo đã lưu."), 400
+    acc = next((a for a in get_all_accounts_from_ram(platform="zalo", enabled_only=True)
+                if str(a.get("id")) == account_id), None)
+    if not acc:
+        return jsonify(ok=False, error="Tài khoản không tồn tại hoặc chưa được bật."), 404
+    now = time.monotonic()
+    with _BOX_SCAN_LOCK:
+        last = _BOX_SCAN_LAST.get(account_id, 0)
+        if now - last < 30:
+            return jsonify(ok=False, code="scan_rate_limited",
+                error="Vui lòng đợi 30 giây giữa các lượt quét.", retry_after=round(30 - (now-last))), 429
+        _BOX_SCAN_LAST[account_id] = now
+    try:
+        client = Zalo.get_pooled_client(acc["imei"], acc["cookies"],
+            user_agent=acc.get("user_agent") or "",
+            zpw_enk_hint=acc.get("zpw_enk") or "",
+            uid_hint=acc.get("uid") or "")
+        groups = client.get_groups(use_cache=False)
+    except Exception:
+        # Never expose provider responses or cookie-bearing exception strings.
+        return jsonify(ok=False, code="zalo_scan_unavailable",
+            error="Không thể quét nhóm Zalo. Kiểm tra phiên cookie và thử lại."), 502
+    return jsonify(ok=True, refreshed=True, total=len(groups or []),
+        message="Đã cập nhật danh sách nhóm từ tài khoản Zalo.")
+
+
+@app.route("/api/miniapp/zalo_watch", methods=["GET", "POST"])
+def api_miniapp_zalo_watch():
+    """Control the shared in-process 90s watcher; no duplicate zlapi listener."""
+    if request.method == "GET":
+        return jsonify(ok=True, watches=CanhTreoWatchdogEngine.get_watched_boxes(),
+                       persistence="process_local", refreshed_at=time.time())
+    from zalo_group_checker import validate_timeout
+    data = request.get_json(silent=True) or {}
+    action = str(data.get("action") or "").strip().lower()
+    account_id = str(data.get("account_id") or "").strip()
+    box_id = str(data.get("box_id") or "").strip()
+    if action not in {"start", "stop"} or not account_id.isdigit() or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", box_id):
+        return jsonify(ok=False, error="Thao tác hoặc ID box không hợp lệ."), 400
+    matches = [b for b in _cached_miniapp_boxes(account_id)
+               if str(b.get("id")) == box_id and str(b.get("account_id")) == account_id]
+    active = [w for w in CanhTreoWatchdogEngine.get_watched_boxes()
+              if w.get("box_id") == box_id and str(w.get("acc_id")) == account_id]
+    if not matches and not (action == "stop" and active):
+        return jsonify(ok=False, error="Box không thuộc tài khoản đã chọn hoặc chưa được quét."), 403
+    if action == "stop":
+        count = CanhTreoWatchdogEngine.disable_watch(box_id, acc_id=int(account_id)) if active else 0
+        return jsonify(ok=bool(count), stopped=count, status="stopped" if count else "not_found"), 200 if count else 404
+    try:
+        timeout = validate_timeout(data.get("timeout_sec", 90))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    result = CanhTreoWatchdogEngine.enable_watch(box_id, box_name=matches[0]["name"],
+        platform="zalo", acc_id=int(account_id), timeout_sec=timeout)
+    return jsonify(ok=True, status="monitoring", box_id=result["box_id"],
+                   timeout_sec=result["timeout_sec"], persistence="process_local")
+
 
 
 @app.route("/api/miniapp/launch", methods=["POST"])
@@ -15733,6 +16144,8 @@ def api_miniapp_launch():
 def api_miniapp_files():
     refresh_script_selections()
     os.makedirs(UPLOAD_DIR, exist_ok=True)
+    file_types = {str(r.get("filename") or "").lower(): str(r.get("file_type") or "").lower()
+                  for r in get_ordered_files_with_display_num()}
     files_out = []
     for fn in sorted(os.listdir(UPLOAD_DIR)):
         if fn.lower().endswith(".txt"):
@@ -15754,6 +16167,8 @@ def api_miniapp_files():
                     "filename": fn,
                     "lines": ln_cnt,
                     "size_kb": sz_kb,
+                    "file_type": file_types.get(fn.lower()) or
+                        ("ngon" if "ngon" in fn.lower() else "nhay"),
                 })
             except Exception:
                 pass
@@ -15783,6 +16198,10 @@ def api_miniapp_select_file():
     if not fn:
         return jsonify({"ok": False, "error": "Tên file không hợp lệ"})
     try:
+        if target not in ("nhay","ngon"):
+            raise ValueError("Loại file không hợp lệ.")
+        # Existing clients may reassign a real file to another category.
+        # Keep that API backward-compatible; dedicated UI views remain separate.
         record = select_script_file(fn, target, prefer_disk_name=True)
     except ValueError as error:
         return jsonify({"ok": False, "error": str(error)}), 400
@@ -17559,10 +17978,26 @@ def api_permissions_remove():
 _TELEGRAM_BOT_RUNNER = None
 _TELEGRAM_BOT_STARTUP = {"state": "NOT_STARTED", "updated_at": 0.0, "error_type": ""}
 
+def telegram_boot_readiness():
+    # Never return, log, or include an actual token. This reports configuration
+    # readiness only, NOT successful Telegram API authentication.
+    if os.environ.get("DISABLE_TELEGRAM_BOT", "0") == "1":
+        return "disabled"
+    if not TELEGRAM_BOT_TOKEN:
+        return "missing_token"
+    if not TELEGRAM_ADMIN_ID:
+        return "missing_admin_id"
+    return "configured"
+
+
 def ensure_telegram_bot_started():
     global _TELEGRAM_BOT_RUNNER
-    if not TELEGRAM_BOT_TOKEN:
-        _TELEGRAM_BOT_STARTUP.update(state="NOT_CONFIGURED", updated_at=time.time(), error_type="")
+    from logging import getLogger
+    logger = getLogger(__name__)
+    gate = telegram_boot_readiness()
+    if gate != "configured":
+        _TELEGRAM_BOT_STARTUP.update(state="NOT_CONFIGURED", updated_at=time.time(), error_type=gate)
+        logger.error("Telegram polling NOT STARTED: %s (check Render Environment keys; no secret printed)", gate)
         return
     if _TELEGRAM_BOT_RUNNER is not None:
         _TELEGRAM_BOT_STARTUP.update(state="RUNNING", updated_at=time.time(), error_type="")
@@ -17571,14 +18006,25 @@ def ensure_telegram_bot_started():
         _TELEGRAM_BOT_STARTUP.update(state="STARTING", updated_at=time.time(), error_type="")
         from get_ck_im_zalo import start_background_telegram_bot
         _TELEGRAM_BOT_RUNNER = start_background_telegram_bot(TELEGRAM_BOT_TOKEN)
-        _TELEGRAM_BOT_STARTUP.update(state="RUNNING", updated_at=time.time(), error_type="")
-    except Exception as error:
-        # Deliberately record only a type: exceptions from provider clients can
-        # contain URLs or headers and must not leak into the Mini App/logs.
-        _TELEGRAM_BOT_STARTUP.update(state="DEGRADED", updated_at=time.time(), error_type=type(error).__name__)
-        app.logger.warning("telegram_bot_start_failed error_type=%s", type(error).__name__)
+        if _TELEGRAM_BOT_RUNNER is None:
+            _TELEGRAM_BOT_STARTUP.update(state="DEGRADED", updated_at=time.time(), error_type="runner_unavailable")
+            logger.error("Telegram polling NOT STARTED: runner_unavailable")
+        else:
+            _TELEGRAM_BOT_STARTUP.update(state="RUNNING", updated_at=time.time(), error_type="")
+            logger.info("Telegram polling thread launched; awaiting Telegram getMe validation")
+    except Exception as exc:
+        # Never include provider exception strings: they can contain bot tokens.
+        _TELEGRAM_BOT_STARTUP.update(state="DEGRADED", updated_at=time.time(), error_type=type(exc).__name__)
+        logger.error("Telegram polling NOT STARTED: startup_exception_%s", type(exc).__name__)
 
-if TELEGRAM_BOT_TOKEN and os.environ.get("DISABLE_TELEGRAM_BOT", "0") != "1":
+
+# Log exactly one safe startup-state record even when Telegram was disabled.
+if telegram_boot_readiness() != "configured":
+    from logging import getLogger
+    getLogger(__name__).error(
+        "Telegram bot offline at startup: %s; Render web health does not reflect bot readiness",
+        telegram_boot_readiness())
+else:
     threading.Thread(target=ensure_telegram_bot_started, daemon=True).start()
 
 if __name__ == "__main__":

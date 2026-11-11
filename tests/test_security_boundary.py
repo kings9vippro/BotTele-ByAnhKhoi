@@ -117,7 +117,8 @@ class SecurityBoundaryTests(unittest.TestCase):
 
     def test_telegram_bot_token_is_environment_only(self):
         source = (Path(__file__).resolve().parents[1] / 'bot_settings.py').read_text()
-        self.assertIn('os.environ.get("TELEGRAM_BOT_TOKEN", "")', source)
+        self.assertIn("def load_bot_token(", source)
+        self.assertIn('env.get("TELEGRAM_BOT_TOKEN")', source)
         self.assertNotRegex(source, r'TELEGRAM_BOT_TOKEN\s*=\s*[^\n]*:[A-Za-z0-9_-]{20,}')
         self.assertIn('os.environ.get("TELEGRAM_ADMIN_ID", "")', source)
         self.assertNotRegex(source, r'TELEGRAM_ADMIN_ID\s*=\s*[^\n]*"[0-9]{6,}"')
@@ -152,10 +153,10 @@ class SecurityBoundaryTests(unittest.TestCase):
             'X-Telegram-Init-Data': self._signed_launch(987654321)
         })
         self.assertEqual(denied.status_code, 403)
-        self.assertEqual(denied.json['code'], 'unauthorized_user')
+        self.assertEqual(denied.json['code'], 'unauthorized_account')
         self.assertNotIn('tgWebAppData', denied.text)
 
         with patch.dict(os.environ, {'TELEGRAM_BOT_TOKEN': ''}):
             misconfigured = self.client.get('/api/miniapp/session')
         self.assertEqual(misconfigured.status_code, 503)
-        self.assertEqual(misconfigured.json['code'], 'server_misconfigured')
+        self.assertEqual(misconfigured.json['code'], 'server_configuration')
