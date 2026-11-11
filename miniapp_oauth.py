@@ -11,7 +11,7 @@ import os
 import re
 import secrets
 import time
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import requests
 from cryptography.fernet import Fernet, InvalidToken
@@ -19,10 +19,82 @@ from flask import Response, jsonify, render_template_string, request, session
 
 PROVIDERS = {"discord": "Discord"}
 ATTEMPT_TTL = 300
+TELEGRAM_INIT_DATA_MAX_AGE = 24 * 60 * 60
+TELEGRAM_INIT_DATA_CLOCK_SKEW = 30
 
 
 class OAuthError(ValueError):
     pass
+
+
+class TelegramInitDataError(ValueError):
+    """A safe, machine-readable Mini App launch validation failure.
+
+    The public ``code`` is intentionally descriptive enough for a recovery UI
+    but never includes raw initData, a bot token, or a computed signature.
+    """
+
+    def __init__(self, code):
+        self.code = str(code)
+        super().__init__(self.code)
+
+
+def validate_telegram_webapp_init_data(
+    init_data,
+    bot_token,
+    *,
+    now=None,
+    max_age=TELEGRAM_INIT_DATA_MAX_AGE,
+    clock_skew=TELEGRAM_INIT_DATA_CLOCK_SKEW,
+):
+    """Validate the official Telegram Web App initData HMAC contract.
+
+    It is deliberately framework-independent so Flask routes, command-line
+    smoke tests and future transports share the exact same security boundary.
+    ``auth_date`` must be recent; a small future allowance avoids rejecting
+    legitimate launches when a device clock is marginally ahead.
+    """
+    token = str(bot_token or "").strip()
+    if not token:
+        raise TelegramInitDataError("server_misconfigured")
+    raw = str(init_data or "").strip()
+    if not raw:
+        raise TelegramInitDataError("missing_init_data")
+    try:
+        pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=True)
+    except ValueError as error:
+        raise TelegramInitDataError("malformed_init_data") from error
+    values = {}
+    for key, value in pairs:
+        if key in values:
+            raise TelegramInitDataError("malformed_init_data")
+        values[key] = value
+    received_hash = values.pop("hash", "")
+    if not received_hash or len(received_hash) != 64:
+        raise TelegramInitDataError("invalid_signature")
+    try:
+        auth_date = int(values.get("auth_date") or "")
+    except (TypeError, ValueError) as error:
+        raise TelegramInitDataError("malformed_init_data") from error
+    current = float(time.time() if now is None else now)
+    if auth_date <= 0:
+        raise TelegramInitDataError("malformed_init_data")
+    if auth_date > current + max(0, int(clock_skew)):
+        raise TelegramInitDataError("clock_skew")
+    if current - auth_date > max(0, int(max_age)):
+        raise TelegramInitDataError("expired_init_data")
+    data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+    secret = hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest()
+    expected_hash = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(received_hash, expected_hash):
+        raise TelegramInitDataError("invalid_signature")
+    try:
+        user = json.loads(values.get("user") or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise TelegramInitDataError("malformed_init_data") from error
+    if not isinstance(user, dict) or not str(user.get("id") or "").isdigit():
+        raise TelegramInitDataError("malformed_init_data")
+    return {"user": user, "auth_date": auth_date, "values": values}
 
 
 def init_oauth_tables(connection):

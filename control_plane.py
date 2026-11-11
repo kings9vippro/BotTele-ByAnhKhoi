@@ -35,10 +35,16 @@ def register(app, db, owner):
             raise ValueError('Cần SECRET_KEY cố định trong Environment')
         return Fernet(base64.urlsafe_b64encode(hashlib.sha256(('webhooks:' + str(app.secret_key)).encode()).digest()))
 
-    c = db()
-    c.execute('CREATE TABLE IF NOT EXISTS webhook_channels(id TEXT PRIMARY KEY,owner TEXT NOT NULL,name TEXT NOT NULL,secret TEXT NOT NULL,created REAL NOT NULL)')
-    c.commit()
-    c.close()
+    def ensure_channel_schema():
+        """Initialize channel storage if an explicit DB target changed."""
+        c = db()
+        try:
+            c.execute('CREATE TABLE IF NOT EXISTS webhook_channels(id TEXT PRIMARY KEY,owner TEXT NOT NULL,name TEXT NOT NULL,secret TEXT NOT NULL,created REAL NOT NULL)')
+            c.commit()
+        finally:
+            c.close()
+
+    ensure_channel_schema()
     local = threading.local()
     def cleanup_worker():
         if hasattr(local, 'http'):
@@ -52,6 +58,13 @@ def register(app, db, owner):
     def channels(user):
         c = db()
         try:
+            return [dict(r) for r in c.execute('SELECT id,name,created FROM webhook_channels WHERE owner=?', (str(user),))]
+        except Exception as error:
+            if 'no such table' not in str(error).lower():
+                raise
+            c.close()
+            ensure_channel_schema()
+            c = db()
             return [dict(r) for r in c.execute('SELECT id,name,created FROM webhook_channels WHERE owner=?', (str(user),))]
         finally:
             c.close()
@@ -99,10 +112,17 @@ def register(app, db, owner):
         queue.start()
 
     def snapshot(user, cursor=0):
-        tasks = queue.list(user)
+        # Durable records drive queue metrics, while the optional registry
+        # callback adds legacy process-local tasks without pretending they are
+        # executed by this queue.  The callback is installed by the runtime
+        # after its legacy engine has been initialized.
+        durable_tasks = queue.list(user)
+        registry = app.extensions.get('task_registry_snapshot')
+        tasks = registry(str(user)) if callable(registry) else durable_tasks
         counts = {}
         for t in tasks:
-            counts[t['status']] = counts.get(t['status'],0)+1
+            status = str(t.get('status') or 'UNKNOWN').upper()
+            counts[status] = counts.get(status,0)+1
         c = db()
         try:
             oldest = c.execute('SELECT MIN(seq) FROM notification_events WHERE owner=?', (str(user),)).fetchone()[0]
@@ -110,16 +130,16 @@ def register(app, db, owner):
             events = [dict(r) for r in c.execute('SELECT * FROM notification_events WHERE owner=? AND seq>? ORDER BY seq LIMIT 200', (str(user), 0 if reset else cursor))]
         finally:
             c.close()
-        durations = [t['latency'] for t in tasks if t['attempts'] > 0 and t['latency'] > 0]
-        completed = [t for t in tasks if t['status'] == 'COMPLETED']
+        durations = [t['latency'] for t in durable_tasks if t['attempts'] > 0 and t['latency'] > 0]
+        completed = [t for t in durable_tasks if t['status'] == 'COMPLETED']
         return {'ok': True,'tasks':tasks,'counts':counts,'events':events,'reset':reset,'cursor':events[-1]['seq'] if events else cursor,
                 'channels':channels(user),'workers':sum(t.is_alive() for t in queue.threads),
                 'artificial_delay_seconds':0,'api_latency_seconds':sum(durations)/len(durations) if durations else None,
                 'snapshot_at':time.time(),'metrics_window':'200 tác vụ gần nhất',
-                'queue_wait_seconds':sum(t['started']-t['created'] for t in tasks if t['started'])/max(1,sum(bool(t['started']) for t in tasks)) if any(t['started'] for t in tasks) else None,
+                'queue_wait_seconds':sum(t['started']-t['created'] for t in durable_tasks if t['started'])/max(1,sum(bool(t['started']) for t in durable_tasks)) if any(t['started'] for t in durable_tasks) else None,
                 'completion_seconds':sum(t['completed']-t['created'] for t in completed)/len(completed) if completed else None,
                 'completed_last_minute':sum(t['completed'] >= time.time()-60 for t in completed),
-                'retry_count':sum(max(0,t['attempts']-1) for t in tasks),
+                'retry_count':sum(max(0,t['attempts']-1) for t in durable_tasks),
                 'commands':[{'name':k,'description':v,'usage':'/'+k,'permission':'authorized_owner','handler':'telegram_command','availability':'supported'} for k,v in COMMANDS.items()]}
 
     app.extensions['control_snapshot'] = snapshot
@@ -183,6 +203,21 @@ def register(app, db, owner):
         except ValueError as ex:
             return jsonify(ok=False,error=str(ex)),409
 
+    @app.post('/api/miniapp/task_control')
+    def unified_task_control():
+        """Control an engine-qualified task through its owning subsystem."""
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify(ok=False, error='Cần một đối tượng JSON'), 400
+        handler = app.extensions.get('task_registry_control')
+        if not callable(handler):
+            return jsonify(ok=False, error='Bộ điều phối tác vụ chưa sẵn sàng'), 503
+        try:
+            status = handler(str(owner()), str(data.get('task_ref', '')), str(data.get('action', '')))
+            return jsonify(ok=True, status=status)
+        except ValueError as ex:
+            return jsonify(ok=False, error=str(ex)), 409
+
     @app.post('/api/miniapp/notifications/stop_all')
     def stop_all():
         return jsonify(ok=True,count=queue.stop_all(owner()))
@@ -208,10 +243,14 @@ def register(app, db, owner):
 
     # Gunicorn runs 16 request threads; reserve half for commands and mutations.
     streams = threading.BoundedSemaphore(8)
+    app.extensions['miniapp_sse_streams'] = streams
     @app.get('/api/miniapp/events')
     def events():
         if not streams.acquire(blocking=False):
-            return jsonify(ok=False,error='Đang có nhiều kết nối; thử lại sau'),503
+            # The browser falls back to bounded polling and honors Retry-After;
+            # returning a machine-readable overload response avoids a reconnect
+            # storm that would consume the remaining Gunicorn request threads.
+            return jsonify(ok=False,error='Đang có nhiều kết nối cập nhật; thử lại sau.',code='stream_capacity',retry_after_seconds=5),503,{'Retry-After':'5','Cache-Control':'no-store'}
         user = str(owner())
         cursor = max(0,request.args.get('cursor',0,type=int) or 0)
         request_id = request.headers.get('X-Request-ID', '')
@@ -276,15 +315,40 @@ def telegram_command(bot, user, chat, name, args):
         elif name == 'discord_logout':
             answer = ext['discord_oauth_disconnect'](str(user), int(args))
         elif name.startswith('task_') and name != 'task_status':
-            answer = queue.control(user,args.strip(),name[5:])
+            task_ref = args.strip()
+            if not task_ref:
+                raise ValueError('Cần mã tác vụ. Ví dụ: /' + name + ' durable:<mã>')
+            action = name[5:]
+            handler = ext.get('task_registry_control')
+            if ':' in task_ref and callable(handler):
+                answer = handler(str(user), task_ref, action)
+            else:
+                # Compatibility for older links/buttons which carry durable
+                # IDs only.  Legacy controls always require an explicit
+                # engine-qualified reference.
+                answer = queue.control(user, task_ref, action)
         elif name in ('tasks','task_status'):
-            rows = queue.list(user)
-            if name == 'task_status': rows = [r for r in rows if r['id'] == args.strip()]
-            answer = '\n'.join(f"{r['id']} · {r['channel']} · {r['status']}" for r in rows[:15]) or 'Chưa có tác vụ'
+            registry = ext.get('task_registry_snapshot')
+            rows = registry(str(user)) if callable(registry) else queue.list(user)
+            if name == 'task_status':
+                requested = args.strip()
+                if not requested:
+                    raise ValueError('Cần mã tác vụ. Dùng /tasks để xem danh sách.')
+                rows = [r for r in rows if str(r.get('task_ref')) == requested or str(r.get('id')) == requested]
+            answer = '\n'.join(
+                f"{r.get('task_ref', r.get('id'))} · {r.get('target_label', r.get('channel', ''))} · {r.get('status')}"
+                for r in rows[:15]
+            ) or 'Chưa có tác vụ'
             keyboard=[]
             for r in rows[:5]:
-                actions={'QUEUED':['pause','stop'],'RETRYING':['pause','stop'],'PAUSED':['resume','stop'],'RUNNING':['stop'],'FAILED':['retry']}.get(r['status'],[])
-                if actions:keyboard.append([{'text':a+' '+r['id'][:6], 'callback_data':'v4:'+a+':'+r['id']} for a in actions])
+                # Existing callback payloads address durable queue IDs. Legacy
+                # tasks are controlled explicitly by /task_stop legacy:<id> so
+                # a callback can never accidentally hit the wrong engine.
+                if r.get('engine') not in (None, 'durable'):
+                    continue
+                actions = r.get('available_actions') or {'QUEUED':['pause','stop'],'RETRYING':['pause','stop'],'PAUSED':['resume','stop'],'RUNNING':['stop'],'FAILED':['retry']}.get(r.get('status'),[])
+                if actions:
+                    keyboard.append([{'text':a+' '+str(r.get('id',''))[:6], 'callback_data':'v4:'+a+':'+str(r.get('id',''))} for a in actions])
             bot.send_text(chat,html.escape(answer),reply_markup={'inline_keyboard':keyboard})
             return True
         elif name == 'channels':

@@ -90,6 +90,22 @@ class ControlPlaneTests(unittest.TestCase):
         self.assertEqual(response.status_code,200)
         self.assertIsNone(response.headers.get('X-Request-ID'))
 
+    def test_sse_capacity_returns_retry_after_without_starting_another_stream(self):
+        streams=self.app.extensions['miniapp_sse_streams']
+        acquired=[]
+        try:
+            for _ in range(8):
+                self.assertTrue(streams.acquire(blocking=False))
+                acquired.append(True)
+            response=self.client.get('/api/miniapp/events')
+            self.assertEqual(response.status_code,503)
+            self.assertEqual(response.headers.get('Retry-After'),'5')
+            self.assertEqual(response.headers.get('Cache-Control'),'no-store')
+            self.assertEqual(response.json['code'],'stream_capacity')
+        finally:
+            for _ in acquired:
+                streams.release()
+
     def test_invalid_urls_never_trigger_network(self):
         with patch.object(control_plane.requests,'get') as get:
             for url in ['http://localhost','https://discord.com.evil.test/api/webhooks/1/token','https://discord.com/api/webhooks/1/token?redirect=evil','https://discord.com/api/webhooks/1/token/../../other']:

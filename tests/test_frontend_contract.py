@@ -31,16 +31,23 @@ class FrontendContractTests(unittest.TestCase):
         source = (ROOT / "static" / "control.js").read_text(encoding="utf-8")
         for marker in (
             "AbortController",
+            "MiniAppError",
             "X-Request-ID",
             "STREAM_MAX_DELAY_MS",
             "STREAM_STALE_MS",
+            "SDK_BOOT_WAIT_MS",
             "navigator.onLine",
             "RECONNECTING",
+            "AUTH_REQUIRED",
+            "SERVER_CONFIG",
+            "Retry-After",
+            "startApplication",
             "checkStreamHealth",
         ):
             self.assertIn(marker, source)
         self.assertIn("Math.min(STREAM_MAX_DELAY_MS", source)
         self.assertIn("refreshController?.abort()", source)
+        self.assertIn("terminalFailureKind", source)
 
 
 if __name__ == "__main__":

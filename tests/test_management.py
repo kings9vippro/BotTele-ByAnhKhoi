@@ -105,8 +105,8 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(client.get('/api/miniapp/session',headers=headers).json['owner'],uid)
         self.assertEqual(client.get('/api/miniapp/control',headers=headers).status_code,200)
         self.assertEqual(client.get('/api/miniapp/oauth/connections',headers=headers).status_code,200)
-        self.assertEqual(client.get('/api/miniapp/accounts',headers=headers).status_code,401)
-        self.assertEqual(client.post('/api/miniapp/oauth/configure',headers=headers,json={}).status_code,401)
+        self.assertEqual(client.get('/api/miniapp/accounts',headers=headers).status_code,403)
+        self.assertEqual(client.post('/api/miniapp/oauth/configure',headers=headers,json={}).status_code,403)
 
     def test_miniapp_launch_uses_selected_account_and_named_boxes(self):
         accounts=[{'id':1,'name':'First','platform':'zalo','uid':'uid-first','enabled':1},
@@ -182,6 +182,34 @@ class ManagementTests(unittest.TestCase):
             app._flush_ram_tasks_to_db()
             self.assertEqual(app.db().execute("SELECT status FROM tasks WHERE id='job'").fetchone()[0], 'stopped')
         self.assertEqual(self.client.post('/api/miniapp/stop_task', json={'task_id': 'missing'}).status_code, 404)
+
+    def test_unified_task_registry_exposes_and_routes_both_task_engines(self):
+        """A Mini App snapshot is the same read model used by bot commands."""
+        stop = threading.Event()
+        active = {'legacy-fixture': {'stop': stop, 'targets': ['zalo-room'], 'source': 'fixture'}}
+        saved = {'legacy-fixture': {
+            'id': 'legacy-fixture', 'type': 'treo_ngon', 'status': 'running',
+            'started_at': time.time(), 'meta': {'target_names': ['Zalo room']},
+        }}
+        queue = app.app.extensions['notification_queue']
+        queue.ensure_schema()
+        durable_id = queue.submit(str(app.TELEGRAM_ADMIN_ID), 'discord-channel', 'fixture notification')
+        with patch.object(app, 'ACTIVE_TASKS', active), patch.object(app, 'TASKS_RAM_STORE', saved):
+            snapshot = self.client.get('/api/miniapp/control').json
+            refs = {row['task_ref'] for row in snapshot['tasks']}
+            self.assertIn('legacy:legacy-fixture', refs)
+            self.assertIn('durable:' + durable_id, refs)
+
+            legacy_stop = self.client.post('/api/miniapp/task_control', json={
+                'task_ref': 'legacy:legacy-fixture', 'action': 'stop',
+            })
+            self.assertEqual(legacy_stop.status_code, 200)
+            self.assertTrue(stop.is_set())
+            durable_stop = self.client.post('/api/miniapp/task_control', json={
+                'task_ref': 'durable:' + durable_id, 'action': 'stop',
+            })
+            self.assertEqual(durable_stop.status_code, 200)
+            self.assertEqual(durable_stop.json['status'], 'CANCELLED')
 
     def test_failed_task_flush_keeps_pending_changes(self):
         saved = {'job': {'type': 'test', 'status': 'stopped', 'dirty': True, 'meta': {}}}

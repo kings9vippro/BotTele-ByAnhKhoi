@@ -981,6 +981,9 @@ class DirectTelegramBotRunner:
         self.bot_username = ""
         self.bot_id = None
         self.last_error = ""
+        self.last_poll_error = ""
+        self.consecutive_poll_failures = 0
+        self.initialized = False
         self.started_at = time.time()
         self.last_poll_ok_ts = time.time()
         self.poll_thread = None
@@ -1127,7 +1130,9 @@ class DirectTelegramBotRunner:
                     },
                     timeout=8,
                 )
+                self.initialized = True
                 return True
+            self.last_error = "Telegram initialization failed (API rejected)"
         except Exception as e:
             self.last_error = f"Telegram initialization failed ({type(e).__name__})"
         return False
@@ -3734,10 +3739,8 @@ class DirectTelegramBotRunner:
                         reply_to=msg_id,
                     )
                 return
-            saved_dc = sync_and_keepalive_tokens_to_db(text, owner_tg_id=str(user_id))
-            if saved_dc:
-                self.send_text(chat_id, f"Đã tự động nạp <b>{len(saved_dc)} tài khoản</b> vào kho riêng của bạn!", reply_to=msg_id)
-                return
+            # Discord user tokens are never accepted through Telegram.  The
+            # official OAuth2 route owns Discord account linking instead.
 
         parts = text.split(None, 1)
         cmd_raw = parts[0].lower().split("@")[0]
@@ -3885,11 +3888,25 @@ class DirectTelegramBotRunner:
                 return
             try:
                 import app as _main_app
-                stopped = _main_app.stop_tasks_for_thread(None)
-                stopped += _main_app.app.extensions['notification_queue'].stop_all(str(user_id))
-            except Exception:
-                stopped = 0
-            self.send_text(chat_id, f"{tg_anim('stop', '')} <b>Đã dừng khẩn cấp toàn bộ ({stopped} chiến dịch)!</b>", reply_to=msg_id)
+                legacy_stopped = _main_app.stop_tasks_for_thread(None)
+                queue = _main_app.app.extensions.get('notification_queue')
+                if queue is None:
+                    raise RuntimeError("notification queue unavailable")
+                durable_stopped = queue.stop_all(str(user_id))
+                stopped = int(legacy_stopped or 0) + int(durable_stopped or 0)
+            except Exception as exc:
+                self.last_error = f"Telegram stop-all failed ({type(exc).__name__})"
+                self.send_text(
+                    chat_id,
+                    "<b>Không thể xác nhận dừng toàn bộ tác vụ.</b> Không báo thành công giả; hãy mở /system hoặc Mini App để kiểm tra trạng thái.",
+                    reply_to=msg_id,
+                )
+                return
+            if stopped:
+                message = f"{tg_anim('stop', '')} <b>Đã gửi yêu cầu dừng {stopped} tác vụ.</b> Tác vụ đang gọi API có thể chuyển sang trạng thái dừng sau khi request hiện tại kết thúc."
+            else:
+                message = "Không có tác vụ đang chạy hoặc đang chờ thuộc phạm vi quản trị của bạn."
+            self.send_text(chat_id, message, reply_to=msg_id)
             return
 
         # Mặc định hiển thị bảng điều khiển Video
@@ -3908,8 +3925,12 @@ class DirectTelegramBotRunner:
         parts = str(msg.get("text") or "").split(None, 1)
         command = parts[0].lower().split("@")[0] if parts else ""
         interactive = "callback_query" in upd or command in (
-            "/start", "/menu", "/help", "/bot", "/ping", "/tasks", "/task_status",
-            "/task_stop", "/task_pause", "/task_resume", "/stopall", "/ta", "/stop",
+            "/start", "/menu", "/help", "/bot", "/ping", "/status", "/miniapp",
+            "/tasks", "/task_status", "/task_stop", "/task_pause", "/task_resume",
+            "/task_retry", "/stopall", "/ta", "/stop", "/accounts", "/discord_login",
+            "/discord_accounts", "/discord_status", "/discord_logout", "/channels",
+            "/send", "/send_multi", "/delay", "/performance", "/logs", "/settings",
+            "/system",
         )
         executor = self.interactive_executor if interactive else self.executor
         slots = self._interactive_update_slots if interactive else self._update_slots
@@ -3926,11 +3947,10 @@ class DirectTelegramBotRunner:
     def run_forever(self):
         self.running = True
         self.last_poll_ok_ts = time.time()
-        self.clear_webhook_and_init()
+        self.initialized = self.clear_webhook_and_init()
         fail_streak = 0
         while self.running:
             try:
-                self.last_poll_ok_ts = time.time()
                 res = self.api_call(
                     "getUpdates",
                     {
@@ -3941,9 +3961,11 @@ class DirectTelegramBotRunner:
                     timeout=(5.0, 20.0),
                     use_poll_session=True,
                 )
-                self.last_poll_ok_ts = time.time()
                 if res.get("ok") and isinstance(res.get("result"), list):
                     fail_streak = 0
+                    self.consecutive_poll_failures = 0
+                    self.last_poll_error = ""
+                    self.last_poll_ok_ts = time.time()
                     for upd in res["result"]:
                         uid_upd = upd.get("update_id", 0)
                         if not self._submit_update(upd):
@@ -3954,7 +3976,10 @@ class DirectTelegramBotRunner:
                             self.offset = uid_upd + 1
                 else:
                     fail_streak += 1
+                    self.consecutive_poll_failures = fail_streak
                     desc_err = str(res.get("description") or "").lower()
+                    self.last_poll_error = "Telegram polling rejected"
+                    self.last_error = self.last_poll_error
                     if "conflict" in desc_err or "webhook" in desc_err:
                         try:
                             self.api_call("deleteWebhook", {"drop_pending_updates": False}, timeout=6, use_poll_session=True)
@@ -3971,6 +3996,8 @@ class DirectTelegramBotRunner:
             except Exception as e:
                 self.last_error = f"Telegram polling failed ({type(e).__name__})"
                 fail_streak += 1
+                self.consecutive_poll_failures = fail_streak
+                self.last_poll_error = self.last_error
                 try:
                     self.poll_session.close()
                 except Exception:
@@ -3982,6 +4009,7 @@ class DirectTelegramBotRunner:
 _BOT_INSTANCE = None
 _BOT_LOCK = threading.RLock()
 _BOT_WATCHDOG_STARTED = False
+_BOT_LAST_START_ERROR = ""
 
 
 def _ensure_internal_bot_watchdog():
@@ -4008,9 +4036,10 @@ def _ensure_internal_bot_watchdog():
 
 
 def start_background_telegram_bot(token=TELEGRAM_BOT_TOKEN, force_restart=False):
-    global _BOT_INSTANCE
+    global _BOT_INSTANCE, _BOT_LAST_START_ERROR
     token = (token or "").strip()
     if not token:
+        _BOT_LAST_START_ERROR = "TELEGRAM_BOT_TOKEN is not configured"
         return None
     _ensure_internal_bot_watchdog()
     with _BOT_LOCK:
@@ -4025,23 +4054,41 @@ def start_background_telegram_bot(token=TELEGRAM_BOT_TOKEN, force_restart=False)
                 _BOT_INSTANCE.poll_session.close()
             except Exception:
                 pass
-        runner = DirectTelegramBotRunner(token=token)
+        try:
+            runner = DirectTelegramBotRunner(token=token)
+        except Exception as exc:
+            _BOT_LAST_START_ERROR = f"Telegram start failed ({type(exc).__name__})"
+            return None
         t = threading.Thread(target=runner.run_forever, daemon=True, name="TelegramBot4AppRunner")
         runner.poll_thread = t
         t.start()
         _BOT_INSTANCE = runner
+        _BOT_LAST_START_ERROR = ""
         return runner
 
 
 def get_telegram_bot_status():
     if _BOT_INSTANCE is None:
-        return {"running": False, "bot_username": "", "admin_id": ROOT_ADMIN_ID}
+        return {
+            "running": False,
+            "state": "NOT_STARTED" if TELEGRAM_BOT_TOKEN else "NOT_CONFIGURED",
+            "bot_username": "",
+            "admin_id": ROOT_ADMIN_ID,
+            "last_error": _BOT_LAST_START_ERROR,
+        }
+    age = max(0.0, time.time() - float(getattr(_BOT_INSTANCE, "last_poll_ok_ts", time.time())))
+    thread = getattr(_BOT_INSTANCE, "poll_thread", None)
+    healthy = bool(_BOT_INSTANCE.running) and (thread is None or thread.is_alive()) and age <= 35.0
     return {
         "running": bool(_BOT_INSTANCE.running),
+        "state": "RUNNING" if healthy else "DEGRADED",
         "bot_username": _BOT_INSTANCE.bot_username,
         "bot_id": _BOT_INSTANCE.bot_id,
         "admin_id": ROOT_ADMIN_ID,
         "last_error": _BOT_INSTANCE.last_error,
+        "last_poll_age_seconds": round(age, 3),
+        "consecutive_poll_failures": int(getattr(_BOT_INSTANCE, "consecutive_poll_failures", 0) or 0),
+        "initialized": bool(getattr(_BOT_INSTANCE, "initialized", False)),
     }
 
 

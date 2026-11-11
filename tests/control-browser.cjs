@@ -24,7 +24,7 @@ const crypto=require('crypto'),assert=require('assert/strict');
  ]);
  await page.getByRole('tab',{name:'Âm nhạc',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('#music-tracks').getAttribute('aria-busy')==='false');
- assert.equal(await page.locator('#music-tracks article').count(),10);
+ assert.equal(await page.locator('#music-tracks article').count(),20);
  assert.match(await page.locator('#music-playlist').getAttribute('href'),/^https:\/\/open\.spotify\.com\/playlist\//);
  await page.route('https://open.spotify.com/**',r=>r.abort());
  await page.getByRole('button',{name:'Mở trình phát Spotify'}).click();
@@ -84,6 +84,6 @@ const crypto=require('crypto'),assert=require('assert/strict');
  const denied=await page.request.get('http://127.0.0.1:5873/api/miniapp/control');assert.equal(denied.status(),401);
  for(const path of ['/api/discord/reg_login','/api/messenger/login','/integrations/facebook'])assert.equal((await page.request.post('http://127.0.0.1:5873'+path)).status(),410);
  assert.deepEqual(errors,[]);
- console.log('V4 browser: 8 tabs, Spotify catalog/embed shell, account/box selection, theme, gestures, auth and retired routes passed');
+ console.log('V6 browser: authenticated launch, full available Spotify catalog/embed shell, account/box selection, theme, gestures, task UI, and retired-route protection passed');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -1,8 +1,13 @@
 """Regression coverage for the runtime's HTTP authorization boundary."""
 import os
+import hashlib
+import hmac
+import json
+import time
 from pathlib import Path
 import unittest
 from unittest.mock import patch
+from urllib.parse import urlencode
 
 os.environ.setdefault('DISABLE_TELEGRAM_BOT', '1')
 os.environ.setdefault('DISABLE_BACKGROUND_WORKERS', '1')
@@ -114,3 +119,43 @@ class SecurityBoundaryTests(unittest.TestCase):
         source = (Path(__file__).resolve().parents[1] / 'bot_settings.py').read_text()
         self.assertIn('os.environ.get("TELEGRAM_BOT_TOKEN", "")', source)
         self.assertNotRegex(source, r'TELEGRAM_BOT_TOKEN\s*=\s*[^\n]*:[A-Za-z0-9_-]{20,}')
+        self.assertIn('os.environ.get("TELEGRAM_ADMIN_ID", "")', source)
+        self.assertNotRegex(source, r'TELEGRAM_ADMIN_ID\s*=\s*[^\n]*"[0-9]{6,}"')
+
+    @staticmethod
+    def _signed_launch(user_id, *, auth_date=None):
+        values = {
+            "auth_date": str(int(time.time() if auth_date is None else auth_date)),
+            "user": json.dumps({"id": int(user_id), "first_name": "Fixture"}, separators=(",", ":")),
+        }
+        key = hmac.new(b"WebAppData", os.environ["TELEGRAM_BOT_TOKEN"].encode(), hashlib.sha256).digest()
+        check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+        values["hash"] = hmac.new(key, check.encode(), hashlib.sha256).hexdigest()
+        return urlencode(values)
+
+    def test_miniapp_auth_errors_are_classified_without_disclosing_launch_data(self):
+        missing = self.client.get('/api/miniapp/session')
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(missing.json['code'], 'missing_init_data')
+
+        invalid = self.client.get('/api/miniapp/session', headers={'X-Telegram-Init-Data': 'auth_date=1&hash=' + '0' * 64})
+        self.assertEqual(invalid.status_code, 401)
+        self.assertEqual(invalid.json['code'], 'expired_init_data')
+
+        expired = self.client.get('/api/miniapp/session', headers={
+            'X-Telegram-Init-Data': self._signed_launch(987654321, auth_date=time.time() - 86401)
+        })
+        self.assertEqual(expired.status_code, 401)
+        self.assertEqual(expired.json['code'], 'expired_init_data')
+
+        denied = self.client.get('/api/miniapp/session', headers={
+            'X-Telegram-Init-Data': self._signed_launch(987654321)
+        })
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(denied.json['code'], 'unauthorized_user')
+        self.assertNotIn('tgWebAppData', denied.text)
+
+        with patch.dict(os.environ, {'TELEGRAM_BOT_TOKEN': ''}):
+            misconfigured = self.client.get('/api/miniapp/session')
+        self.assertEqual(misconfigured.status_code, 503)
+        self.assertEqual(misconfigured.json['code'], 'server_misconfigured')

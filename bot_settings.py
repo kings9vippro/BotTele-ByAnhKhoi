@@ -5,4 +5,7 @@ import os
 # fallback token in source control: even a revoked token can be replayed from
 # an old commit or build artifact.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "8827605973").strip()
+# Authorization must be configured by the deployment.  A source-code default
+# would silently grant an unrelated Telegram identity administrator access when
+# an environment is incomplete or a service is cloned.
+TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "").strip()
