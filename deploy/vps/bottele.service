@@ -1,0 +1,24 @@
+[Unit]
+Description=BotTele web API and Telegram controller
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=bottele
+Group=bottele
+WorkingDirectory=/opt/bottele/current
+EnvironmentFile=/etc/bottele/bottele.env
+ExecStart=/opt/bottele/current/.venv/bin/gunicorn app:app --config gunicorn.conf.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=45
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/bottele
+
+[Install]
+WantedBy=multi-user.target

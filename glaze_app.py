@@ -18022,7 +18022,7 @@ def ensure_telegram_bot_started():
 if telegram_boot_readiness() != "configured":
     from logging import getLogger
     getLogger(__name__).error(
-        "Telegram bot offline at startup: %s; Render web health does not reflect bot readiness",
+        "Telegram bot offline at startup: %s; web health does not reflect bot readiness",
         telegram_boot_readiness())
 else:
     threading.Thread(target=ensure_telegram_bot_started, daemon=True).start()

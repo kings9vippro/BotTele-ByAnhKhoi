@@ -39,6 +39,14 @@ class TelegramBotCommandTests(unittest.TestCase):
         self.assertTrue(runner._submit_update({"message": {"text": "/task_retry task-1"}}))
         runner.interactive_executor.submit.assert_called_once()
 
+    def test_menu_uses_one_text_request_without_welcome_media(self):
+        runner = self.runner_shell()
+        result = runner.send_welcome_video_menu(77, "<b>Menu</b>", reply_markup={"inline_keyboard": []})
+        self.assertEqual(result, {"ok": True})
+        runner.send_text.assert_called_once_with(
+            77, "<b>Menu</b>", reply_to=None, reply_markup={"inline_keyboard": []}
+        )
+
     def test_stopall_reports_failure_instead_of_fake_success(self):
         runner = self.runner_shell()
         update = {"message": {"chat": {"id": 1}, "from": {"id": 123, "first_name": "Fixture"}, "message_id": 2, "text": "/stopall"}}

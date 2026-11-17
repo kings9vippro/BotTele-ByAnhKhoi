@@ -53,7 +53,6 @@ ROOT_ADMIN_ID = TELEGRAM_ADMIN_ID
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = DATABASE_PATH
-WELCOME_VIDEO_PATH = os.path.join(BASE_DIR, "welcome.mp4")
 MENU_BANNER_PATH = os.path.join(BASE_DIR, "menu_banner.png")
 
 DISCORD_TOKEN_RE = re.compile(
@@ -1227,103 +1226,11 @@ class DirectTelegramBotRunner:
         return self.api_call("sendMessage", payload, timeout=12)
 
     def send_welcome_video_menu(self, chat_id, caption_html, reply_to=None, reply_markup=None):
-        """Send the welcome MP4 once, then reuse Telegram's cached video file_id."""
-        cached_video_fid = getattr(self, "_cached_welcome_video_fid", None)
-        if cached_video_fid is None:
-            cached_video_fid = _get_db_setting("tg_welcome_video_fid_v1", "")
-            self._cached_welcome_video_fid = cached_video_fid
-        if cached_video_fid:
-            payload = {
-                "chat_id": chat_id,
-                "video": cached_video_fid,
-                "caption": caption_html,
-                "parse_mode": "HTML",
-                "supports_streaming": True,
-            }
-            if reply_to:
-                payload["reply_to_message_id"] = reply_to
-            if reply_markup:
-                payload["reply_markup"] = reply_markup
-            res = self.api_call("sendVideo", payload, timeout=12)
-            if res.get("ok"):
-                return res
-            self._cached_welcome_video_fid = ""
-
-        if os.path.isfile(WELCOME_VIDEO_PATH):
-            try:
-                data = {"chat_id": str(chat_id), "caption": caption_html, "parse_mode": "HTML", "supports_streaming": "true"}
-                if reply_to:
-                    data["reply_to_message_id"] = str(reply_to)
-                if reply_markup:
-                    data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-                with open(WELCOME_VIDEO_PATH, "rb") as vf:
-                    res = self.api_call("sendVideo", data=data, files={"video": ("welcome.mp4", vf, "video/mp4")}, timeout=30)
-                video = (res.get("result") or {}).get("video") or {}
-                file_id = video.get("file_id") or ""
-                if res.get("ok"):
-                    if file_id:
-                        self._cached_welcome_video_fid = file_id
-                        _set_db_setting("tg_welcome_video_fid_v1", file_id)
-                    return res
-            except Exception:
-                pass
-
-        # A compact image fallback keeps /menu usable if Telegram rejects the MP4.
-        cached_logo_fid = getattr(self, "_cached_glaze_logo_fid", None)
-        if cached_logo_fid is None:
-            cached_logo_fid = _get_db_setting("tg_glaze_logo_fid_v2", "")
-            self._cached_glaze_logo_fid = cached_logo_fid
-
-        if cached_logo_fid:
-            payload = {
-                "chat_id": chat_id,
-                "photo": cached_logo_fid,
-                "caption": caption_html,
-                "parse_mode": "HTML",
-            }
-            if reply_to:
-                payload["reply_to_message_id"] = reply_to
-            if reply_markup:
-                payload["reply_markup"] = reply_markup
-            res = self.api_call("sendPhoto", payload, timeout=10)
-            if res.get("ok"):
-                return res
-            self._cached_glaze_logo_fid = ""
-
-        for cand_name in ("glaze_logo.png", "menu_banner.png", "zenvyre_logo.png"):
-            cand_path = os.path.join(BASE_DIR, cand_name)
-            if os.path.isfile(cand_path):
-                try:
-                    with open(cand_path, "rb") as pf:
-                        photo_bytes = pf.read()
-                    res = self.send_photo_bytes(chat_id, photo_bytes, caption=caption_html, reply_to=reply_to, reply_markup=reply_markup)
-                    if res.get("ok") and res.get("result"):
-                        photos = res["result"].get("photo") or []
-                        if photos and isinstance(photos, list):
-                            fid = photos[-1].get("file_id") or ""
-                            if fid:
-                                self._cached_glaze_logo_fid = fid
-                                _set_db_setting("tg_glaze_logo_fid_v2", fid)
-                        return res
-                except Exception:
-                    pass
-
+        """Send the command menu as one lightweight Telegram message."""
         return self.send_text(chat_id, caption_html, reply_to=reply_to, reply_markup=reply_markup)
 
     def edit_menu_message(self, chat_id, message_id, caption_html, reply_markup=None):
-        """Cập nhật tức thì nội dung & nút bấm dưới Video chào (0ms perceived latency)."""
-        payload_cap = {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "caption": caption_html,
-            "parse_mode": "HTML",
-        }
-        if reply_markup:
-            payload_cap["reply_markup"] = reply_markup
-        res = self.api_call("editMessageCaption", payload_cap, timeout=10)
-        if res.get("ok") or "message is not modified" in str(res.get("description", "")).lower():
-            return res
-
+        """Update a text menu first; support older photo menus during migration."""
         payload_txt = {
             "chat_id": chat_id,
             "message_id": message_id,
@@ -1333,7 +1240,18 @@ class DirectTelegramBotRunner:
         }
         if reply_markup:
             payload_txt["reply_markup"] = reply_markup
-        res2 = self.api_call("editMessageText", payload_txt, timeout=10)
+        res = self.api_call("editMessageText", payload_txt, timeout=10)
+        if res.get("ok") or "message is not modified" in str(res.get("description", "")).lower():
+            return res
+        payload_cap = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "caption": caption_html,
+            "parse_mode": "HTML",
+        }
+        if reply_markup:
+            payload_cap["reply_markup"] = reply_markup
+        res2 = self.api_call("editMessageCaption", payload_cap, timeout=10)
         if res2.get("ok") or "message is not modified" in str(res2.get("description", "")).lower():
             return res2
         return self.send_welcome_video_menu(chat_id, caption_html, reply_markup=reply_markup)
