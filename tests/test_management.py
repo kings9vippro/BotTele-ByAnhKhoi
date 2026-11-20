@@ -183,6 +183,34 @@ class ManagementTests(unittest.TestCase):
             self.assertEqual(app.db().execute("SELECT status FROM tasks WHERE id='job'").fetchone()[0], 'stopped')
         self.assertEqual(self.client.post('/api/miniapp/stop_task', json={'task_id': 'missing'}).status_code, 404)
 
+    def test_unified_task_registry_exposes_and_routes_both_task_engines(self):
+        """A Mini App snapshot is the same read model used by bot commands."""
+        stop = threading.Event()
+        active = {'legacy-fixture': {'stop': stop, 'targets': ['zalo-room'], 'source': 'fixture'}}
+        saved = {'legacy-fixture': {
+            'id': 'legacy-fixture', 'type': 'treo_ngon', 'status': 'running',
+            'started_at': time.time(), 'meta': {'target_names': ['Zalo room']},
+        }}
+        queue = app.app.extensions['notification_queue']
+        queue.ensure_schema()
+        durable_id = queue.submit(str(app.TELEGRAM_ADMIN_ID), 'discord-channel', 'fixture notification')
+        with patch.object(app, 'ACTIVE_TASKS', active), patch.object(app, 'TASKS_RAM_STORE', saved):
+            snapshot = self.client.get('/api/miniapp/control').json
+            refs = {row['task_ref'] for row in snapshot['tasks']}
+            self.assertIn('legacy:legacy-fixture', refs)
+            self.assertIn('durable:' + durable_id, refs)
+
+            legacy_stop = self.client.post('/api/miniapp/task_control', json={
+                'task_ref': 'legacy:legacy-fixture', 'action': 'stop',
+            })
+            self.assertEqual(legacy_stop.status_code, 200)
+            self.assertTrue(stop.is_set())
+            durable_stop = self.client.post('/api/miniapp/task_control', json={
+                'task_ref': 'durable:' + durable_id, 'action': 'stop',
+            })
+            self.assertEqual(durable_stop.status_code, 200)
+            self.assertEqual(durable_stop.json['status'], 'CANCELLED')
+
     def test_failed_task_flush_keeps_pending_changes(self):
         saved = {'job': {'type': 'test', 'status': 'stopped', 'dirty': True, 'meta': {}}}
         with patch.object(app, 'TASKS_RAM_STORE', saved), patch.object(app.db(), 'commit', side_effect=app.sqlite3.OperationalError('busy')):

@@ -60,7 +60,7 @@ class TelegramAuthV6Tests(unittest.TestCase):
     def test_future_launch_is_rejected(self):
         response = self.request(signed_launch(timestamp=int(time.time())+3600))
         self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.json["code"], "invalid_init_data")
+        self.assertEqual(response.json["code"], "clock_skew")
 
     def test_missing_init_data_requires_fresh_telegram_launch(self):
         response = self.client.get("/api/miniapp/session")
@@ -84,7 +84,7 @@ class TelegramAuthV6Tests(unittest.TestCase):
     def test_duplicate_init_data_fields_are_rejected(self):
         response = self.request(signed_launch()+"&auth_date=1")
         self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.json["code"], "invalid_init_data")
+        self.assertEqual(response.json["code"], "malformed_init_data")
 
     def test_unverified_request_cannot_read_protected_tasks(self):
         response = self.client.get("/api/miniapp/control")

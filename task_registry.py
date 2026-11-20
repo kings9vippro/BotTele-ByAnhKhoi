@@ -32,6 +32,7 @@ def aggregate_tasks(notification_rows, legacy_rows, *, owner, include_legacy=Fal
         actions = list(ACTIONS.get(status, ()))
         tasks.append({
             "id": "notification:" + str(record["id"]),
+            "task_ref": "durable:" + str(record["id"]),
             "source_id": str(record["id"]), "execution_source": "durable_notifications",
             "task_type": "notification", "owner": str(record.get("owner") or principal), "platform": "discord",
             "target": str(record.get("channel") or ""), "status": status,
@@ -50,7 +51,7 @@ def aggregate_tasks(notification_rows, legacy_rows, *, owner, include_legacy=Fal
             shared_execution = len(set(account_ids)) > 1
             can_stop = bool(record.get("can_stop")) and not shared_execution and status in ("RUNNING", "CANCELLING")
             tasks.append({
-                "id": "legacy:" + raw_id, "source_id": raw_id,
+                "id": "legacy:" + raw_id, "task_ref": "legacy:" + raw_id, "source_id": raw_id,
                 "execution_source": "legacy_process", "task_type": str(record.get("mode") or "legacy"),
                 "owner": principal, "platform": "zalo", "target": str(record.get("target_label") or ""),
                 "account_ids": account_ids,

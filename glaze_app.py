@@ -5,7 +5,7 @@
 # ==============================================================================
 APP_TITLE = "GLAZE"
 APP_AUTHOR = "Dev Anh Khôi"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 import sys, types
 # All entry points and Telegram share one runtime module and one connection pool.
@@ -56,9 +56,19 @@ from urllib.parse import urlparse, unquote
 
 import requests
 from app_storage import DATABASE_PATH, UPLOAD_PATH, FILE_WRITE_LOCK, connect_database, normalize_file_index, save_text_file, storage_identity
-from miniapp_oauth import init_oauth_tables, register_oauth_routes
+from miniapp_oauth import (
+    TelegramInitDataError,
+    init_oauth_tables,
+    register_oauth_routes,
+    validate_telegram_webapp_init_data,
+)
 from command_catalog import supported_commands
-from task_control import cancel_one, task_snapshots
+from task_control import (
+    cancel_one,
+    control_unified_task,
+    task_snapshots,
+    unified_task_snapshots,
+)
 from official_integrations import init_tables as init_official_tables, register as register_official_integrations
 from requests.adapters import HTTPAdapter
 try:
@@ -165,6 +175,10 @@ ACCESS_KEY = os.environ.get("WEB_KEY", "").strip()
 DEFAULT_ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 DEFAULT_ADMIN_PASS = os.environ.get("ADMIN_PASS", "")
 
+def admin_principal_id():
+    """Stable web owner with a dynamic Telegram fallback for tests/migrations."""
+    return str(os.environ.get("ADMIN_PRINCIPAL_ID") or os.environ.get("TELEGRAM_ADMIN_ID") or TELEGRAM_ADMIN_ID or "web-admin").strip()
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = DATABASE_PATH
 UPLOAD_DIR = UPLOAD_PATH
@@ -253,39 +267,26 @@ def is_miniapp_request_authorized():
 
     No token fallback, no anonymous admin, no signature bypass.
     """
+    # A password-authenticated web dashboard is a first-class deployment mode.
+    # It must not depend on Telegram credentials when polling is disabled.
     if session.get("logged_in"):
-        g.miniapp_owner = str(TELEGRAM_ADMIN_ID)
+        g.miniapp_owner = admin_principal_id()
+        g.miniapp_auth_mode = "web_session"
         return True
+    if "TELEGRAM_BOT_TOKEN" in os.environ and not str(os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip():
+        return _miniapp_auth_failure("server_configuration")
     init_data = (request.headers.get("X-Telegram-Init-Data") or "").strip()
     if not init_data:
         return _miniapp_auth_failure("missing_init_data")
-    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_ADMIN_ID):
+    configured_token = str(os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    configured_admin = str(TELEGRAM_ADMIN_ID or "").strip()
+    if not configured_token or not configured_admin:
         return _miniapp_auth_failure("server_configuration")
     try:
-        from urllib.parse import parse_qsl
-        pairs = parse_qsl(init_data, keep_blank_values=True)
-        values = dict(pairs)
-        if len(pairs) != len(values):
-            return _miniapp_auth_failure("invalid_init_data")
-        received_hash = values.pop("hash", "")
-        auth_date = int(values.get("auth_date") or 0)
-        now = time.time()
-        if auth_date <= 0 or auth_date > now + 300:
-            return _miniapp_auth_failure("invalid_init_data")
-        if now - auth_date > 86400:
-            return _miniapp_auth_failure("expired_init_data")
-        if not received_hash:
-            return _miniapp_auth_failure("invalid_signature")
-        data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
-        secret = hmac.new(b"WebAppData", TELEGRAM_BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
-        expected_hash = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(received_hash, expected_hash):
-            return _miniapp_auth_failure("invalid_signature")
-        user = json.loads(values.get("user") or "{}")
-        if not isinstance(user, dict):
-            return _miniapp_auth_failure("invalid_init_data")
+        launch = validate_telegram_webapp_init_data(init_data, configured_token)
+        user = launch["user"]
         owner = str(user.get("id") or "")
-        if owner == str(TELEGRAM_ADMIN_ID):
+        if owner == configured_admin:
             g.miniapp_owner = owner
             return True
         # Delegates can operate only on explicitly authorized, scoped resources.
@@ -293,7 +294,7 @@ def is_miniapp_request_authorized():
         scoped = scoped or request.path in {"/api/miniapp/session", "/api/miniapp/control", "/api/miniapp/events",
             "/api/miniapp/channels", "/api/miniapp/channels/delete", "/api/miniapp/notifications",
             "/api/miniapp/notifications/stop_all", "/api/miniapp/notification_control",
-            "/api/miniapp/task_registry"}
+            "/api/miniapp/task_registry", "/api/miniapp/task_control"}
         if not scoped or not owner.isdigit():
             return _miniapp_auth_failure("unauthorized_account")
         connection = db()
@@ -306,25 +307,33 @@ def is_miniapp_request_authorized():
         if authorized:
             g.miniapp_owner = owner
             return True
-        return _miniapp_auth_failure("unauthorized_account")
+    except TelegramInitDataError as error:
+        return _miniapp_auth_failure(error.code)
     except (TypeError, ValueError, json.JSONDecodeError):
         return _miniapp_auth_failure("invalid_init_data")
+    return _miniapp_auth_failure("unauthorized_account")
 
 
 def miniapp_request_owner():
-    return str(getattr(g, 'miniapp_owner', TELEGRAM_ADMIN_ID))
+    return str(getattr(g, 'miniapp_owner', admin_principal_id()))
 
 
 @app.get('/api/miniapp/session')
 def api_miniapp_session():
     owner = miniapp_request_owner()
-    return jsonify(ok=True, owner=owner, role='admin' if owner == str(TELEGRAM_ADMIN_ID) else 'member')
+    return jsonify(
+        ok=True,
+        owner=owner,
+        role='admin' if owner == admin_principal_id() else 'member',
+        auth_mode=getattr(g, 'miniapp_auth_mode', 'telegram_init_data'),
+        csrf_token=get_or_create_csrf_token() if session.get("logged_in") else "",
+    )
 
 @app.before_request
 def security_middleware():
     if request.path == '/':
         return redirect('/miniapp')
-    if request.path.startswith(('/api/discord/', '/api/messenger/', '/integrations/facebook', '/oauth/callback/facebook')):
+    if request.path.startswith(('/api/discord/', '/api/messenger/', '/integrations/facebook')):
         return jsonify(ok=False, error='Tích hợp cũ đã ngừng. Discord dùng OAuth2 và webhook chính thức.'), 410
     if not WebSecurityFortress.inspect_request():
         return jsonify({"ok": False, "error": "Forbidden Request Signature"}), 403
@@ -347,6 +356,12 @@ def security_middleware():
         origin = request.headers.get("Origin")
         if (request.method not in ("GET", "HEAD", "OPTIONS") and origin and origin.rstrip("/") != request.host_url.rstrip("/")) or request.headers.get("Sec-Fetch-Site") == "cross-site":
             return jsonify(ok=False, error="Nguồn yêu cầu không hợp lệ"), 403
+        if (session.get("logged_in") and request.method not in ("GET", "HEAD", "OPTIONS")
+                and os.environ.get("REQUIRE_WEB_CSRF", "0") == "1"):
+            supplied_csrf = str(request.headers.get("X-CSRF-Token") or "")
+            expected_csrf = str(session.get("csrf_token") or "")
+            if not supplied_csrf or not expected_csrf or not hmac.compare_digest(supplied_csrf, expected_csrf):
+                return jsonify(ok=False, code="csrf_invalid", error="Phiên biểu mẫu không hợp lệ. Hãy tải lại trang."), 403
     if request.path.startswith("/api/") or request.path.startswith("/task/"):
         ip = get_client_ip()
         now = time.time()
@@ -873,6 +888,51 @@ ACCOUNTS_RAM_LOCK = threading.RLock()
 TASKS_RAM_STORE = {}
 TASKS_RAM_LOCK = threading.RLock()
 BOT_LOGS_RAM_DEQUE = deque(maxlen=40)
+
+
+def _miniapp_task_registry(owner):
+    """One read model over independent task engines, scoped to its owner.
+
+    Legacy Zalo workers predate durable notifications and are process-local.
+    Only the configured administrator may inspect them.  Durable Discord
+    webhook tasks remain owner-scoped in ``TaskQueue`` for every authorized
+    Telegram user.
+    """
+    principal = str(owner or "")
+    admin = principal == admin_principal_id()
+    accounts = refresh_accounts_ram_cache(strict=True) if admin else []
+    return unified_task_snapshots(
+        ACTIVE_TASKS,
+        TASKS_RAM_STORE,
+        accounts,
+        TASKS_RAM_LOCK,
+        queue=app.extensions.get("notification_queue"),
+        owner=principal,
+        include_legacy=admin,
+    )
+
+
+def _miniapp_task_control(owner, reference, action):
+    """Route a control to its actual engine; never infer the engine from IDs."""
+    principal = str(owner or "")
+    if str(reference or "").startswith("legacy:") and principal != admin_principal_id():
+        raise ValueError("Bạn không có quyền điều khiển tác vụ này")
+    return control_unified_task(
+        reference,
+        action,
+        ACTIVE_TASKS,
+        TASKS_RAM_STORE,
+        TASKS_RAM_LOCK,
+        queue=app.extensions.get("notification_queue"),
+        owner=principal,
+    )
+
+
+# control_plane is registered before these runtime collections are declared.
+# Extensions defer lookup until a request arrives, so both interfaces receive
+# the same current state without importing this module a second time.
+app.extensions["task_registry_snapshot"] = _miniapp_task_registry
+app.extensions["task_registry_control"] = _miniapp_task_control
 
 _LAST_ACCOUNTS_SYNC_TS = 0.0
 
@@ -15627,7 +15687,7 @@ def route_zenvyre_miniapp():
         "author": APP_AUTHOR,
         "version": APP_VERSION,
         "asset_revision": miniapp_asset_revision(),
-        "admin_id": TELEGRAM_ADMIN_ID,
+        "admin_id": admin_principal_id(),
         "live_accs": live_accs,
         "running_tasks": running_tasks,
         "watched_boxes": watched_boxes,
@@ -15675,22 +15735,27 @@ def api_miniapp_commands():
 @app.route("/api/miniapp/sync", methods=["POST"])
 def api_miniapp_telemetry():
     now_ts = time.time()
-    accounts = [a for a in refresh_accounts_ram_cache(strict=True) if (a.get('platform') or 'zalo') == 'zalo']
+    owner = miniapp_request_owner()
+    is_admin = owner == admin_principal_id()
+    accounts = ([a for a in refresh_accounts_ram_cache(strict=True) if (a.get('platform') or 'zalo') == 'zalo']
+                if is_admin else [])
     connection = db()
-    oauth_count = connection.execute("SELECT COUNT(*) FROM oauth_connections WHERE owner_id=? AND provider='discord'", (str(TELEGRAM_ADMIN_ID),)).fetchone()[0]
+    try:
+        oauth_count = connection.execute("SELECT COUNT(*) FROM oauth_connections WHERE owner_id=?", (owner,)).fetchone()[0]
+        storage_id = storage_identity(connection)
+    finally:
+        connection.close()
     official_count = 0
-    connection.close()
     platform_counts = {"zalo": 0, "discord": oauth_count}
     for account in accounts:
         platform = str(account.get("platform") or "zalo").lower()
         platform_counts[platform if platform in platform_counts else "other"] += 1
-    tasks_list = task_snapshots(ACTIVE_TASKS, TASKS_RAM_STORE, accounts, TASKS_RAM_LOCK)
-    storage_id = storage_identity(db())
+    tasks_list = _miniapp_task_registry(owner)
     return jsonify({
         "ok": True,
         "author": APP_AUTHOR,
         "version": APP_VERSION,
-        "admin_id": TELEGRAM_ADMIN_ID,
+        "role": "admin" if is_admin else "member",
         "live_accs": sum(1 for account in accounts if account.get("enabled", 1)),
         "total_accs": len(accounts) + oauth_count,
         "oauth_count": oauth_count,
@@ -15704,7 +15769,7 @@ def api_miniapp_telemetry():
         "storage_id": storage_id,
         "release": APP_VERSION,
         "tasks": tasks_list,
-        "watched_boxes": len(CanhTreoWatchdogEngine.get_watched_boxes()),
+        "watched_boxes": len(CanhTreoWatchdogEngine.get_watched_boxes()) if is_admin else 0,
         "ram_mb": round(RenderRAMAutoCleaner.get_current_rss_mb(), 1),
         "antiban": UltimateAntiBan.health(),
     })
@@ -15713,10 +15778,16 @@ def api_miniapp_telemetry():
 @app.route("/api/miniapp/stop_task", methods=["POST"])
 def api_miniapp_stop_task():
     data = request.get_json(silent=True) or {}
-    tid = str(data.get("task_id") or "").strip()
-    state = cancel_one(tid, ACTIVE_TASKS, TASKS_RAM_STORE, TASKS_RAM_LOCK)
-    if state is None:
-        return jsonify({"ok": False, "error": "Không tìm thấy tác vụ"}), 404
+    reference = str(data.get("task_ref") or "").strip()
+    # Backwards-compatible stop endpoint for existing Mini App builds: only a
+    # legacy raw task ID may be translated, and only for the administrator.
+    if not reference:
+        raw_id = str(data.get("task_id") or "").strip()
+        reference = "legacy:" + raw_id if raw_id else ""
+    try:
+        state = _miniapp_task_control(miniapp_request_owner(), reference, "stop")
+    except ValueError as error:
+        return jsonify({"ok": False, "error": str(error)}), 404
     message = "Đang dừng; chờ yêu cầu mạng đang thực hiện kết thúc" if state == "stopping" else "Đã dừng tác vụ"
     return jsonify({"ok": True, "status": state, "message": message}), 202 if state == "stopping" else 200
 
@@ -15775,7 +15846,7 @@ def api_miniapp_add_cookie():
         acc_id = sync_zalo_account_to_web_db(
             uid=uid, display_name=name, imei=imei_str, cookies_dict=ck_dict,
             zpw_enk=enk, user_agent=(meta or {}).get("user_agent", ""),
-            owner_tg_id=str(TELEGRAM_ADMIN_ID)
+            owner_tg_id=admin_principal_id()
         )
         if not acc_id:
             return jsonify({"ok": False, "error": "Không lưu được tài khoản vào cơ sở dữ liệu. Vui lòng kiểm tra nhật ký máy chủ."}), 500
@@ -16573,7 +16644,7 @@ def login():
         is_valid = False
         if pw and (pw == ACCESS_KEY or pw == DEFAULT_ADMIN_PASS):
             is_valid = True
-        else:
+        elif pw:
             try:
                 conn = db()
                 row = conn.execute("SELECT password FROM users WHERE username=?", (DEFAULT_ADMIN_USER,)).fetchone()
@@ -16680,7 +16751,7 @@ def healthz():
     # Keep the liveness probe unauthenticated and deliberately minimal.  The
     # administrator identifier is operational data, not a health signal, and
     # should not be disclosed to every load-balancer probe.
-    return jsonify({"ok": True, "service": "BOT TREO 4APP VN", "mode": "telegram_bot"}), 200
+    return jsonify({"ok": True, "service": "GLAZE Web Control", "mode": "web"}), 200
 
 @app.route("/")
 def index():
@@ -17762,7 +17833,7 @@ def route_task_stop(tid):
 @app.route("/task/stop_all", methods=["POST"])
 def route_task_stop_all():
     cnt = stop_tasks_for_thread(None)
-    cnt += app.extensions['notification_queue'].stop_all(str(TELEGRAM_ADMIN_ID))
+    cnt += app.extensions['notification_queue'].stop_all(admin_principal_id())
     return jsonify({"ok": True, "stopped": cnt})
 
 _STATUS_SNAPSHOT_CACHE = {"ts": 0.0, "payload": None}
@@ -17926,6 +17997,7 @@ def api_permissions_remove():
 
 # TỰ ĐỘNG KHỞI CHẠY BOT TELEGRAM PHAN ANH KHÔI (RIKE) CÙNG WEB SERVER
 _TELEGRAM_BOT_RUNNER = None
+_TELEGRAM_BOT_STARTUP = {"state": "NOT_STARTED", "updated_at": 0.0, "error_type": ""}
 
 def telegram_boot_readiness():
     # Never return, log, or include an actual token. This reports configuration
@@ -17945,19 +18017,25 @@ def ensure_telegram_bot_started():
     logger = getLogger(__name__)
     gate = telegram_boot_readiness()
     if gate != "configured":
+        _TELEGRAM_BOT_STARTUP.update(state="NOT_CONFIGURED", updated_at=time.time(), error_type=gate)
         logger.error("Telegram polling NOT STARTED: %s (check Render Environment keys; no secret printed)", gate)
         return
     if _TELEGRAM_BOT_RUNNER is not None:
+        _TELEGRAM_BOT_STARTUP.update(state="RUNNING", updated_at=time.time(), error_type="")
         return
     try:
+        _TELEGRAM_BOT_STARTUP.update(state="STARTING", updated_at=time.time(), error_type="")
         from get_ck_im_zalo import start_background_telegram_bot
         _TELEGRAM_BOT_RUNNER = start_background_telegram_bot(TELEGRAM_BOT_TOKEN)
         if _TELEGRAM_BOT_RUNNER is None:
+            _TELEGRAM_BOT_STARTUP.update(state="DEGRADED", updated_at=time.time(), error_type="runner_unavailable")
             logger.error("Telegram polling NOT STARTED: runner_unavailable")
         else:
+            _TELEGRAM_BOT_STARTUP.update(state="RUNNING", updated_at=time.time(), error_type="")
             logger.info("Telegram polling thread launched; awaiting Telegram getMe validation")
     except Exception as exc:
         # Never include provider exception strings: they can contain bot tokens.
+        _TELEGRAM_BOT_STARTUP.update(state="DEGRADED", updated_at=time.time(), error_type=type(exc).__name__)
         logger.error("Telegram polling NOT STARTED: startup_exception_%s", type(exc).__name__)
 
 
@@ -17965,7 +18043,7 @@ def ensure_telegram_bot_started():
 if telegram_boot_readiness() != "configured":
     from logging import getLogger
     getLogger(__name__).error(
-        "Telegram bot offline at startup: %s; Render web health does not reflect bot readiness",
+        "Telegram bot offline at startup: %s; web health does not reflect bot readiness",
         telegram_boot_readiness())
 else:
     threading.Thread(target=ensure_telegram_bot_started, daemon=True).start()

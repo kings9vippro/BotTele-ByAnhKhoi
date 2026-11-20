@@ -38,8 +38,20 @@ class TaskQueue:
         self.claim_lock = threading.Lock()
         self.delay = 0.0
         self.worker_cleanup = worker_cleanup
-        c = db()
-        c.executescript('''
+        self.ensure_schema(recover_inflight=True)
+
+    def ensure_schema(self, *, recover_inflight=False):
+        """Create queue tables for the configured database exactly when needed.
+
+        Runtime configuration can intentionally point the application at a new
+        empty SQLite file (for a migration or controlled test).  Schema setup
+        belongs to the durable queue rather than to a frontend read path.
+        ``recover_inflight`` is only used on queue construction, where no
+        worker from this instance has started yet.
+        """
+        c = self.db()
+        try:
+            c.executescript('''
         CREATE TABLE IF NOT EXISTS notification_tasks (
           id TEXT PRIMARY KEY, owner TEXT NOT NULL, channel TEXT NOT NULL,
           payload TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL,
@@ -51,10 +63,12 @@ class TaskQueue:
           status TEXT NOT NULL, at REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS notification_limits(name TEXT PRIMARY KEY, until REAL NOT NULL);
         ''')
-        # Only safe before worker startup; enforce one application worker.
-        c.execute("UPDATE notification_tasks SET status='UNKNOWN', error='Restart during request; reconcile before retry', updated=? WHERE status IN ('RUNNING','CANCELLING')", (time.time(),))
-        c.commit()
-        c.close()
+            # Only safe before worker startup; enforce one application worker.
+            if recover_inflight:
+                c.execute("UPDATE notification_tasks SET status='UNKNOWN', error='Restart during request; reconcile before retry', updated=? WHERE status IN ('RUNNING','CANCELLING')", (time.time(),))
+            c.commit()
+        finally:
+            c.close()
 
     def _event(self, c, row, status):
         c.execute('INSERT INTO notification_events(owner,task,status,at) VALUES(?,?,?,?)', (row['owner'], row['id'], status, time.time()))

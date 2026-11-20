@@ -38,10 +38,16 @@ def register(app, db, owner):
             raise ValueError('Cần SECRET_KEY cố định trong Environment')
         return Fernet(base64.urlsafe_b64encode(hashlib.sha256(('webhooks:' + str(app.secret_key)).encode()).digest()))
 
-    c = db()
-    c.execute('CREATE TABLE IF NOT EXISTS webhook_channels(id TEXT PRIMARY KEY,owner TEXT NOT NULL,name TEXT NOT NULL,secret TEXT NOT NULL,created REAL NOT NULL)')
-    c.commit()
-    c.close()
+    def ensure_channel_schema():
+        """Initialize channel storage if an explicit DB target changed."""
+        c = db()
+        try:
+            c.execute('CREATE TABLE IF NOT EXISTS webhook_channels(id TEXT PRIMARY KEY,owner TEXT NOT NULL,name TEXT NOT NULL,secret TEXT NOT NULL,created REAL NOT NULL)')
+            c.commit()
+        finally:
+            c.close()
+
+    ensure_channel_schema()
     local = threading.local()
     def cleanup_worker():
         if hasattr(local, 'http'):
@@ -55,6 +61,13 @@ def register(app, db, owner):
     def channels(user):
         c = db()
         try:
+            return [dict(r) for r in c.execute('SELECT id,name,created FROM webhook_channels WHERE owner=?', (str(user),))]
+        except Exception as error:
+            if 'no such table' not in str(error).lower():
+                raise
+            c.close()
+            ensure_channel_schema()
+            c = db()
             return [dict(r) for r in c.execute('SELECT id,name,created FROM webhook_channels WHERE owner=?', (str(user),))]
         finally:
             c.close()
@@ -102,11 +115,20 @@ def register(app, db, owner):
         queue.start()
 
     def snapshot(user, cursor=0):
+        # Durable records drive queue metrics, while the optional registry
+        # callback adds legacy process-local tasks without pretending they are
+        # executed by this queue.  The callback is installed by the runtime
+        # after its legacy engine has been initialized.
         root_view = is_root(user)
-        tasks = queue.list_all_for_root() if root_view else queue.list(user)
+        durable_tasks = queue.list_all_for_root() if root_view else queue.list(user)
+        unified = app.extensions.get('unified_tasks')
+        registry = app.extensions.get('task_registry_snapshot')
+        tasks = (unified(str(user)) if callable(unified) else
+                 registry(str(user)) if callable(registry) else durable_tasks)
         counts = {}
         for t in tasks:
-            counts[t['status']] = counts.get(t['status'],0)+1
+            status = str(t.get('status') or 'UNKNOWN').upper()
+            counts[status] = counts.get(status,0)+1
         c = db()
         try:
             if root_view:
@@ -123,16 +145,16 @@ def register(app, db, owner):
                     (str(user), 0 if reset else cursor))]
         finally:
             c.close()
-        durations = [t['latency'] for t in tasks if t['attempts'] > 0 and t['latency'] > 0]
-        completed = [t for t in tasks if t['status'] == 'COMPLETED']
+        durations = [t['latency'] for t in durable_tasks if t['attempts'] > 0 and t['latency'] > 0]
+        completed = [t for t in durable_tasks if t['status'] == 'COMPLETED']
         return {'ok': True,'tasks':tasks,'counts':counts,'events':events,'reset':reset,'cursor':events[-1]['seq'] if events else cursor,
                 'channels':channels(user),'workers':sum(t.is_alive() for t in queue.threads),
                 'artificial_delay_seconds':0,'api_latency_seconds':sum(durations)/len(durations) if durations else None,
                 'snapshot_at':time.time(),'metrics_window':'200 tác vụ gần nhất',
-                'queue_wait_seconds':sum(t['started']-t['created'] for t in tasks if t['started'])/max(1,sum(bool(t['started']) for t in tasks)) if any(t['started'] for t in tasks) else None,
+                'queue_wait_seconds':sum(t['started']-t['created'] for t in durable_tasks if t['started'])/max(1,sum(bool(t['started']) for t in durable_tasks)) if any(t['started'] for t in durable_tasks) else None,
                 'completion_seconds':sum(t['completed']-t['created'] for t in completed)/len(completed) if completed else None,
                 'completed_last_minute':sum(t['completed'] >= time.time()-60 for t in completed),
-                'retry_count':sum(max(0,t['attempts']-1) for t in tasks),
+                'retry_count':sum(max(0,t['attempts']-1) for t in durable_tasks),
                 'commands':[{'name':k,'description':v,'usage':'/'+k,'permission':'authorized_owner','handler':'telegram_command','availability':'supported'} for k,v in COMMANDS.items()]}
 
     app.extensions['control_snapshot'] = snapshot
@@ -252,6 +274,21 @@ def register(app, db, owner):
         except ValueError as ex:
             return jsonify(ok=False,error=str(ex)),409
 
+    @app.post('/api/miniapp/task_control')
+    def unified_task_control():
+        """Control an engine-qualified task through its owning subsystem."""
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify(ok=False, error='Cần một đối tượng JSON'), 400
+        handler = app.extensions.get('task_registry_control')
+        if not callable(handler):
+            return jsonify(ok=False, error='Bộ điều phối tác vụ chưa sẵn sàng'), 503
+        try:
+            status = handler(str(owner()), str(data.get('task_ref', '')), str(data.get('action', '')))
+            return jsonify(ok=True, status=status)
+        except ValueError as ex:
+            return jsonify(ok=False, error=str(ex)), 409
+
     @app.post('/api/miniapp/notifications/stop_all')
     def stop_all():
         return jsonify(ok=True,count=queue.stop_all(owner()))
@@ -277,10 +314,14 @@ def register(app, db, owner):
 
     # Gunicorn runs 16 request threads; reserve half for commands and mutations.
     streams = threading.BoundedSemaphore(8)
+    app.extensions['miniapp_sse_streams'] = streams
     @app.get('/api/miniapp/events')
     def events():
         if not streams.acquire(blocking=False):
-            return jsonify(ok=False,error='Đang có nhiều kết nối; thử lại sau'),503
+            # The browser falls back to bounded polling and honors Retry-After;
+            # returning a machine-readable overload response avoids a reconnect
+            # storm that would consume the remaining Gunicorn request threads.
+            return jsonify(ok=False,error='Đang có nhiều kết nối cập nhật; thử lại sau.',code='stream_capacity',retry_after_seconds=5),503,{'Retry-After':'5','Cache-Control':'no-store'}
         user = str(owner())
         cursor = max(0,request.args.get('cursor',0,type=int) or 0)
         request_id = request.headers.get('X-Request-ID', '')
@@ -467,6 +508,8 @@ def telegram_command(bot, user, chat, name, args):
                         runtime.TASKS_RAM_STORE, runtime.TASKS_RAM_LOCK)
                     answer = 'Không tìm thấy tác vụ.' if state is None else 'Trạng thái hiện tại: ' + state
             else:
+                if task_id.startswith('durable:'):
+                    task_id = task_id.split(':', 1)[1]
                 answer = queue.control(ext['root_task_control_owner'](str(user),task_id), task_id, name[5:])
         elif name == 'task_accounts':
             from get_ck_im_zalo import get_user_visible_accounts
@@ -518,7 +561,7 @@ def telegram_command(bot, user, chat, name, args):
                     bot.send_text(chat, 'Chỉ root admin được xem toàn bộ tác vụ.')
                     return True
                 name = 'tasks'
-                args = '' 
+                args = ''
             if name == 'task_status' and not args.strip():
                 bot.send_text(chat, 'Cú pháp: /task_status <task_id>')
                 return True

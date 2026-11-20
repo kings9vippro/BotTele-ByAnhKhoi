@@ -8,26 +8,19 @@ Both Google DNS and Cloudflare DNS returned NXDOMAIN for the **A** record of \`t
 
 **The newest token is currently visible in the public GitHub history and the old \`main\` source.** Putting the token through Fernet after public exposure will not revoke it. Treat the token as potentially compromised; revoke/replace via BotFather as soon as practical. The automated patch does not revoke or overwrite an existing provider secret.
 
-This branch removes the hardcoded fallback from source and adds two supported deployment methods:
-
-### Option A (recommended): use hosting secret storage
+This branch removes the hardcoded fallback from source. The supported production
+method is hosting secret storage:
 
 1. Open the production hosting provider's service → Environment / Secrets.
 2. Save \`TELEGRAM_BOT_TOKEN\` = the current token (privately; never paste it in GitHub, chat, PR, screenshot or logs).
 3. Save \`TELEGRAM_ADMIN_ID\` = the authorized administrator's Telegram numeric ID.
 4. Ensure a stable \`SECRET_KEY\` is present for Flask sessions.
-5. Keep \`TELEGRAM_BOT_TOKEN_ENCRYPTED\` unset if using the direct secret variable.
-6. Verify health, bot startup, and a signed Telegram Mini App launch **before merging a release**.
+5. Verify health, bot startup, and a signed Telegram Mini App launch **before merging a release**.
 
-### Option B: optional Fernet ciphertext + separate key
-
-1. Generate a Fernet key in a private local terminal and store it as a host secret \`TELEGRAM_BOT_TOKEN_KEY\`. Do not commit or send the key.
-2. In a private environment only, configure \`TELEGRAM_BOT_TOKEN\` (existing token) and \`TELEGRAM_BOT_TOKEN_KEY\`, then run \`python scripts/encrypt_bot_token.py\`. The script prints only ciphertext.
-3. Save that ciphertext as the host secret \`TELEGRAM_BOT_TOKEN_ENCRYPTED\`.
-4. **Remove the direct \`TELEGRAM_BOT_TOKEN\` environment variable from that service after ciphertext and key have been verified**. Having both active is rejected to avoid ambiguity.
-5. Keep the Fernet key and ciphertext in independently controlled secret locations where possible. Storing both as plain strings in the same public repository does **not** provide protection.
-
-This is an *opt-in* feature: existing \`TELEGRAM_BOT_TOKEN\` host environment configurations keep working without changes. Code and logs never print plaintext values. Encryption has no effect until the owner configures the corresponding host secret.
+The helper \`scripts/encrypt_bot_token.py\` is not a runtime credential
+provider. Do not configure an encrypted-token variable expecting this Flask
+service to decrypt it: the application deliberately reads only the host-provided
+\`TELEGRAM_BOT_TOKEN\` secret, so there is one auditable source of truth.
 
 ## Telegram command repairs
 

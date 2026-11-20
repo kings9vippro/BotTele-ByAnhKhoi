@@ -259,7 +259,7 @@ class MiniAppTests(unittest.TestCase):
 
     def test_miniapp_has_fresh_build_header(self):
         response = self.client.get("/miniapp")
-        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-2.0.0")
+        self.assertEqual(response.headers["X-Glaze-UI-Version"], "miniapp-2.1.0")
         self.assertIn("no-store", response.headers["Cache-Control"])
 
     def test_custom_sticker_upload_plain_response_reaches_send(self):

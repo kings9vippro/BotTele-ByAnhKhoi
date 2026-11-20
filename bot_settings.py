@@ -5,7 +5,6 @@ Telegram bot token into a source file tracked by GitHub.
 """
 import os
 
-
 class BotSecretConfigurationError(RuntimeError):
     """Safe startup configuration error without credential contents."""
 
@@ -16,8 +15,8 @@ def load_bot_token(environment=None):
         raise BotSecretConfigurationError(
             "load_bot_token requires an environment mapping. Set TELEGRAM_BOT_TOKEN in hosting secrets."
         )
-    return str(env.get("TELEGRAM_BOT_TOKEN") or "9089151186:AAHeWAKE0TeVEj2ZecCyuKBhqqE2YH9kIVI").strip()
+    return str(env.get("TELEGRAM_BOT_TOKEN") or "").strip()
 
 
 TELEGRAM_BOT_TOKEN = load_bot_token()
-TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "8827605973").strip()
+TELEGRAM_ADMIN_ID = os.environ.get("TELEGRAM_ADMIN_ID", "").strip()

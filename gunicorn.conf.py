@@ -1,9 +1,9 @@
 # Author: Dev Anh Khôi · Version: 1.2.0.
 import os
 
-bind = f"0.0.0.0:{os.environ.get('PORT', '5000')}"
+bind = f"{os.environ.get('BIND_HOST', '0.0.0.0')}:{os.environ.get('PORT', '5000')}"
 workers = 1
-threads = 16
+threads = max(4, min(32, int(os.environ.get('GUNICORN_THREADS', '16'))))
 worker_class = "gthread"
 timeout = 120
 keepalive = 35

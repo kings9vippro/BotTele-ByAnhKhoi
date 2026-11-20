@@ -11,18 +11,100 @@ import os
 import re
 import secrets
 import time
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 from flask import Response, jsonify, render_template_string, request, session
 
-PROVIDERS = {"discord": "Discord"}
+PROVIDERS = {"discord": "Discord", "facebook": "Facebook"}
+PROVIDER_SPECS = {
+    "discord": {
+        "client_id": "DISCORD_CLIENT_ID", "client_secret": "DISCORD_CLIENT_SECRET",
+        "authorize": "https://discord.com/oauth2/authorize", "scope": "identify",
+    },
+    "facebook": {
+        "client_id": "FACEBOOK_APP_ID", "client_secret": "FACEBOOK_APP_SECRET",
+        "authorize": "https://www.facebook.com/v21.0/dialog/oauth", "scope": "public_profile",
+    },
+}
 ATTEMPT_TTL = 300
+TELEGRAM_INIT_DATA_MAX_AGE = 24 * 60 * 60
+TELEGRAM_INIT_DATA_CLOCK_SKEW = 30
 
 
 class OAuthError(ValueError):
     pass
+
+
+class TelegramInitDataError(ValueError):
+    """A safe, machine-readable Mini App launch validation failure.
+
+    The public ``code`` is intentionally descriptive enough for a recovery UI
+    but never includes raw initData, a bot token, or a computed signature.
+    """
+
+    def __init__(self, code):
+        self.code = str(code)
+        super().__init__(self.code)
+
+
+def validate_telegram_webapp_init_data(
+    init_data,
+    bot_token,
+    *,
+    now=None,
+    max_age=TELEGRAM_INIT_DATA_MAX_AGE,
+    clock_skew=TELEGRAM_INIT_DATA_CLOCK_SKEW,
+):
+    """Validate the official Telegram Web App initData HMAC contract.
+
+    It is deliberately framework-independent so Flask routes, command-line
+    smoke tests and future transports share the exact same security boundary.
+    ``auth_date`` must be recent; a small future allowance avoids rejecting
+    legitimate launches when a device clock is marginally ahead.
+    """
+    token = str(bot_token or "").strip()
+    if not token:
+        raise TelegramInitDataError("server_misconfigured")
+    raw = str(init_data or "").strip()
+    if not raw:
+        raise TelegramInitDataError("missing_init_data")
+    try:
+        pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=True)
+    except ValueError as error:
+        raise TelegramInitDataError("malformed_init_data") from error
+    values = {}
+    for key, value in pairs:
+        if key in values:
+            raise TelegramInitDataError("malformed_init_data")
+        values[key] = value
+    received_hash = values.pop("hash", "")
+    if not received_hash or len(received_hash) != 64:
+        raise TelegramInitDataError("invalid_signature")
+    try:
+        auth_date = int(values.get("auth_date") or "")
+    except (TypeError, ValueError) as error:
+        raise TelegramInitDataError("malformed_init_data") from error
+    current = float(time.time() if now is None else now)
+    if auth_date <= 0:
+        raise TelegramInitDataError("malformed_init_data")
+    if auth_date > current + max(0, int(clock_skew)):
+        raise TelegramInitDataError("clock_skew")
+    if current - auth_date > max(0, int(max_age)):
+        raise TelegramInitDataError("expired_init_data")
+    data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+    secret = hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest()
+    expected_hash = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(received_hash, expected_hash):
+        raise TelegramInitDataError("invalid_signature")
+    try:
+        user = json.loads(values.get("user") or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise TelegramInitDataError("malformed_init_data") from error
+    if not isinstance(user, dict) or not str(user.get("id") or "").isdigit():
+        raise TelegramInitDataError("malformed_init_data")
+    return {"user": user, "auth_date": auth_date, "values": values}
 
 
 def init_oauth_tables(connection):
@@ -57,8 +139,9 @@ def _config(provider, overrides=None):
     missing = []
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
         missing.append("OAUTH_PUBLIC_BASE_URL (HTTPS, không có đường dẫn)")
-    id_key = "DISCORD_CLIENT_ID"
-    secret_key = "DISCORD_CLIENT_SECRET"
+    spec = PROVIDER_SPECS[provider]
+    id_key = spec["client_id"]
+    secret_key = spec["client_secret"]
     client_id, client_secret = setting(id_key), setting(secret_key)
     for key, value in ((id_key, client_id), (secret_key, client_secret)):
         if not value:
@@ -71,14 +154,14 @@ def _config(provider, overrides=None):
         missing.append("OAUTH_ENCRYPTION_KEY (Fernet)")
     return {"missing": missing, "client_id": client_id, "client_secret": client_secret,
             "redirect_uri": base + "/oauth/callback/" + provider, "cipher": cipher,
-            "base": base}
+            "base": base, "scope": spec["scope"], "authorize": spec["authorize"]}
 
 
 def _public_connections(db, owner_id):
     connection = db()
     try:
         rows = connection.execute(
-            "SELECT id, provider, provider_uid, display_name, scope, expires_at, connected_at FROM oauth_connections WHERE owner_id=? AND provider='discord' ORDER BY connected_at DESC",
+            "SELECT id, provider, provider_uid, display_name, scope, expires_at, connected_at FROM oauth_connections WHERE owner_id=? ORDER BY connected_at DESC",
             (owner_id,),
         ).fetchall()
     finally:
@@ -89,25 +172,33 @@ def _public_connections(db, owner_id):
 
 def _exchange_profile(provider, config, code):
     """Short bounded requests; provider response bodies/errors never go to logs/UI."""
-    if provider != 'discord':
+    if provider == "discord":
+        token_url = "https://discord.com/api/v10/oauth2/token"
+        profile_url = "https://discord.com/api/v10/users/@me"
+        token_form = {"client_id": config["client_id"], "client_secret": config["client_secret"],
+                      "grant_type": "authorization_code", "code": code, "redirect_uri": config["redirect_uri"]}
+        token_params, profile_params = None, {}
+    elif provider == "facebook":
+        token_url = "https://graph.facebook.com/v21.0/oauth/access_token"
+        profile_url = "https://graph.facebook.com/v21.0/me"
+        token_form = None
+        token_params = {"client_id": config["client_id"], "client_secret": config["client_secret"],
+                        "code": code, "redirect_uri": config["redirect_uri"]}
+        profile_params = {"fields": "id,name"}
+    else:
         raise OAuthError('Nền tảng không được hỗ trợ')
-    token_url = "https://discord.com/api/v10/oauth2/token"
-    token_form = {"client_id": config["client_id"], "client_secret": config["client_secret"],
-                  "grant_type": "authorization_code", "code": code, "redirect_uri": config["redirect_uri"]}
     if config.get('code_verifier'):
         token_form['code_verifier'] = config['code_verifier']
     try:
         with requests.Session() as http:
-            with http.post(token_url, data=token_form, timeout=(5, 15), allow_redirects=False) as response:
+            with http.post(token_url, data=token_form, params=token_params, timeout=(5, 15), allow_redirects=False) as response:
                 if response.status_code != 200:
                     raise OAuthError("Nhà cung cấp từ chối mã đăng nhập. Hãy kết nối lại.")
                 token = response.json()
             access = token.get("access_token")
-            if not isinstance(access, str) or not access or not token.get("expires_in"):
+            if not isinstance(access, str) or not access:
                 raise OAuthError("Nhà cung cấp không trả về phiên OAuth hợp lệ")
-            params = {}
-            profile_url = "https://discord.com/api/v10/users/@me"
-            with http.get(profile_url, headers={"Authorization": "Bearer " + access}, params=params, timeout=(5, 15), allow_redirects=False) as response:
+            with http.get(profile_url, headers={"Authorization": "Bearer " + access}, params=profile_params, timeout=(5, 15), allow_redirects=False) as response:
                 if response.status_code != 200:
                     raise OAuthError("Không xác minh được hồ sơ từ nhà cung cấp")
                 profile = response.json()
@@ -115,10 +206,13 @@ def _exchange_profile(provider, config, code):
         if not uid.isdigit():
             raise OAuthError("Hồ sơ OAuth không có ID hợp lệ")
         display_name = str(profile.get("global_name") or profile.get("name") or profile.get("username") or uid)[:150]
-        expires = max(1, int(token["expires_in"]))
+        # Facebook may omit expires_in for a long-lived user token. Keep a
+        # conservative local re-authorization horizon instead of claiming it
+        # can never expire or survive revocation.
+        expires = max(1, int(token.get("expires_in") or 3600))
         return {"uid": uid, "name": display_name, "access": access,
                 "refresh": str(token.get("refresh_token") or ""), "expires": expires,
-                "scope": "identify"}
+                "scope": config["scope"]}
     except (requests.RequestException, TypeError, KeyError, ValueError) as error:
         if isinstance(error, OAuthError):
             raise
@@ -157,9 +251,10 @@ def register_oauth_routes(app, db, owner_id):
         client_id, secret = str(data.get("client_id") or "").strip(), str(data.get("client_secret") or "").strip()
         if not client_id.isdigit() or not secret:
             return jsonify({"ok": False, "error": "Cần App/Client ID dạng số và secret ứng dụng"}), 400
+        spec = PROVIDER_SPECS[provider]
         values = {"OAUTH_PUBLIC_BASE_URL": str(data.get("public_base_url") or "").strip().rstrip("/"),
-                  "DISCORD_CLIENT_ID": client_id,
-                  "DISCORD_CLIENT_SECRET": secret,
+                  spec["client_id"]: client_id,
+                  spec["client_secret"]: secret,
                   "OAUTH_ENCRYPTION_KEY": base64.urlsafe_b64encode(hashlib.sha256(b"validation-only").digest()).decode()}
         try:
             validated = _config(provider, values)
@@ -195,7 +290,7 @@ def register_oauth_routes(app, db, owner_id):
             config = configuration(provider)
             providers.append({"id": provider, "label": label, "configured": not config["missing"],
                               "missing": config["missing"], "redirect_uri": config["redirect_uri"] if config["base"] else None,
-                              "scope": "identify"})
+                              "scope": config["scope"]})
         return jsonify({"ok": True, "providers": providers})
 
     @app.get("/api/miniapp/oauth/connections")
@@ -221,7 +316,7 @@ def register_oauth_routes(app, db, owner_id):
         # OAuth to that browser's HttpOnly session, not the Telegram webview.
         launch = secrets.token_urlsafe(32)
         state = secrets.token_urlsafe(32)
-        verifier = secrets.token_urlsafe(48) if os.environ.get('DISCORD_OAUTH_PKCE') == '1' else ''
+        verifier = secrets.token_urlsafe(48) if provider == 'discord' and os.environ.get('DISCORD_OAUTH_PKCE') == '1' else ''
         encrypted_verifier = config['cipher'].encrypt(verifier.encode()).decode() if verifier else ''
         conn = db()
         try:
@@ -239,6 +334,7 @@ def register_oauth_routes(app, db, owner_id):
         payload = URLSafeTimedSerializer(app.secret_key, salt="oauth-launch").dumps({"launch": launch, "state": state})
         return {"ok": True, "url": config["base"] + "/oauth/begin/" + payload, "expires_in": ATTEMPT_TTL}
 
+    app.extensions['oauth_start'] = start_for_owner
     app.extensions['discord_oauth_start'] = start_for_owner
 
     @app.get("/oauth/begin/<payload>")
@@ -265,9 +361,11 @@ def register_oauth_routes(app, db, owner_id):
             bindings[row["state_hash"]] = binding
             session["oauth_bindings"] = dict(list(bindings.items())[-5:])
             provider = row["provider"]
-            endpoint = "https://discord.com/oauth2/authorize"
+            endpoint = config["authorize"]
             params = {"client_id": config["client_id"], "redirect_uri": config["redirect_uri"], "response_type": "code",
-                      "scope": "identify", "state": values["state"], "prompt": "consent"}
+                      "scope": config["scope"], "state": values["state"]}
+            if provider == "discord":
+                params["prompt"] = "consent"
             if row['verifier_encrypted']:
                 try:
                     verifier = config['cipher'].decrypt(row['verifier_encrypted'].encode())
@@ -281,7 +379,9 @@ def register_oauth_routes(app, db, owner_id):
 
     @app.get("/oauth/callback/<provider>")
     def oauth_callback(provider):
-        if request.args.get('iss', 'https://discord.com') != 'https://discord.com':
+        issuer = request.args.get('iss')
+        expected_issuers = {"discord": {"https://discord.com"}, "facebook": {"https://www.facebook.com", "https://facebook.com"}}
+        if issuer and issuer not in expected_issuers.get(provider, set()):
             return result_page('Nhà phát hành OAuth không hợp lệ.', 400)
         state = request.args.get("state", "")
         state_hash = _digest(state)
@@ -351,24 +451,29 @@ def register_oauth_routes(app, db, owner_id):
     def disconnect_for_owner(user, connection_id):
         conn = db()
         try:
-            row = conn.execute("SELECT * FROM oauth_connections WHERE id=? AND owner_id=? AND provider='discord'",(connection_id,user)).fetchone()
+            row = conn.execute("SELECT * FROM oauth_connections WHERE id=? AND owner_id=?", (connection_id, user)).fetchone()
             if row:
-                config = configuration('discord')
+                provider = row['provider']
+                config = configuration(provider)
                 if config['missing']:
                     raise OAuthError('Thiếu cấu hình để thu hồi; dữ liệu liên kết chưa bị xóa')
                 try:
                     token = config['cipher'].decrypt(row['access_encrypted'].encode()).decode()
-                    with requests.post('https://discord.com/api/v10/oauth2/token/revoke', data={'client_id':config['client_id'],'client_secret':config['client_secret'],'token':token},timeout=(4,10),allow_redirects=False) as response:
+                    if provider == 'discord':
+                        response = requests.post('https://discord.com/api/v10/oauth2/token/revoke', data={'client_id':config['client_id'],'client_secret':config['client_secret'],'token':token},timeout=(4,10),allow_redirects=False)
+                    else:
+                        response = requests.delete('https://graph.facebook.com/v21.0/me/permissions', params={'access_token': token}, timeout=(4,10), allow_redirects=False)
+                    with response:
                         if response.status_code not in (200,204):
-                            raise OAuthError('Discord chưa xác nhận thu hồi; liên kết vẫn được giữ để thử lại')
+                            raise OAuthError(f'{PROVIDERS[provider]} chưa xác nhận thu hồi; liên kết vẫn được giữ để thử lại')
                 except requests.RequestException:
-                    raise OAuthError('Không kết nối được Discord để thu hồi quyền') from None
+                    raise OAuthError(f'Không kết nối được {PROVIDERS[provider]} để thu hồi quyền') from None
                 except InvalidToken:
                     raise OAuthError('Khóa mã hóa đã thay đổi; khôi phục khóa cũ hoặc thu hồi trong Discord trước') from None
-            conn.execute("DELETE FROM oauth_connections WHERE id=? AND owner_id=? AND provider='discord'", (connection_id, user))
+            conn.execute("DELETE FROM oauth_connections WHERE id=? AND owner_id=?", (connection_id, user))
             conn.commit()
         finally:
             conn.close()
-        return 'Đã thu hồi quyền và ngắt liên kết Discord'
+        return 'Đã thu hồi quyền và ngắt liên kết OAuth'
 
     app.extensions['discord_oauth_disconnect'] = disconnect_for_owner
