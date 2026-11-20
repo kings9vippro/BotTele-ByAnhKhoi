@@ -55,7 +55,7 @@ class OAuthTests(unittest.TestCase):
         redirect = browser.get(urlsplit(started.json["url"]).path)
         self.assertEqual(redirect.status_code, 302)
         params = parse_qs(urlsplit(redirect.location).query)
-        self.assertEqual(params["scope"], ["identify"])
+        self.assertEqual(params["scope"], ["identify" if provider == "discord" else "public_profile"])
         self.assertNotIn("private", redirect.location)
         return browser, params["state"][0]
 
@@ -76,10 +76,28 @@ class OAuthTests(unittest.TestCase):
 
     def test_provider_configuration_is_truthful_and_secret_free(self):
         result = self.admin.get("/api/miniapp/oauth/providers")
-        self.assertTrue(all(item["configured"] for item in result.json["providers"]))
+        by_id = {item["id"]: item for item in result.json["providers"]}
+        self.assertTrue(by_id["discord"]["configured"])
+        self.assertFalse(by_id["facebook"]["configured"])
         self.assertNotIn("private", result.text)
         with patch.dict(os.environ, {"DISCORD_CLIENT_SECRET": ""}):
             self.assertEqual(self.admin.post("/api/miniapp/oauth/start", json={"provider": "discord"}).status_code, 503)
+
+    def test_facebook_uses_official_oauth_endpoint_and_is_not_cookie_login(self):
+        with patch.dict(os.environ, {"FACEBOOK_APP_ID": "123456", "FACEBOOK_APP_SECRET": "facebook-secret"}):
+            browser, state = self.begin("facebook")
+            conn = self.db()
+            row = conn.execute("SELECT provider FROM oauth_attempts WHERE state_hash=?", (oauth._digest(state),)).fetchone()
+            conn.close()
+            self.assertEqual(row[0], "facebook")
+            with patch.object(oauth, "_exchange_profile", return_value={
+                "uid": "987654", "name": "Facebook Profile", "access": "encrypted-later",
+                "refresh": "", "expires": 3600, "scope": "public_profile",
+            }):
+                response = browser.get("/oauth/callback/facebook", query_string={"state": state, "code": "official-code"})
+            self.assertEqual(response.status_code, 200)
+            listing = self.admin.get("/api/miniapp/oauth/connections").json["connections"]
+            self.assertEqual(listing[0]["provider"], "facebook")
 
     def test_official_login_is_encrypted_persisted_and_not_an_automation_account(self):
         browser, state = self.begin()

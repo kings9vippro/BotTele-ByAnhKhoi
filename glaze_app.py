@@ -175,6 +175,10 @@ ACCESS_KEY = os.environ.get("WEB_KEY", "").strip()
 DEFAULT_ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 DEFAULT_ADMIN_PASS = os.environ.get("ADMIN_PASS", "")
 
+def admin_principal_id():
+    """Stable web owner with a dynamic Telegram fallback for tests/migrations."""
+    return str(os.environ.get("ADMIN_PRINCIPAL_ID") or os.environ.get("TELEGRAM_ADMIN_ID") or TELEGRAM_ADMIN_ID or "web-admin").strip()
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = DATABASE_PATH
 UPLOAD_DIR = UPLOAD_PATH
@@ -263,16 +267,21 @@ def is_miniapp_request_authorized():
 
     No token fallback, no anonymous admin, no signature bypass.
     """
+    # A password-authenticated web dashboard is a first-class deployment mode.
+    # It must not depend on Telegram credentials when polling is disabled.
+    if session.get("logged_in"):
+        g.miniapp_owner = admin_principal_id()
+        g.miniapp_auth_mode = "web_session"
+        return True
+    if "TELEGRAM_BOT_TOKEN" in os.environ and not str(os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip():
+        return _miniapp_auth_failure("server_configuration")
+    init_data = (request.headers.get("X-Telegram-Init-Data") or "").strip()
+    if not init_data:
+        return _miniapp_auth_failure("missing_init_data")
     configured_token = str(os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
     configured_admin = str(TELEGRAM_ADMIN_ID or "").strip()
     if not configured_token or not configured_admin:
         return _miniapp_auth_failure("server_configuration")
-    # The compatibility password dashboard is admin-only; it must never create
-    # an implicit identity when Telegram configuration is incomplete.
-    if session.get("logged_in"):
-        g.miniapp_owner = configured_admin
-        return True
-    init_data = (request.headers.get("X-Telegram-Init-Data") or "").strip()
     try:
         launch = validate_telegram_webapp_init_data(init_data, configured_token)
         user = launch["user"]
@@ -306,19 +315,25 @@ def is_miniapp_request_authorized():
 
 
 def miniapp_request_owner():
-    return str(getattr(g, 'miniapp_owner', TELEGRAM_ADMIN_ID))
+    return str(getattr(g, 'miniapp_owner', admin_principal_id()))
 
 
 @app.get('/api/miniapp/session')
 def api_miniapp_session():
     owner = miniapp_request_owner()
-    return jsonify(ok=True, owner=owner, role='admin' if owner == str(TELEGRAM_ADMIN_ID) else 'member')
+    return jsonify(
+        ok=True,
+        owner=owner,
+        role='admin' if owner == admin_principal_id() else 'member',
+        auth_mode=getattr(g, 'miniapp_auth_mode', 'telegram_init_data'),
+        csrf_token=get_or_create_csrf_token() if session.get("logged_in") else "",
+    )
 
 @app.before_request
 def security_middleware():
     if request.path == '/':
         return redirect('/miniapp')
-    if request.path.startswith(('/api/discord/', '/api/messenger/', '/integrations/facebook', '/oauth/callback/facebook')):
+    if request.path.startswith(('/api/discord/', '/api/messenger/', '/integrations/facebook')):
         return jsonify(ok=False, error='Tích hợp cũ đã ngừng. Discord dùng OAuth2 và webhook chính thức.'), 410
     if not WebSecurityFortress.inspect_request():
         return jsonify({"ok": False, "error": "Forbidden Request Signature"}), 403
@@ -341,6 +356,12 @@ def security_middleware():
         origin = request.headers.get("Origin")
         if (request.method not in ("GET", "HEAD", "OPTIONS") and origin and origin.rstrip("/") != request.host_url.rstrip("/")) or request.headers.get("Sec-Fetch-Site") == "cross-site":
             return jsonify(ok=False, error="Nguồn yêu cầu không hợp lệ"), 403
+        if (session.get("logged_in") and request.method not in ("GET", "HEAD", "OPTIONS")
+                and os.environ.get("REQUIRE_WEB_CSRF", "0") == "1"):
+            supplied_csrf = str(request.headers.get("X-CSRF-Token") or "")
+            expected_csrf = str(session.get("csrf_token") or "")
+            if not supplied_csrf or not expected_csrf or not hmac.compare_digest(supplied_csrf, expected_csrf):
+                return jsonify(ok=False, code="csrf_invalid", error="Phiên biểu mẫu không hợp lệ. Hãy tải lại trang."), 403
     if request.path.startswith("/api/") or request.path.startswith("/task/"):
         ip = get_client_ip()
         now = time.time()
@@ -878,7 +899,7 @@ def _miniapp_task_registry(owner):
     Telegram user.
     """
     principal = str(owner or "")
-    admin = bool(TELEGRAM_ADMIN_ID) and principal == str(TELEGRAM_ADMIN_ID)
+    admin = principal == admin_principal_id()
     accounts = refresh_accounts_ram_cache(strict=True) if admin else []
     return unified_task_snapshots(
         ACTIVE_TASKS,
@@ -894,7 +915,7 @@ def _miniapp_task_registry(owner):
 def _miniapp_task_control(owner, reference, action):
     """Route a control to its actual engine; never infer the engine from IDs."""
     principal = str(owner or "")
-    if str(reference or "").startswith("legacy:") and principal != str(TELEGRAM_ADMIN_ID):
+    if str(reference or "").startswith("legacy:") and principal != admin_principal_id():
         raise ValueError("Bạn không có quyền điều khiển tác vụ này")
     return control_unified_task(
         reference,
@@ -15666,7 +15687,7 @@ def route_zenvyre_miniapp():
         "author": APP_AUTHOR,
         "version": APP_VERSION,
         "asset_revision": miniapp_asset_revision(),
-        "admin_id": TELEGRAM_ADMIN_ID,
+        "admin_id": admin_principal_id(),
         "live_accs": live_accs,
         "running_tasks": running_tasks,
         "watched_boxes": watched_boxes,
@@ -15715,12 +15736,12 @@ def api_miniapp_commands():
 def api_miniapp_telemetry():
     now_ts = time.time()
     owner = miniapp_request_owner()
-    is_admin = bool(TELEGRAM_ADMIN_ID) and owner == str(TELEGRAM_ADMIN_ID)
+    is_admin = owner == admin_principal_id()
     accounts = ([a for a in refresh_accounts_ram_cache(strict=True) if (a.get('platform') or 'zalo') == 'zalo']
                 if is_admin else [])
     connection = db()
     try:
-        oauth_count = connection.execute("SELECT COUNT(*) FROM oauth_connections WHERE owner_id=? AND provider='discord'", (owner,)).fetchone()[0]
+        oauth_count = connection.execute("SELECT COUNT(*) FROM oauth_connections WHERE owner_id=?", (owner,)).fetchone()[0]
         storage_id = storage_identity(connection)
     finally:
         connection.close()
@@ -15825,7 +15846,7 @@ def api_miniapp_add_cookie():
         acc_id = sync_zalo_account_to_web_db(
             uid=uid, display_name=name, imei=imei_str, cookies_dict=ck_dict,
             zpw_enk=enk, user_agent=(meta or {}).get("user_agent", ""),
-            owner_tg_id=str(TELEGRAM_ADMIN_ID)
+            owner_tg_id=admin_principal_id()
         )
         if not acc_id:
             return jsonify({"ok": False, "error": "Không lưu được tài khoản vào cơ sở dữ liệu. Vui lòng kiểm tra nhật ký máy chủ."}), 500
@@ -16623,7 +16644,7 @@ def login():
         is_valid = False
         if pw and (pw == ACCESS_KEY or pw == DEFAULT_ADMIN_PASS):
             is_valid = True
-        else:
+        elif pw:
             try:
                 conn = db()
                 row = conn.execute("SELECT password FROM users WHERE username=?", (DEFAULT_ADMIN_USER,)).fetchone()
@@ -16730,7 +16751,7 @@ def healthz():
     # Keep the liveness probe unauthenticated and deliberately minimal.  The
     # administrator identifier is operational data, not a health signal, and
     # should not be disclosed to every load-balancer probe.
-    return jsonify({"ok": True, "service": "BOT TREO 4APP VN", "mode": "telegram_bot"}), 200
+    return jsonify({"ok": True, "service": "GLAZE Web Control", "mode": "web"}), 200
 
 @app.route("/")
 def index():
@@ -17812,7 +17833,7 @@ def route_task_stop(tid):
 @app.route("/task/stop_all", methods=["POST"])
 def route_task_stop_all():
     cnt = stop_tasks_for_thread(None)
-    cnt += app.extensions['notification_queue'].stop_all(str(TELEGRAM_ADMIN_ID))
+    cnt += app.extensions['notification_queue'].stop_all(admin_principal_id())
     return jsonify({"ok": True, "stopped": cnt})
 
 _STATUS_SNAPSHOT_CACHE = {"ts": 0.0, "payload": None}

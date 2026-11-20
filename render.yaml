@@ -3,22 +3,38 @@ services:
     name: bot-treo-4app-vn
     runtime: python
     region: singapore
-    plan: free
+    # Persistent background state requires a paid instance with an attached
+    # disk. Render Free can sleep and has an ephemeral filesystem.
+    plan: starter
     healthCheckPath: /healthz
-    buildCommand: python scripts/verify_startup.py && pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python scripts/verify_startup.py
     startCommand: gunicorn app:app --config gunicorn.conf.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_ADMIN_ID
-        sync: false
+      - key: DISABLE_TELEGRAM_BOT
+        value: "1"
+      - key: ADMIN_PRINCIPAL_ID
+        value: web-admin
+      - key: REQUIRE_WEB_CSRF
+        value: "1"
+      - key: APP_DATA_DIR
+        value: /var/data
+      - key: DATABASE_PATH
+        value: /var/data/database.db
       - key: SECRET_KEY
         generateValue: true
       - key: WEB_KEY
         sync: false
       - key: ADMIN_PASS
         sync: false
+      - key: OAUTH_PUBLIC_BASE_URL
+        sync: false
+      - key: OAUTH_ENCRYPTION_KEY
+        sync: false
       - key: ZALO_PREFER_COUNTRY
         value: SG
+    disk:
+      name: bottele-data
+      mountPath: /var/data
+      sizeGB: 1

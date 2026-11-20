@@ -7,6 +7,7 @@ database.db-*
 *.sqlite3-shm
 .env
 .env.*
+!.env.example
 uploads/*.txt
 # Runtime authorization inventory; user-specific data must stay out of new commits.
 uploads/tg_authorized_users.json
