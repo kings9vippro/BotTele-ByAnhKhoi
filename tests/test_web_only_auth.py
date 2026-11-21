@@ -56,7 +56,7 @@ class WebOnlyAuthTests(unittest.TestCase):
                 json={"provider": "discord"},
                 headers={"X-CSRF-Token": session_response.json["csrf_token"]},
             )
-            self.assertNotEqual(accepted_by_boundary.status_code, 403)
+            self.assertEqual(accepted_by_boundary.status_code, 410)
 
     def test_repository_password_hash_authenticates_without_render_password(self):
         from pathlib import Path

@@ -333,6 +333,8 @@ def api_miniapp_session():
 
 @app.before_request
 def security_middleware():
+    if request.path.startswith(("/oauth/begin/", "/oauth/callback/")):
+        return jsonify(ok=False, error="Luồng đăng nhập OAuth đã ngừng"), 410
     if request.path.startswith(('/api/discord/', '/api/messenger/', '/integrations/facebook')):
         return jsonify(ok=False, error='Tích hợp cũ đã ngừng. Discord dùng OAuth2 và webhook chính thức.'), 410
     if not WebSecurityFortress.inspect_request():
@@ -362,6 +364,8 @@ def security_middleware():
             expected_csrf = str(session.get("csrf_token") or "")
             if not supplied_csrf or not expected_csrf or not hmac.compare_digest(supplied_csrf, expected_csrf):
                 return jsonify(ok=False, code="csrf_invalid", error="Phiên biểu mẫu không hợp lệ. Hãy tải lại trang."), 403
+    if request.path in ("/api/miniapp/oauth/start", "/api/miniapp/oauth/configure"):
+        return jsonify(ok=False, error="Luồng đăng nhập OAuth đã ngừng"), 410
     if request.path.startswith("/api/") or request.path.startswith("/task/"):
         ip = get_client_ip()
         now = time.time()

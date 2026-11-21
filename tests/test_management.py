@@ -401,15 +401,12 @@ class ManagementTests(unittest.TestCase):
 
 
 
-    def test_oauth_configuration_form_is_encrypted_and_secret_free(self):
+    def test_oauth_configuration_is_retired_without_storing_secret(self):
         result = self.client.post('/api/miniapp/oauth/configure', json={'provider': 'discord', 'client_id': '1234', 'client_secret': 'private-new-secret', 'public_base_url': 'https://bot.example'})
-        self.assertEqual(result.status_code, 200)
-        providers = self.client.get('/api/miniapp/oauth/providers')
-        discord = next(item for item in providers.json['providers'] if item['id'] == 'discord')
-        self.assertTrue(discord['configured'])
-        self.assertNotIn('private-new-secret', providers.text)
-        encrypted = app.db().execute("SELECT encrypted FROM oauth_configuration WHERE provider='discord'").fetchone()[0]
-        self.assertNotIn('private-new-secret', encrypted)
+        self.assertEqual(result.status_code, 410)
+        self.assertNotIn('private-new-secret', result.text)
+        self.assertIsNone(app.db().execute("SELECT encrypted FROM oauth_configuration WHERE provider='discord'").fetchone())
+        self.assertEqual(self.client.post('/api/miniapp/oauth/start', json={'provider': 'discord'}).status_code, 410)
 
     def test_new_configuration_endpoints_require_authentication(self):
         client = app.app.test_client()
@@ -418,7 +415,7 @@ class ManagementTests(unittest.TestCase):
 
     def test_oauth_configuration_rejects_non_https_base(self):
         response = self.client.post('/api/miniapp/oauth/configure', json={'provider': 'discord', 'client_id': '1234', 'client_secret': 'fixture-secret', 'public_base_url': 'http://bot.example'})
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 410)
         self.assertEqual(app.db().execute('SELECT count(*) FROM oauth_configuration').fetchone()[0], 0)
 
     def test_disconnect_removes_only_the_selected_integration(self):

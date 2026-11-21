@@ -41,9 +41,8 @@ class SecurityBoundaryTests(unittest.TestCase):
         with self.client.session_transaction() as s:s['logged_in']=True
         for path in ['/api/discord/reg_login','/api/messenger/login_credentials','/integrations/facebook']:
             self.assertEqual(self.client.post(path,json={}).status_code,410)
-        # Facebook is available only as an official, state-bound OAuth GET callback.
-        self.assertEqual(self.client.post('/oauth/callback/facebook',json={}).status_code,405)
-        self.assertEqual(self.client.get('/oauth/callback/facebook').status_code,400)
+        self.assertEqual(self.client.post('/oauth/callback/facebook',json={}).status_code,410)
+        self.assertEqual(self.client.get('/oauth/callback/facebook').status_code,410)
 
     def test_legacy_account_credentials_are_rejected(self):
         with self.client.session_transaction() as s:s['logged_in']=True

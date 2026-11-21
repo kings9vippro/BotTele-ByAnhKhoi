@@ -15,8 +15,8 @@ from durable_tasks import TaskQueue, RetryAfter, UncertainDelivery
 
 COMMANDS = {
     'menu': 'Bảng điều khiển', 'help': 'Hướng dẫn', 'functions': 'Các chức năng Zalo', 'accounts': 'Tài khoản Zalo và Discord',
-    'discord_login': 'Liên kết Discord OAuth2', 'discord_accounts': 'Tài khoản Discord',
-    'discord_status': 'Trạng thái OAuth', 'discord_logout': 'Ngắt liên kết: ID',
+    'discord_login': 'Mở Mini App để nhập token Discord', 'discord_accounts': 'Tài khoản Discord',
+    'discord_status': 'Trạng thái kết nối', 'discord_logout': 'Ngắt liên kết: ID',
     'tasks': 'Task theo cookie: /tasks [acc_id] [trang]', 'task_accounts': 'Chọn số ACC Zalo + task', 'admin_tasks': 'Root: toàn bộ tác vụ',
     'dsbox': 'Nhóm Zalo riêng: /dsbox [acc_id] [trang]',
     'watch_status': 'Canh Zalo theo cookie: /watch_status [acc_id]',
@@ -507,17 +507,25 @@ def telegram_command(bot, user, chat, name, args):
                         items.append('Chưa canh box nào ở cookie này hoặc watch đã mất sau restart.')
                     answer = '\n'.join(items)
         elif name == 'discord_login':
-            url = ext['discord_oauth_start'](str(user))['url']
-            bot.send_text(chat,'Liên kết tài khoản tại Discord chính thức.',reply_markup={'inline_keyboard':[[{'text':'Đăng nhập Discord','url':url}]]})
+            bot.send_text(chat,'Mở Mini App để nhập và kiểm tra token Discord.')
             return True
         elif name in ('discord_accounts','discord_status','accounts'):
-            from miniapp_oauth import _public_connections
-            rows = _public_connections(runtime.db,str(user))
-            answer = '\n'.join(f"#{r['id']} {r['display_name']} · {r['status']}" for r in rows) or 'Chưa liên kết Discord'
+            from credential_links import list_links
+            connection = runtime.db()
+            try:
+                rows = [row for row in list_links(connection, str(user)) if row['platform'] == 'discord']
+            finally:
+                connection.close()
+            answer = '\n'.join(f"#{r['id']} {r['name']} · đã kiểm tra" for r in rows) or 'Chưa kết nối Discord'
             if name == 'accounts':
                 answer += '\nZalo: mở /zalo để quản lý tài khoản của bạn.'
         elif name == 'discord_logout':
-            answer = ext['discord_oauth_disconnect'](str(user), int(args))
+            from credential_links import delete
+            connection = runtime.db()
+            try:
+                answer = 'Đã gỡ kết nối' if delete(connection, str(user), int(args)) else 'Không tìm thấy kết nối'
+            finally:
+                connection.close()
         elif name.startswith('task_') and name not in ('task_status','task_accounts'):
             task_id = args.strip()
             if not task_id:
