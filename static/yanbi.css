@@ -253,7 +253,7 @@ body.yanbi #bottom button.bottom-nav-button[aria-current=page]{
   border-color:color-mix(in srgb,var(--accent) 30%,var(--line));
   box-shadow:0 6px 16px color-mix(in srgb,var(--accent) 11%,transparent),inset 0 1px var(--ui-highlight);
 }
-body.yanbi #bottom button.bottom-nav-button[aria-current=page] .bottom-icon{color:var(--accent);transform:translateY(-2px) scale(1.09)!important}
+body.yanbi #bottom button.bottom-nav-button[aria-current=page] .bottom-icon{color:var(--accent);transform:translateY(-2px)!important}
 body.yanbi #bottom button.bottom-nav-button[aria-current=page] .nav-caption{color:var(--fg);font-weight:820}
 body.yanbi #bottom button.bottom-nav-button[aria-current=page]::after{
   content:"";position:absolute;bottom:0;left:34%;width:32%;height:2px;border-radius:3px;
