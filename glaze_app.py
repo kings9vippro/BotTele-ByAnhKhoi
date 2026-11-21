@@ -406,7 +406,7 @@ def add_security_headers(resp):
     if request.path.startswith("/oauth/"):
         resp.headers["Cache-Control"] = "no-store"
         resp.headers["Referrer-Policy"] = "no-referrer"
-    if request.path in ("/", "/miniapp", "/admin", "/zenvyre", "/login"):
+    if request.path in ("/", "/miniapp", "/admin", "/zenvyre", "/login", "/login/check"):
         resp.headers["Cache-Control"] = "no-store, max-age=0"
         resp.headers["X-Glaze-UI-Version"] = "miniapp-" + APP_VERSION
     return resp
@@ -16552,10 +16552,12 @@ input[type="password"]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgb
 </style>
 </head>
 <body class="yanbi">
+<div class="login-flora" aria-hidden="true"><span>✿</span><span>❀</span><span>✧</span><span>✺</span><span>✿</span></div>
 <div class="login-card">
   <img class="login-mark" src="/static/yanbi-logo.webp?v={{ asset_revision }}" width="64" height="64" alt="">
-  <h1>Đăng nhập GLAZE</h1>
+  <h1 aria-label="Đăng nhập GLAZE"><span class="login-title-word" aria-hidden="true"><span class="login-letter" style="--letter:0">Đ</span><span class="login-letter" style="--letter:1">ă</span><span class="login-letter" style="--letter:2">n</span><span class="login-letter" style="--letter:3">g</span></span> <span class="login-title-word" aria-hidden="true"><span class="login-letter" style="--letter:4">n</span><span class="login-letter" style="--letter:5">h</span><span class="login-letter" style="--letter:6">ậ</span><span class="login-letter" style="--letter:7">p</span></span> <span class="login-title-word" aria-hidden="true"><span class="login-letter" style="--letter:8">G</span><span class="login-letter" style="--letter:9">L</span><span class="login-letter" style="--letter:10">A</span><span class="login-letter" style="--letter:11">Z</span><span class="login-letter" style="--letter:12">E</span></span></h1>
   <p class="sub">Bảng điều khiển tài khoản và tác vụ</p>
+  <p class="login-security-note">Sử dụng key quản trị của máy chủ hiện tại. Nếu vừa thay key trên Render, cần deploy/restart dịch vụ để nhận cấu hình mới.</p>
   {% if error %}
   <div class="err">⚠️ {{ error }}</div>
   {% endif %}
@@ -16567,7 +16569,29 @@ input[type="password"]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgb
     <button type="submit" class="btn">Đăng nhập</button>
   </form>
   <a class="quick-link" href="/">Về bảng điều khiển</a>
+  <button class="login-motion-toggle" type="button" id="login-motion-toggle" aria-pressed="true">Tắt hiệu ứng</button>
 </div>
+<script>
+(function () {
+  const root=document.documentElement, button=document.getElementById('login-motion-toggle');
+  const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let mode='system';
+  try { mode=localStorage.getItem('glaze-motion')||'system'; } catch (_) {}
+  if (!['system','on','off'].includes(mode)) mode='system';
+  function render(){
+    const enabled=mode==='on'||(mode==='system'&&!reduce);
+    root.dataset.motion=enabled?'on':'off';
+    button.textContent=enabled?'Tắt hiệu ứng':'Bật hiệu ứng';
+    button.setAttribute('aria-pressed',enabled?'true':'false');
+  }
+  button.addEventListener('click',()=>{
+    mode=root.dataset.motion==='on'?'off':'on';
+    try { localStorage.setItem('glaze-motion',mode); } catch (_) {}
+    render();
+  });
+  render();
+})();
+</script>
 </body>
 </html>"""
 
@@ -16756,17 +16780,39 @@ def login():
 
         if is_valid:
             record_login_result(ip, True)
+            # Rotate pre-login state to avoid reusing an old session or CSRF token.
+            session.clear()
             session.permanent = True
             session["logged_in"] = True
-            return redirect("/")
+            get_or_create_csrf_token()
+            # A separate GET verifies the browser actually persisted Flask's cookie.
+            # Never place passwords or session data in redirect URLs.
+            return redirect("/login/check", code=303)
 
         record_login_result(ip, False)
         return render_template_string(
             LOGIN_HTML,
             asset_revision=revision,
-            error="Mật khẩu truy cập không chính xác!",
+            error="Key hoặc mật khẩu quản trị không khớp với cấu hình của website đang chạy.",
         )
     return render_template_string(LOGIN_HTML, error=None, asset_revision=revision)
+
+@app.get("/login/check")
+def login_session_check():
+    """Verify browser cookie round trip immediately after password login."""
+    if session.get("logged_in") is True:
+        return redirect("/", code=303)
+    # No authentication was recorded for this request. The user may have blocked
+    # cookies, lost the session signing key after a server restart, or opened
+    # this URL directly; do not assert which occurred or reveal any key.
+    return render_template_string(
+        LOGIN_HTML,
+        asset_revision=miniapp_asset_revision(),
+        error="Không tìm thấy phiên quản trị sau khi chuyển trang. "
+              "Hãy bật cookie cho website, dùng cùng một tên miền HTTPS và "
+              "thử lại. Nếu vẫn lỗi, quản trị viên cần kiểm tra SECRET_KEY ổn định trên máy chủ.",
+    ), 401
+
 
 @app.route("/logout")
 def logout():
