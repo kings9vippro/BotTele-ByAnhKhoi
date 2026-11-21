@@ -47,6 +47,12 @@ class YanbiStudioTests(unittest.TestCase):
                        "backdrop-filter", "scroll-snap-type:x mandatory"):
             self.assertIn(marker, self.css)
 
+    def test_unauthenticated_user_sees_no_navigation_or_private_pages(self):
+        self.assertIn("body.yanbi.auth-locked #pages", self.css)
+        self.assertIn("body.yanbi.auth-locked #tabs", self.css)
+        self.assertIn("body.yanbi.auth-locked #bottom", self.css)
+        self.assertIn("body.yanbi.auth-locked #error{display:none!important}", self.css)
+
     def test_login_retry_supports_cookie_sessions(self):
         self.assertIn("Web sessions authenticate using cookies", self.js)
         self.assertNotIn("if(!(tg?.initData||launch)){showAuthGate", self.js)
