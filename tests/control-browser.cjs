@@ -71,7 +71,10 @@ const crypto=require('crypto'),assert=require('assert/strict');
     message:ready?'Quét mã QR để đăng nhập':'Đang yêu cầu mã Zalo',
     remaining_sec:ready?87:99,qr_image_url:ready?'/api/miniapp/qr_image/'+qrId+'.png':''})});
  });
- await page.route('**/api/miniapp/qr_image/*.png',r=>r.fulfill({status:200,contentType:'image/png',body:fakePng}));
+ await page.route('**/api/miniapp/qr_image/*.png',r=>{
+  assert.match(r.request().headers()['x-telegram-init-data']||'',/auth_date=/,'QR image must carry the Telegram session header');
+  return r.fulfill({status:200,contentType:'image/png',body:fakePng});
+ });
  await page.route('**/api/miniapp/cancel_qr',r=>{qrCancelled=true;return r.fulfill({
   status:200,contentType:'application/json',body:JSON.stringify({ok:true,cancelled:true})
  });});
