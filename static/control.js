@@ -65,30 +65,40 @@
  function theme(){const mode=$('theme').value;document.documentElement.dataset.theme=mode==='system'?(tg?.colorScheme||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark')):mode;}
  function initTelegram(){const sdk=window.Telegram?.WebApp;if(!sdk||tg===sdk)return;tg=sdk;tg.ready();tg.expand();tg.onEvent?.('themeChanged',theme);tg.onEvent?.('viewportChanged',()=>{document.documentElement.style.setProperty('--safe',Math.max(tg.safeAreaInset?.bottom||0,tg.contentSafeAreaInset?.bottom||0)+'px');});tg.BackButton?.onClick(()=>{if($('sheet').open)$('sheet').close();else go('home');});theme();}
  initTelegram();$('telegram-sdk').addEventListener('load',initTelegram);$('theme').onchange=()=>{try{localStorage.setItem('glaze-theme',$('theme').value);}catch{}theme();};try{$('theme').value=localStorage.getItem('glaze-theme')||'dark';}catch{$('theme').value='dark';}theme();
- function applyMotion(){
-  const preference=$('motion').value;
-  const enabled=preference==='on'||(preference==='system'&&!reduced.matches);
-  document.documentElement.dataset.motion=enabled?'on':'off';
-  $('motion-note').textContent=enabled?'Hiệu ứng đang bật: chuyển tab, nền ánh sáng và các thẻ khi cuộn.':'Đã tắt hiệu ứng chuyển động. Bạn có thể bật lại tại đây.';
-  if(!enabled)document.querySelectorAll('.scroll-reveal').forEach(el=>el.classList.add('is-visible'));
- }
- try{$('motion').value=localStorage.getItem('glaze-motion')||'system';}catch{$('motion').value='system';}
- if(!['system','on','off'].includes($('motion').value))$('motion').value='system';
- $('motion').onchange=()=>{
-  try{localStorage.setItem('glaze-motion',$('motion').value);}catch{}
-  applyMotion();
-  if(motionEnabled())requestAnimationFrame(observeReveals);
- };
- reduced.addEventListener?.('change',()=>{
-  if($('motion').value==='system')applyMotion();
- });
- applyMotion();
  for(const [id,allowed,fallback] of [['text-size',['normal','large'],'normal'],['accent',['blue','rose','mint'],'blue']]){
   const input=$(id),key='glaze-'+id;
   try{const saved=localStorage.getItem(key);input.value=allowed.includes(saved)?saved:fallback;}catch{input.value=fallback;}
   const apply=()=>{document.documentElement.setAttribute('data-'+id,input.value);try{localStorage.setItem(key,input.value);}catch{}};
   input.addEventListener('change',apply);apply();
  }
+
+ // Animation state is visual-only; authentication, APIs and QR retain their original contracts.
+ let animationHooksReady=false;
+ const motionInput=$('motion');
+ function applyMotion(){
+  const setting=motionInput.value;
+  const enabled=setting==='on'||(setting==='system'&&!reduced.matches);
+  document.documentElement.dataset.motion=enabled?'on':'off';
+  $('motion-note').textContent=enabled
+   ?'Đã bật: chữ bật lên theo từng ký tự, hoa bay, chuyển tab và các thẻ hiện dần khi cuộn.'
+   :'Đã tắt chuyển động. Có thể bật lại bất kỳ lúc nào.';
+  if(!enabled)document.querySelectorAll('.scroll-reveal').forEach(el=>el.classList.add('is-visible'));
+  if(animationHooksReady&&enabled)requestAnimationFrame(()=>{
+   replayKineticTitle(active);observeReveals();
+  });
+ }
+ try{motionInput.value=localStorage.getItem('glaze-motion')||'system';}
+ catch{motionInput.value='system';}
+ if(!['system','on','off'].includes(motionInput.value))motionInput.value='system';
+ motionInput.onchange=()=>{
+  try{localStorage.setItem('glaze-motion',motionInput.value);}catch{}
+  applyMotion();
+ };
+ reduced.addEventListener?.('change',()=>{
+  if(motionInput.value==='system')applyMotion();
+ });
+ applyMotion();
+
  const primaryNav=new Set(['home','accounts','tasks']);
  let requestedPage=null;
  const moreMenu=$('more-menu');
@@ -121,6 +131,7 @@
   });
   closeMore();
   revealPage(name);
+  replayKineticTitle(name);
   if(name==='zalo'&&!terminalAuth)refreshZaloWatches().catch(failed);
   if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();
  }
@@ -230,12 +241,82 @@
    el.dataset.revealReady='1';el.classList.add('scroll-reveal');observer.observe(el);
   });
  }
+
+ // Words never split at narrow mobile widths; individual graphemes animate on every navigation.
+ function kineticGraphemes(value){
+  if(typeof Intl.Segmenter==='function')
+   return Array.from(new Intl.Segmenter('vi',{granularity:'grapheme'}).segment(value),x=>x.segment);
+  return Array.from(value);
+ }
+ function buildKineticTitle(heading,key){
+  if(!heading||heading.dataset.kineticReady)return;
+  const original=(heading.textContent||'').trim();
+  if(!original)return;
+  const pieces=original.match(/\S+|\s+/gu)||[original];
+  const frag=document.createDocumentFragment();
+  let letters=0,wordIndex=0;
+  for(const piece of pieces){
+   if(/^\s+$/u.test(piece)){frag.append(document.createTextNode(piece));continue;}
+   const word=element('span',undefined,'glaze-kinetic-word');
+   for(const part of kineticGraphemes(piece)){
+    const char=element('span',part,'glaze-kinetic-letter');
+    char.style.setProperty('--glaze-char-index',String(Math.min(letters++,40)));
+    if(key==='home'&&wordIndex>=2)char.classList.add('glaze-kinetic-accent');
+    word.append(char);
+   }
+   frag.append(word);wordIndex++;
+  }
+  heading.replaceChildren(frag);
+  heading.setAttribute('aria-label',original);
+  heading.dataset.kineticReady='1';
+  heading.classList.add('glaze-kinetic-title');
+ }
+ function buildFlowerField(section){
+  if(section.querySelector('.glaze-flower-field'))return;
+  const garden=element('div',undefined,'glaze-flower-field');
+  garden.setAttribute('aria-hidden','true');
+  const shapes=['✿','✧','❀','✦','✿','✧','❁'];
+  const left=[8,85,70,14,91,34,63],top=[70,135,275,420,580,755,980];
+  for(let i=0;i<shapes.length;i++){
+   const petal=element('span',shapes[i],'glaze-flower');
+   petal.style.setProperty('--glaze-x',left[i]+'%');
+   petal.style.setProperty('--glaze-y',top[i]+'px');
+   petal.style.setProperty('--glaze-petal-index',String(i));
+   petal.style.setProperty('--glaze-petal-size',(18+(i%4)*7)+'px');
+   garden.append(petal);
+  }
+  section.prepend(garden);
+ }
+ function initKineticSections(){
+  for(const key of keys){
+   const section=$(key);
+   if(!section)continue;
+   buildKineticTitle(section.querySelector(':scope > h1, .overview-heading h1'),key);
+   buildFlowerField(section);
+  }
+ }
+ function replayKineticTitle(name){
+  if(!motionEnabled())return;
+  const section=$(name);
+  if(!section)return;
+  for(const node of [section.querySelector('.glaze-kinetic-title'),section.querySelector('.glaze-flower-field')]){
+   if(!node)continue;
+   const className=node.classList.contains('glaze-flower-field')?'glaze-flower-play':'glaze-kinetic-play';
+   node.classList.remove(className);
+   // Reflow only the two tiny decorative nodes to restart the effect on tab swipes.
+   void node.offsetWidth;
+   node.classList.add(className);
+  }
+ }
+
  const contentObserver='MutationObserver' in window?
   new MutationObserver(()=>{
    if(revealFrame)return;
    revealFrame=requestAnimationFrame(()=>{revealFrame=0;observeReveals();});
   }):null;
  contentObserver?.observe(pages,{childList:true,subtree:true});
+ initKineticSections();
+ animationHooksReady=true;
  select('home');
  let sheetReturnFocus;
  function sheet(title,content,actions=[]){sheetReturnFocus=document.activeElement;$('sheet-title').textContent=title;$('sheet-content').replaceChildren(typeof content==='string'?element('p',content):content);$('sheet-actions').replaceChildren(...actions);$('sheet').showModal();$('sheet-close').focus();}
@@ -733,153 +814,45 @@
    button('Tải tệp .txt',async()=>{await downloadZaloSession(status.account_id);closeSheet();},'primary')
   ]);
  }
- let qrGeneration=0,qrTimer=null,qrSessionId='',qrRequestController=null;
- let qrImageSession='',qrImageLoading=null,qrObjectUrl='';
- const qrTrigger=$('qr'),qrCancel=$('qr-cancel'),qrImage=$('qr-image');
- const qrLoading=$('qr-loading'),qrStage=$('qr-stage');
- function clearQrPoll(){
-  if(qrTimer!==null){clearTimeout(qrTimer);qrTimer=null;}
-  qrRequestController?.abort();
-  qrRequestController=null;
- }
- function updateQrStage(stage,message,remaining){
-  qrStage.dataset.state=stage;
-  qrLoading.hidden=!['generating','starting'].includes(stage);
-  $('qr-status').textContent=message;
-  const hasSeconds=Number.isFinite(remaining)&&remaining>=0&&['waiting_scan','scanned','confirmed','generating'].includes(stage);
-  $('qr-remaining').hidden=!hasSeconds;
-  if(hasSeconds)$('qr-remaining').textContent='Thời gian còn lại: '+remaining+' giây';
- }
- function resetQrImage(){
-  qrImage.hidden=true;
-  qrImage.removeAttribute('src');
-  qrImage.onload=null;qrImage.onerror=null;
-  if(qrObjectUrl){URL.revokeObjectURL(qrObjectUrl);qrObjectUrl='';}
-  qrImageSession='';
-  qrImageLoading=null;
- }
- async function showQrImage(status,sessionId){
-  const allowedPath='/api/miniapp/qr_image/'+encodeURIComponent(sessionId)+'.png';
-  if(status.qr_image_url!==allowedPath)return;
-  if(qrImageSession===sessionId&&qrImage.complete&&qrImage.naturalWidth>0)return;
-  if(qrImageLoading)return qrImageLoading;
-  // An <img> request cannot attach Telegram initData; fetch the QR with the
-  // same authenticated headers as the JSON API and display a local blob URL.
-  const loader=(async()=>{
-   const result=await fetch(allowedPath,{
-    headers:{'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId('qr-image')},
-    credentials:'same-origin',cache:'no-store'
-   });
-   if(!result.ok)throw Object.assign(new Error('Không tải được ảnh mã QR từ máy chủ ('+result.status+').'),{status:result.status});
-   const blob=await result.blob();
-   if(!blob.size||blob.type!=='image/png')throw Error('Máy chủ trả về ảnh QR không hợp lệ.');
-   if(qrSessionId!==sessionId)return;
-   const blobURL=URL.createObjectURL(blob);
-   if(qrObjectUrl)URL.revokeObjectURL(qrObjectUrl);
-   qrObjectUrl=blobURL;qrImageSession=sessionId;
-   qrImage.onload=()=>{if(qrSessionId===sessionId)qrImage.hidden=false;};
-   qrImage.onerror=()=>{
-    if(qrSessionId!==sessionId)return;
-    qrImage.hidden=true;
-    updateQrStage('image_error','Đã tạo mã nhưng trình duyệt không đọc được ảnh. Hãy tạo QR mới.');
-   };
-   qrImage.src=blobURL;
-  })();
-  qrImageLoading=loader;
-  try{await loader;}
-  catch(error){
-   if(qrSessionId===sessionId)
-    updateQrStage('image_error',error.message||'Không thể tải ảnh QR. Hãy tạo mã mới.');
-  }finally{if(qrImageLoading===loader)qrImageLoading=null;}
- }
- function finishQr(stage,message,remaining){
-  clearQrPoll();
-  qrTrigger.disabled=false;
-  qrTrigger.textContent='Tạo mã QR mới';
-  qrCancel.hidden=true;
-  updateQrStage(stage,message,remaining);
-  if(stage==='success')renderQrReceipt({status:'success'});
- }
- async function cancelQrServer(sessionId){
-  if(!sessionId)return;
-  try{await api('cancel_qr',{session_id:sessionId},{timeout:8000});}
-  catch(error){
-   if(error?.status===401)failed(error);
-   else console.warn('GLAZE QR cancel:',error?.code||'temporary');
-  }
- }
- qrCancel.onclick=async()=>{
-  const previous=qrSessionId;
-  ++qrGeneration;clearQrPoll();qrSessionId='';
-  qrCancel.hidden=true;qrTrigger.disabled=false;qrTrigger.textContent='Tạo mã QR';
-  resetQrImage();
-  updateQrStage('idle','Đã dừng theo dõi mã QR. Có thể tạo phiên mới.');
-  await cancelQrServer(previous);
- };
- qrTrigger.onclick=async()=>{
-  const previous=qrSessionId,token=++qrGeneration;
-  clearQrPoll();qrSessionId='';
-  resetQrImage();
-  qrTrigger.disabled=true;qrTrigger.textContent='Đang tạo mã…';qrCancel.hidden=true;
-  updateQrStage('starting','Đang khởi tạo phiên QR trên máy chủ…');
-  if(previous)await cancelQrServer(previous);
-  if(token!==qrGeneration)return;
-  qrRequestController=new AbortController();
-  const request=qrRequestController;
+ $('qr').onclick=async()=>{
+  const trigger=$('qr'),image=$('qr-image');
+  let receiptRetries=0;
+  trigger.disabled=true;
+  image.hidden=true;
+  image.removeAttribute('src');
+  $('qr-receipt')?.replaceChildren();
+  $('qr-status').textContent='Đang tạo mã QR…';
+  const finish=()=>{
+   trigger.disabled=false;
+   image.hidden=true;
+   image.removeAttribute('src');
+  };
   try{
-   const start=await api('start_qr',{}, {signal:request.signal,timeout:28000});
-   if(token!==qrGeneration)return;
-   const sessionId=String(start.session_id||'');
-   if(!/^[0-9a-f-]{36}$/.test(sessionId))throw Error('Máy chủ không trả về mã phiên QR hợp lệ.');
-   qrSessionId=sessionId;qrTrigger.disabled=false;qrTrigger.textContent='Tạo mã QR mới';
-   qrCancel.hidden=false;
-   updateQrStage(start.status||'generating',start.message||'Đang chờ Zalo cung cấp mã QR…',start.remaining_sec);
-   let receiptRetries=0,failures=0;
+   const result=await api('start_qr',{});
    const poll=async()=>{
-    if(token!==qrGeneration)return;
     try{
-     const status=await api('qr_status/'+encodeURIComponent(sessionId)+'?compact=1',undefined,{timeout:15000});
-     if(token!==qrGeneration)return;
-     failures=0;
-     const stage=String(status.status||'generating');
-     const remaining=Number(status.remaining_sec);
-     updateQrStage(stage,status.message||'Đang chờ trạng thái QR…',Number.isFinite(remaining)?remaining:undefined);
-     if(stage==='waiting_scan'||stage==='scanned'||stage==='confirmed')showQrImage(status,sessionId);
-     if(stage==='success'){
-      if(!status.account_id&&receiptRetries++<5){
-       qrTimer=setTimeout(poll,1000);return;
-      }
-      clearQrPoll();qrCancel.hidden=true;qrTrigger.textContent='Tạo mã QR mới';
-      resetQrImage();renderQrReceipt(status);
-      updateQrStage('success',status.message||'Đã đăng nhập thành công.');
-      await refresh();return;
-     }
-     if(['expired','failed','cancelled','error','declined','not_found'].includes(stage)){
-      finishQr(stage,status.message||'Không thể hoàn thành phiên QR. Hãy tạo mã mới.');
+     const status=await api('qr_status/'+encodeURIComponent(result.session_id));
+     $('qr-status').textContent=status.message||status.status;
+     if(status.status==='success'&&!status.account_id&&receiptRetries++<5){
+      setTimeout(poll,1000);
       return;
      }
-     qrTimer=setTimeout(poll,document.hidden?6000:1500);
-    }catch(error){
-     if(token!==qrGeneration||error?.name==='AbortError')return;
-     if(error?.status===401){finishQr('error','Phiên quản trị hết hạn. Đăng nhập lại trước khi tạo QR.');failed(error);return;}
-     failures++;
-     if(failures<3){
-      updateQrStage('retrying','Tạm mất kết nối tới trạng thái QR, đang thử lại ('+failures+'/3)…');
-      qrTimer=setTimeout(poll,2500*failures);
-     }else finishQr('error','Không thể kiểm tra trạng thái QR: '+(error.message||'Lỗi kết nối')+'. Hãy thử tạo mã mới.');
-    }
+     if(['success','expired','failed','cancelled','error','declined'].includes(status.status)){
+      finish();
+      if(status.status==='success')renderQrReceipt(status);
+      await refresh();
+      return;
+     }
+     if(status.qr_base64){
+      const source=status.qr_base64.startsWith('data:')?status.qr_base64:'data:image/png;base64,'+status.qr_base64;
+      if(image.getAttribute('src')!==source)image.src=source;
+      image.hidden=false;
+     }
+     setTimeout(poll,document.hidden?8000:2000);
+    }catch(error){finish();failed(error);}
    };
    await poll();
-  }catch(error){
-   if(token!==qrGeneration||error?.name==='AbortError')return;
-   finishQr('error',error.message||'Không thể khởi tạo QR. Hãy thử lại.');
-   if(error?.status===401)failed(error);
-  }finally{
-   if(token===qrGeneration){
-    qrTrigger.disabled=false;
-    if(qrTrigger.textContent==='Đang tạo mã…')qrTrigger.textContent='Tạo mã QR mới';
-   }
-  }
+  }catch(error){finish();failed(error);}
  };
  $('stop-all').onclick=()=>confirmAction('Dừng thông báo Discord của tôi?',()=>api('notifications/stop_all',{}));
  $('stop-all-zalo').onclick=()=>confirmAction('Dừng tác vụ trên mọi tài khoản Zalo?',()=>api('quick_action',{action:'stop_all'}));

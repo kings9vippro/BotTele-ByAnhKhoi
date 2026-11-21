@@ -57,6 +57,26 @@ class YanbiStudioTests(unittest.TestCase):
             self.assertIn(marker, self.css)
         self.assertIn("IntersectionObserver", self.js)
 
+    def test_kinetic_letters_and_flowers_are_visual_only(self):
+        self.assertIn('id="motion"', self.html)
+        self.assertIn('id="motion-note"', self.html)
+        self.assertIn("function buildKineticTitle(", self.js)
+        self.assertIn("function buildFlowerField(", self.js)
+        self.assertIn("function replayKineticTitle(", self.js)
+        self.assertIn("glaze-kinetic-letter", self.css)
+        self.assertIn("glaze-flower-field", self.css)
+        self.assertIn("@keyframes glaze-character-pop", self.css)
+        self.assertIn("@keyframes glaze-petal-float", self.css)
+        self.assertIn('pointer-events:none', self.css)
+        self.assertIn("prefers-reduced-motion:reduce", self.css)
+
+    def test_previous_zalo_qr_contract_is_restored(self):
+        self.assertIn("api('start_qr',{})", self.js)
+        self.assertIn("api('qr_status/'+encodeURIComponent(result.session_id))", self.js)
+        self.assertIn('id="qr-image"', self.html)
+        self.assertNotIn("api('cancel_qr'", self.js)
+        self.assertNotIn('id="qr-cancel"', self.html)
+
     def test_unauthenticated_user_sees_no_navigation_or_private_pages(self):
         self.assertIn("body.yanbi.auth-locked #pages", self.css)
         self.assertIn("body.yanbi.auth-locked #more-menu", self.css)
