@@ -1,0 +1,33 @@
+body.yanbi {
+  --yanbi-shade: rgba(7, 11, 17, .54);
+  background: #111820 url("yanbi-background.webp") center 44% / cover no-repeat;
+  background-image: linear-gradient(var(--yanbi-shade), rgba(7, 11, 17, .82)), url("yanbi-background.webp");
+}
+:root[data-theme=light] body.yanbi {
+  --yanbi-shade: rgba(7, 11, 17, .34);
+}
+body.yanbi header {
+  background: color-mix(in srgb, var(--bg) 93%, transparent);
+}
+body.yanbi .overview-heading {
+  background-color: color-mix(in srgb, var(--panel) 82%, transparent);
+}
+body.yanbi #auth-gate {
+  color: #fff;
+  background: rgba(12, 16, 22, .86);
+  border-inline: 1px solid #ffffff22;
+}
+body.yanbi #auth-gate p {
+  color: #e2e8f0;
+}
+body.yanbi .brand img {
+  object-fit: cover;
+  border: 1px solid #ffffff44;
+}
+body.yanbi .login-mark {
+  display: block;
+  object-fit: cover;
+  border-radius: 17px;
+  border: 1px solid #ffffff40;
+  margin-bottom: 18px;
+}

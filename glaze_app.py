@@ -332,8 +332,6 @@ def api_miniapp_session():
 
 @app.before_request
 def security_middleware():
-    if request.path == '/':
-        return redirect('/miniapp')
     if request.path.startswith(('/api/discord/', '/api/messenger/', '/integrations/facebook')):
         return jsonify(ok=False, error='Tích hợp cũ đã ngừng. Discord dùng OAuth2 và webhook chính thức.'), 410
     if not WebSecurityFortress.inspect_request():
@@ -403,7 +401,7 @@ def add_security_headers(resp):
     if request.path.startswith("/oauth/"):
         resp.headers["Cache-Control"] = "no-store"
         resp.headers["Referrer-Policy"] = "no-referrer"
-    if request.path in ("/", "/miniapp", "/admin", "/zenvyre"):
+    if request.path in ("/", "/miniapp", "/admin", "/zenvyre", "/login"):
         resp.headers["Cache-Control"] = "no-store, max-age=0"
         resp.headers["X-Glaze-UI-Version"] = "miniapp-" + APP_VERSION
     return resp
@@ -15670,7 +15668,7 @@ from functools import lru_cache
 def miniapp_asset_revision():
     """Fingerprint the deployed frontend assets, invalidating previous caches."""
     digest = hashlib.sha256()
-    for filename in ("control.js", "control.css", "compact-nav.css", "v11.css"):
+    for filename in ("control.js", "control.css", "compact-nav.css", "v11.css", "yanbi.css", "yanbi-logo.webp", "yanbi-background.webp"):
         digest.update(filename.encode("utf-8"))
         with open(os.path.join(BASE_DIR, "static", filename), "rb") as asset:
             digest.update(asset.read())
@@ -15681,19 +15679,11 @@ def miniapp_asset_revision():
 @app.route("/zenvyre")
 @app.route("/admin")
 def route_zenvyre_miniapp():
-    live_accs = len(get_all_accounts_from_ram(enabled_only=True))
-    running_tasks = sum(1 for v in ACTIVE_TASKS.values() if not v["stop"].is_set())
-    watched_boxes = len(CanhTreoWatchdogEngine.get_watched_boxes())
-    ram_mb = round(RenderRAMAutoCleaner.get_current_rss_mb(), 1)
+    # The public shell can render while workers hold task/account locks.
     ctx = {
         "author": APP_AUTHOR,
         "version": APP_VERSION,
         "asset_revision": miniapp_asset_revision(),
-        "admin_id": admin_principal_id(),
-        "live_accs": live_accs,
-        "running_tasks": running_tasks,
-        "watched_boxes": watched_boxes,
-        "ram_mb": ram_mb,
     }
     with open(os.path.join(BASE_DIR, "templates", "miniapp.html"), encoding="utf-8") as template:
         rendered_body = render_template_string(template.read(), **ctx)
@@ -16437,41 +16427,42 @@ LOGIN_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>{{ custom_title or 'Đăng Nhập Hệ Thống Điều Phối Đa Tài Khoản 4APP VIP' }}</title>
+<title>Đăng nhập · GLAZE</title>
+<link rel="icon" href="/static/yanbi-logo.webp?v={{ asset_revision }}">
+<link rel="stylesheet" href="/static/yanbi.css?v={{ asset_revision }}">
 <style>
-:root{--bg:#f8fafc;--card:#ffffff;--border:#e2e8f0;--text:#0f172a;--muted:#475569;--accent:#2563eb;--success:#059669;--danger:#e11d48}
+:root{color-scheme:dark;--bg:#111820;--card:#141b25ed;--border:#39485a;--text:#f2f6fb;--muted:#b7c3d3;--accent:#91f0d8;--danger:#a61939}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
 .login-card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:34px 30px;width:100%;max-width:440px;box-shadow:0 10px 30px rgba(15,23,42,0.07)}
-.badge{display:inline-flex;align-items:center;gap:6px;background:#ecfdf5;color:var(--success);border:1px solid #a7f3d0;padding:6px 14px;border-radius:999px;font-size:12.5px;font-weight:700;margin-bottom:16px}
 h1{font-size:22px;font-weight:800;margin:0 0 8px;color:var(--accent);letter-spacing:-0.3px}
 p.sub{font-size:14px;color:var(--muted);line-height:1.55;margin:0 0 22px}
 .form-group{margin-bottom:18px;text-align:left}
 label{display:block;font-size:13.5px;font-weight:700;margin-bottom:8px;color:var(--text)}
-input[type="password"]{width:100%;padding:12px 15px;font-size:14.5px;border-radius:10px;border:1px solid #cbd5e1;background:#ffffff;color:var(--text);outline:none;transition:border-color 0.2s}
+input[type="password"]{width:100%;padding:12px 15px;font-size:14.5px;border-radius:10px;border:1px solid #cbd5e1;background:#0d141c;color:var(--text);outline:none;transition:border-color 0.2s}
 input[type="password"]:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,0.12)}
-.btn{width:100%;padding:12px 18px;font-size:14.5px;font-weight:700;border:none;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer;transition:background 0.15s}
-.btn:hover{background:#1d4ed8}
+.btn{width:100%;padding:12px 18px;font-size:14.5px;font-weight:700;border:none;border-radius:10px;background:var(--accent);color:#0d1820;cursor:pointer;transition:background 0.15s}
+.btn:hover{background:#b4f8e8}
 .err{background:#fff1f2;border:1px solid #fecdd3;color:var(--danger);padding:12px 14px;border-radius:10px;font-size:13.5px;margin-bottom:16px;font-weight:600}
 .quick-link{display:inline-block;margin-top:16px;font-size:13.5px;color:var(--accent);font-weight:600;text-decoration:none}
 </style>
 </head>
-<body>
+<body class="yanbi">
 <div class="login-card">
-  <div class="badge">● AUTHOR: DEV ANH KHÔI • v1.2.0</div>
-  <h1>BOT TREO 4APP 🇻🇳 — DEV ANH KHÔI</h1>
-  <p class="sub">Hệ thống điều phối Đa Tài Khoản Zalo • Discord • Messenger & Tạo Nhãn Dán Sticker Chuẩn Zalo.</p>
+  <img class="login-mark" src="/static/yanbi-logo.webp?v={{ asset_revision }}" width="64" height="64" alt="">
+  <h1>Đăng nhập GLAZE</h1>
+  <p class="sub">Bảng điều khiển tài khoản và tác vụ</p>
   {% if error %}
   <div class="err">⚠️ {{ error }}</div>
   {% endif %}
   <form method="POST" action="/login">
     <div class="form-group">
-      <label>🔑 Mật khẩu Quản Trị Viên:</label>
-      <input type="password" name="password" placeholder="Nhập khóa truy cập (mặc định: anhba)..." required autofocus>
+      <label for="login-password">Mật khẩu quản trị</label>
+      <input id="login-password" type="password" name="password" autocomplete="current-password" required>
     </div>
-    <button type="submit" class="btn">🚀 Đăng Nhập Bảng Điều Khiển</button>
+    <button type="submit" class="btn">Đăng nhập</button>
   </form>
-  <a class="quick-link" href="/">👉 Vào thẳng Bảng Điều Khiển Nhanh</a>
+  <a class="quick-link" href="/">Về bảng điều khiển</a>
 </div>
 </body>
 </html>"""
@@ -16631,19 +16622,12 @@ def handle_unexpected_error(error):
 def login():
     ip = get_client_ip()
     allowed, wait_s = check_ip_bruteforce(ip)
-    has_logo = bool(get_setting("brand_logo_b64", "") or get_setting("brand_logo_url", ""))
-    logo_ts = get_setting("brand_logo_ts", "1")
-    custom_title = get_setting("custom_web_title", "")
+    revision = miniapp_asset_revision()
     if not allowed:
         return render_template_string(
             LOGIN_HTML,
+            asset_revision=revision,
             error=f"Tạm khóa đăng nhập do nhập sai nhiều lần. Thử lại sau {wait_s} giây.",
-            has_logo=has_logo,
-            logo_ts=logo_ts,
-            custom_title=custom_title,
-            corgi_svg=TelegramPetAnimationEngine.get_corgi_svg(),
-            cat_svg=TelegramPetAnimationEngine.get_cat_svg(),
-            nhk_3d_svg=TelegramPetAnimationEngine.get_nhk_3d_emblem_svg(),
         )
     if request.method == "POST":
         pw = (request.form.get("password") or "").strip()
@@ -16669,15 +16653,10 @@ def login():
         record_login_result(ip, False)
         return render_template_string(
             LOGIN_HTML,
+            asset_revision=revision,
             error="Mật khẩu truy cập không chính xác!",
-            has_logo=has_logo,
-            logo_ts=logo_ts,
-            custom_title=custom_title,
-            corgi_svg=TelegramPetAnimationEngine.get_corgi_svg(),
-            cat_svg=TelegramPetAnimationEngine.get_cat_svg(),
-            nhk_3d_svg=TelegramPetAnimationEngine.get_nhk_3d_emblem_svg(),
         )
-    return render_template_string(LOGIN_HTML, error=None, has_logo=has_logo, logo_ts=logo_ts, custom_title=custom_title, corgi_svg=TelegramPetAnimationEngine.get_corgi_svg(), cat_svg=TelegramPetAnimationEngine.get_cat_svg(), nhk_3d_svg=TelegramPetAnimationEngine.get_nhk_3d_emblem_svg())
+    return render_template_string(LOGIN_HTML, error=None, asset_revision=revision)
 
 @app.route("/logout")
 def logout():

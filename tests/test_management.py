@@ -29,8 +29,12 @@ class ManagementTests(unittest.TestCase):
             self.assertIn(route, routes)
 
     def test_errors_do_not_return_empty_dashboard_or_success(self):
-        with patch.object(app.RenderRAMAutoCleaner, 'get_current_rss_mb', side_effect=RuntimeError('private-exception-value')):
-            for path in ('/miniapp', '/api/miniapp/telemetry'):
+        failures = (
+            ("/miniapp", app, "render_template_string"),
+            ("/api/miniapp/telemetry", app.RenderRAMAutoCleaner, "get_current_rss_mb"),
+        )
+        for path, target, method in failures:
+            with self.subTest(path=path), patch.object(target, method, side_effect=RuntimeError('private-exception-value')):
                 result = self.client.get(path)
                 self.assertEqual(result.status_code, 500)
                 self.assertNotIn('private-exception-value', result.text)

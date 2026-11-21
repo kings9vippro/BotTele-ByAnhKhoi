@@ -13,7 +13,9 @@
   facebook:{button:'facebook-login',link:'facebook-oauth-link',status:'facebook-oauth-status',label:'Facebook'}
  };
  const element=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
+ function hideStartupPanel(){$('startup-panel').hidden=true;}
  function showAuthGate(state,reason){
+  hideStartupPanel();
   const card=$('auth-gate');if(!card)return;
   const variants={
    missing:'Chưa có phiên quản trị. Hãy đăng nhập web, hoặc mở Mini App từ Telegram nếu máy chủ đã bật tích hợp Telegram.',
@@ -26,7 +28,7 @@
   $('auth-heading').textContent=reason==='forbidden'?'Không đủ quyền':reason==='server'?'Chưa thể xác thực':'Đăng nhập quản trị';
   card.hidden=false;document.body.classList.add('auth-locked');setConnection(state);
  }
- function hideAuthGate(){$('auth-gate').hidden=true;document.body.classList.remove('auth-locked');}
+ function hideAuthGate(){hideStartupPanel();$('auth-gate').hidden=true;document.body.classList.remove('auth-locked');}
  function toast(text){$('toasts').replaceChildren(element('div',text,'toast'));clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toasts').replaceChildren(),4500);}
  class MiniAppError extends Error{constructor(message,{kind='temporary',status=0,retryAfterMs=0}={}){super(message);this.name='MiniAppError';this.kind=kind;this.status=status;this.retryAfterMs=retryAfterMs;}}
  function initData(){return String(tg?.initData||launch||'').trim();}
@@ -37,6 +39,8 @@
   else if(error?.status===403){terminalAuth=true;state='ACCESS_DENIED';showAuthGate(state,'forbidden');}
   else if(error?.code==='server_configuration'||error?.status===503){terminalAuth=true;state='SERVER_CONFIG';showAuthGate(state,'server');}
   if(Number.isFinite(error?.retryAfterMs))retryAfterDelay=Math.max(retryAfterDelay,error.retryAfterMs);
+  const startup=$('startup-panel');
+  if(!startup.hidden)startup.querySelector('[role="status"]').textContent='Chưa kết nối được. Hãy thử làm mới hoặc đăng nhập.';
   $('error').hidden=false;
   $('error').textContent=error?.message||'Không thể đồng bộ dữ liệu.';
   setConnection(state);
