@@ -7,6 +7,18 @@ const crypto=require('crypto'),assert=require('assert/strict');
  const auth=new URLSearchParams(values).toString();
  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||undefined,args:['--no-sandbox']});
  try{
+ const webAdmin=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
+ await webAdmin.route('https://telegram.org/**',route=>route.abort());
+ await webAdmin.goto('http://127.0.0.1:5873/login',{waitUntil:'domcontentloaded'});
+ await webAdmin.locator('#login-password').fill('ci-browser-only-password');
+ await Promise.all([
+  webAdmin.waitForURL('http://127.0.0.1:5873/'),
+  webAdmin.locator('button[type="submit"]').click()
+ ]);
+ await webAdmin.waitForFunction(()=>['AUTHENTICATED','CONNECTED','PARTIAL'].includes(document.querySelector('#connection')?.dataset.state));
+ assert.equal(await webAdmin.locator('#auth-gate').isVisible(),false,'web admin cookie session must unlock the dashboard');
+ assert.equal(await webAdmin.locator('#bottom .bottom-nav-button').count(),4);
+ await webAdmin.close();
  const external=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
  await external.route('https://telegram.org/**',r=>r.abort());
  await external.goto('http://127.0.0.1:5873/miniapp',{waitUntil:'domcontentloaded'});
