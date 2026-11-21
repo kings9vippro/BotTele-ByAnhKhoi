@@ -136,8 +136,6 @@ body.auth-locked{overflow:auto;}
 #zalo .zalo-watch-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;}
 #zalo .zalo-watch-actions button{width:100%;min-width:0;}
 #zalo #zalo-watch-status .card{border-radius:12px;border-left:3px solid var(--accent);}
-#music #music-player iframe{width:100%;border:0;border-radius:12px;min-height:355px;}
-#music #music-tracks article{padding:10px 12px;margin:0;}
 @media(min-width:580px){
  #account-list,#task-list{grid-template-columns:repeat(2,minmax(0,1fr));}
  #tasks>label{width:calc(50% - 10px);display:inline-grid;vertical-align:top;margin-right:10px;}
@@ -189,7 +187,6 @@ header{padding:13px 15px;}
 #zalo .card strong,#zalo .row strong,#zalo .zalo-group-row strong{font-size:16px;font-weight:820;}
 #zalo #launch-account{font-size:16px;min-height:51px;}
 #zalo .zalo-group-row{font-size:14px;min-height:47px;}
-#music #music-player iframe{min-height:380px;}
 @media(max-width:360px){#bottom{padding:5px 3px;column-gap:2px;}#bottom .nav-caption{font-size:9px;}#pages section{padding-left:12px;padding-right:12px;}}
 
 
