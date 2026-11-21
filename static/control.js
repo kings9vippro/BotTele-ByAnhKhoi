@@ -3,6 +3,7 @@
 (() => {
  const $=id=>document.getElementById(id), reduced=matchMedia('(prefers-reduced-motion: reduce)');
  const launch=new URLSearchParams(location.hash.slice(1)).get('tgWebAppData')||'';
+ const motionEnabled=()=>document.documentElement.dataset.motion==='on';
  const REQUEST_TIMEOUT_MS=18000,STREAM_BASE_DELAY_MS=1000,STREAM_MAX_DELAY_MS=30000,STREAM_JITTER=0.2,STREAM_STALE_MS=12000,SDK_BOOT_WAIT_MS=2000;
  const connectionLabels={CONNECTING:'Đang kết nối…',CONNECTED:'Đã đồng bộ',AUTHENTICATED:'Đã đăng nhập',PARTIAL:'Đã đăng nhập · đồng bộ một phần',RECONNECTING:'Đang kết nối lại…',DEGRADED:'Luồng gián đoạn · đang thử lại',DISCONNECTED:'Mất kết nối · dữ liệu cũ',AUTH_REQUIRED:'Cần đăng nhập',ACCESS_DENIED:'Không đủ quyền truy cập',SERVER_CONFIG:'Máy chủ cần cấu hình xác thực'};
  let tg, active='home', data={}, accounts=[], identities=[], eventRows=[], cursor=0, stream, refreshing, refreshController, toastTimer, streamGeneration=0, legacyTelemetry, reconnectTimer, reconnectAttempt=0, lastStreamAt=0, streamConnected=false, requestSequence=0, terminalAuth=false, retryAfterDelay=0, csrfToken='',sessionValidated=false,syncWarnings=[];
@@ -70,6 +71,34 @@
   const apply=()=>{document.documentElement.setAttribute('data-'+id,input.value);try{localStorage.setItem(key,input.value);}catch{}};
   input.addEventListener('change',apply);apply();
  }
+
+ // Animation state is visual-only; authentication, APIs and QR retain their original contracts.
+ let animationHooksReady=false;
+ const motionInput=$('motion');
+ function applyMotion(){
+  const setting=motionInput.value;
+  const enabled=setting==='on'||(setting==='system'&&!reduced.matches);
+  document.documentElement.dataset.motion=enabled?'on':'off';
+  $('motion-note').textContent=enabled
+   ?'Đã bật: chữ bật lên theo từng ký tự, hoa bay, chuyển tab và các thẻ hiện dần khi cuộn.'
+   :'Đã tắt chuyển động. Có thể bật lại bất kỳ lúc nào.';
+  if(!enabled)document.querySelectorAll('.scroll-reveal').forEach(el=>el.classList.add('is-visible'));
+  if(animationHooksReady&&enabled)requestAnimationFrame(()=>{
+   replayKineticTitle(active);observeReveals();
+  });
+ }
+ try{motionInput.value=localStorage.getItem('glaze-motion')||'system';}
+ catch{motionInput.value='system';}
+ if(!['system','on','off'].includes(motionInput.value))motionInput.value='system';
+ motionInput.onchange=()=>{
+  try{localStorage.setItem('glaze-motion',motionInput.value);}catch{}
+  applyMotion();
+ };
+ reduced.addEventListener?.('change',()=>{
+  if(motionInput.value==='system')applyMotion();
+ });
+ applyMotion();
+
  const primaryNav=new Set(['home','accounts','tasks']);
  let requestedPage=null;
  const moreMenu=$('more-menu');
@@ -102,6 +131,7 @@
   });
   closeMore();
   revealPage(name);
+  replayKineticTitle(name);
   if(name==='zalo'&&!terminalAuth)refreshZaloWatches().catch(failed);
   if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();
  }
@@ -109,7 +139,7 @@
   if(!keys.includes(name))return;
   requestedPage=name;
   select(name);
-  pages.scrollTo({left:keys.indexOf(name)*pages.clientWidth,behavior:reduced.matches?'auto':'smooth'});
+  pages.scrollTo({left:keys.indexOf(name)*pages.clientWidth,behavior:motionEnabled()?'smooth':'auto'});
   tg?.HapticFeedback?.selectionChanged();
   if(!terminalAuth&&['accounts','zalo','discord'].includes(name)&&Date.now()-lastFullSync>30000)refresh().catch(failed);
  }
@@ -180,15 +210,19 @@
   pages.scrollTo({left:keys.indexOf(active)*pages.clientWidth,behavior:'instant'});
  });
  let revealFrame=0;
- const revealObserver=!reduced.matches&&'IntersectionObserver' in window?
-  new IntersectionObserver(entries=>{
+ let revealObserver=null;
+ function ensureRevealObserver(){
+  if(!motionEnabled()||!('IntersectionObserver' in window))return null;
+  if(!revealObserver)revealObserver=new IntersectionObserver(entries=>{
    for(const entry of entries)if(entry.isIntersecting){
     entry.target.classList.add('is-visible');
     revealObserver.unobserve(entry.target);
    }
-  },{threshold:.08,rootMargin:'0px 0px 8px 0px'}):null;
+  },{threshold:.08,rootMargin:'0px 0px 8px 0px'});
+  return revealObserver;
+ }
  function revealPage(name){
-  if(reduced.matches)return;
+  if(!motionEnabled())return;
   const section=$(name);
   if(!section)return;
   section.classList.remove('page-enter');
@@ -199,19 +233,90 @@
   });
  }
  function observeReveals(){
-  if(!revealObserver)return;
+  const observer=ensureRevealObserver();
+  if(!observer)return;
   const section=$(active);
   section?.querySelectorAll('article,.card,.metric,.file-category').forEach(el=>{
    if(el.dataset.revealReady)return;
-   el.dataset.revealReady='1';el.classList.add('scroll-reveal');revealObserver.observe(el);
+   el.dataset.revealReady='1';el.classList.add('scroll-reveal');observer.observe(el);
   });
  }
+
+ // Words never split at narrow mobile widths; individual graphemes animate on every navigation.
+ function kineticGraphemes(value){
+  if(typeof Intl.Segmenter==='function')
+   return Array.from(new Intl.Segmenter('vi',{granularity:'grapheme'}).segment(value),x=>x.segment);
+  return Array.from(value);
+ }
+ function buildKineticTitle(heading,key){
+  if(!heading||heading.dataset.kineticReady)return;
+  const original=(heading.textContent||'').trim();
+  if(!original)return;
+  const pieces=original.match(/\S+|\s+/gu)||[original];
+  const frag=document.createDocumentFragment();
+  let letters=0,wordIndex=0;
+  for(const piece of pieces){
+   if(/^\s+$/u.test(piece)){frag.append(document.createTextNode(piece));continue;}
+   const word=element('span',undefined,'glaze-kinetic-word');
+   for(const part of kineticGraphemes(piece)){
+    const char=element('span',part,'glaze-kinetic-letter');
+    char.style.setProperty('--glaze-char-index',String(Math.min(letters++,40)));
+    if(key==='home'&&wordIndex>=2)char.classList.add('glaze-kinetic-accent');
+    word.append(char);
+   }
+   frag.append(word);wordIndex++;
+  }
+  heading.replaceChildren(frag);
+  heading.setAttribute('aria-label',original);
+  heading.dataset.kineticReady='1';
+  heading.classList.add('glaze-kinetic-title');
+ }
+ function buildFlowerField(section){
+  if(section.querySelector('.glaze-flower-field'))return;
+  const garden=element('div',undefined,'glaze-flower-field');
+  garden.setAttribute('aria-hidden','true');
+  const shapes=['✿','✧','❀','✦','✿','✧','❁'];
+  const left=[8,85,70,14,91,34,63],top=[70,135,275,420,580,755,980];
+  for(let i=0;i<shapes.length;i++){
+   const petal=element('span',shapes[i],'glaze-flower');
+   petal.style.setProperty('--glaze-x',left[i]+'%');
+   petal.style.setProperty('--glaze-y',top[i]+'px');
+   petal.style.setProperty('--glaze-petal-index',String(i));
+   petal.style.setProperty('--glaze-petal-size',(18+(i%4)*7)+'px');
+   garden.append(petal);
+  }
+  section.prepend(garden);
+ }
+ function initKineticSections(){
+  for(const key of keys){
+   const section=$(key);
+   if(!section)continue;
+   buildKineticTitle(section.querySelector(':scope > h1, .overview-heading h1'),key);
+   buildFlowerField(section);
+  }
+ }
+ function replayKineticTitle(name){
+  if(!motionEnabled())return;
+  const section=$(name);
+  if(!section)return;
+  for(const node of [section.querySelector('.glaze-kinetic-title'),section.querySelector('.glaze-flower-field')]){
+   if(!node)continue;
+   const className=node.classList.contains('glaze-flower-field')?'glaze-flower-play':'glaze-kinetic-play';
+   node.classList.remove(className);
+   // Reflow only the two tiny decorative nodes to restart the effect on tab swipes.
+   void node.offsetWidth;
+   node.classList.add(className);
+  }
+ }
+
  const contentObserver='MutationObserver' in window?
   new MutationObserver(()=>{
    if(revealFrame)return;
    revealFrame=requestAnimationFrame(()=>{revealFrame=0;observeReveals();});
   }):null;
  contentObserver?.observe(pages,{childList:true,subtree:true});
+ initKineticSections();
+ animationHooksReady=true;
  select('home');
  let sheetReturnFocus;
  function sheet(title,content,actions=[]){sheetReturnFocus=document.activeElement;$('sheet-title').textContent=title;$('sheet-content').replaceChildren(typeof content==='string'?element('p',content):content);$('sheet-actions').replaceChildren(...actions);$('sheet').showModal();$('sheet-close').focus();}
