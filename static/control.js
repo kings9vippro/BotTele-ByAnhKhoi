@@ -734,6 +734,7 @@
   ]);
  }
  let qrGeneration=0,qrTimer=null,qrSessionId='',qrRequestController=null;
+ let qrImageSession='',qrImageLoading=null,qrObjectUrl='';
  const qrTrigger=$('qr'),qrCancel=$('qr-cancel'),qrImage=$('qr-image');
  const qrLoading=$('qr-loading'),qrStage=$('qr-stage');
  function clearQrPoll(){
@@ -753,22 +754,43 @@
   qrImage.hidden=true;
   qrImage.removeAttribute('src');
   qrImage.onload=null;qrImage.onerror=null;
+  if(qrObjectUrl){URL.revokeObjectURL(qrObjectUrl);qrObjectUrl='';}
+  qrImageSession='';
+  qrImageLoading=null;
  }
- function showQrImage(status,sessionId){
-  const locationPath='/api/miniapp/qr_image/'+encodeURIComponent(sessionId)+'.png';
-  let url=null;
-  if(status.qr_image_url===locationPath)url=locationPath;
-  else if(typeof status.qr_base64==='string'&&/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(status.qr_base64))url=status.qr_base64;
-  if(!url)return;
-  if(qrImage.getAttribute('src')===url&&qrImage.complete&&qrImage.naturalWidth>0)return;
-  if(qrImage.getAttribute('src')===url&&!qrImage.complete)return;
-  qrImage.onload=()=>{if(qrSessionId===sessionId)qrImage.hidden=false;};
-  qrImage.onerror=()=>{
+ async function showQrImage(status,sessionId){
+  const allowedPath='/api/miniapp/qr_image/'+encodeURIComponent(sessionId)+'.png';
+  if(status.qr_image_url!==allowedPath)return;
+  if(qrImageSession===sessionId&&qrImage.complete&&qrImage.naturalWidth>0)return;
+  if(qrImageLoading)return qrImageLoading;
+  // An <img> request cannot attach Telegram initData; fetch the QR with the
+  // same authenticated headers as the JSON API and display a local blob URL.
+  const loader=(async()=>{
+   const result=await fetch(allowedPath,{
+    headers:{'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId('qr-image')},
+    credentials:'same-origin',cache:'no-store'
+   });
+   if(!result.ok)throw Object.assign(new Error('Không tải được ảnh mã QR từ máy chủ ('+result.status+').'),{status:result.status});
+   const blob=await result.blob();
+   if(!blob.size||blob.type!=='image/png')throw Error('Máy chủ trả về ảnh QR không hợp lệ.');
    if(qrSessionId!==sessionId)return;
-   qrImage.hidden=true;
-   updateQrStage('image_error','Zalo đã cấp mã nhưng trình duyệt không tải được ảnh. Hãy thử tạo QR mới.');
-  };
-  qrImage.src=url;
+   const blobURL=URL.createObjectURL(blob);
+   if(qrObjectUrl)URL.revokeObjectURL(qrObjectUrl);
+   qrObjectUrl=blobURL;qrImageSession=sessionId;
+   qrImage.onload=()=>{if(qrSessionId===sessionId)qrImage.hidden=false;};
+   qrImage.onerror=()=>{
+    if(qrSessionId!==sessionId)return;
+    qrImage.hidden=true;
+    updateQrStage('image_error','Đã tạo mã nhưng trình duyệt không đọc được ảnh. Hãy tạo QR mới.');
+   };
+   qrImage.src=blobURL;
+  })();
+  qrImageLoading=loader;
+  try{await loader;}
+  catch(error){
+   if(qrSessionId===sessionId)
+    updateQrStage('image_error',error.message||'Không thể tải ảnh QR. Hãy tạo mã mới.');
+  }finally{if(qrImageLoading===loader)qrImageLoading=null;}
  }
  function finishQr(stage,message,remaining){
   clearQrPoll();
