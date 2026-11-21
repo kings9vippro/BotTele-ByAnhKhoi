@@ -1,245 +1,375 @@
-/* GLAZE · Yanbi Studio — mobile-first pearl glass. CSS only; existing IDs and API contracts stay intact. */
-:root[data-theme=light],:root:not([data-theme]){
-  color-scheme:light;
-  --bg:#f4f6fb;--panel:#ffffffd9;--fg:#172235;--muted:#66748b;
-  --line:#354a6a22;--accent:#365dd7;--accent2:#7360c9;--danger:#b83255;
-  --studio-ring:#b7c6ff;--studio-shadow:0 20px 55px #19325214;
-  --studio-glass:rgba(255,255,255,.78);--studio-input:#ffffffdc;
-  --studio-shine:#ffffffb8;--studio-glow:#c8d4ff;
-  --v11-header:80px;--v11-nav:84px;
-}
-:root[data-theme=dark]{
+/*
+ * GLAZE AURORA · Owner Yanbi
+ * Consolidated final skin. Loaded last, overrides legacy v11.css without changing IDs,
+ * routes or forms. Animated only when the device permits reduced-motion: no.
+ */
+:root {
   color-scheme:dark;
-  --bg:#0c1220;--panel:#172238d9;--fg:#f2f5ff;--muted:#a7b5ce;
-  --line:#b7ceff29;--accent:#94b5ff;--accent2:#c2a9ff;--danger:#ff91a7;
-  --studio-ring:#536ca3;--studio-shadow:0 20px 55px #03081366;
-  --studio-glass:rgba(19,30,51,.78);--studio-input:#111c31d9;
-  --studio-shine:#ffffff13;--studio-glow:#4861a0;
-  --v11-header:80px;--v11-nav:84px;
-}
-:root[data-accent=rose]{--accent:#b74377;--accent2:#8d62b9;--studio-ring:#e8accb;--studio-glow:#ebc6e1}
-:root[data-accent=mint]{--accent:#087d76;--accent2:#327fa6;--studio-ring:#8bd6cb;--studio-glow:#a1e0d7}
-:root[data-theme=dark][data-accent=rose]{--accent:#ff9ac5;--accent2:#c0a7ff;--studio-ring:#a76791;--studio-glow:#693b62}
-:root[data-theme=dark][data-accent=mint]{--accent:#76e4cb;--accent2:#8ec6fa;--studio-ring:#458e83;--studio-glow:#27565b}
-html{background:var(--bg);-webkit-tap-highlight-color:transparent}
-body.yanbi{
-  isolation:isolate;position:relative;min-width:280px;color:var(--fg);
-  background:
-    radial-gradient(ellipse 75% 48% at 7% -5%,color-mix(in srgb,var(--studio-glow) 46%,transparent),transparent 74%),
-    radial-gradient(ellipse 56% 40% at 100% 60%,color-mix(in srgb,var(--studio-glow) 27%,transparent),transparent 73%),
-    linear-gradient(155deg,var(--bg),color-mix(in srgb,var(--bg) 94%,#fff));
-  background-attachment:fixed;
+  --bg:#090b17;--panel:#161b32;--fg:#f8f8ff;--muted:#aeb3d0;
+  --line:rgba(182,177,252,.17);--accent:#ad8aff;--accent2:#58d9ff;
+  --danger:#ff8299;--v11-header:78px;--top-tabs:58px;--v11-nav:92px;
+  --ui-glass:rgba(24,29,54,.77);--ui-solid:#12182d;
+  --ui-input:rgba(10,15,34,.76);--ui-outer:rgba(255,255,255,.095);
+  --ui-highlight:rgba(255,255,255,.14);--ui-shadow:0 18px 45px rgba(1,2,15,.34);
+  --ui-orb-a:rgba(116,70,242,.35);--ui-orb-b:rgba(48,170,224,.22);
   font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
 }
-body.yanbi::before{
-  content:"";position:fixed;z-index:-1;inset:-25%;pointer-events:none;
-  background:radial-gradient(circle at 22% 23%,color-mix(in srgb,var(--studio-glow) 24%,transparent),transparent 32%),
-    radial-gradient(circle at 81% 75%,color-mix(in srgb,var(--accent2) 11%,transparent),transparent 28%);
-  filter:blur(38px);opacity:.8;
+:root[data-theme=dark] {
+  color-scheme:dark;
+  --bg:#090b17;--panel:#161b32;--fg:#f8f8ff;--muted:#aeb3d0;
+  --line:rgba(182,177,252,.17);--accent:#ad8aff;--accent2:#58d9ff;
+  --danger:#ff8299;--ui-glass:rgba(24,29,54,.77);--ui-solid:#12182d;
+  --ui-input:rgba(10,15,34,.76);--ui-outer:rgba(255,255,255,.095);
+  --ui-highlight:rgba(255,255,255,.14);--ui-shadow:0 18px 45px rgba(1,2,15,.34);
+  --ui-orb-a:rgba(116,70,242,.35);--ui-orb-b:rgba(48,170,224,.22);
 }
-body.yanbi::after{content:"";position:fixed;z-index:-1;inset:0;pointer-events:none;background-image:linear-gradient(90deg,#ffffff08 1px,transparent 1px),linear-gradient(#ffffff08 1px,transparent 1px);background-size:34px 34px;mask-image:linear-gradient(to bottom,transparent,#0003,transparent)}
-body.yanbi header{
-  display:flex;align-items:center;gap:12px;min-height:var(--v11-header);
-  padding:14px max(16px,env(safe-area-inset-right)) 12px max(16px,env(safe-area-inset-left));
-  background:var(--studio-glass);border-bottom:1px solid var(--studio-shine);
-  box-shadow:0 4px 30px #1729460b;backdrop-filter:blur(24px) saturate(160%);
-  -webkit-backdrop-filter:blur(24px) saturate(160%);
+:root[data-theme=light] {
+  color-scheme:light;
+  --bg:#f2f2fb;--panel:#fff;--fg:#1b1c36;--muted:#626985;
+  --line:rgba(77,62,158,.16);--accent:#6d46d8;--accent2:#087fa9;
+  --danger:#b63153;--ui-glass:rgba(255,255,255,.82);--ui-solid:#fff;
+  --ui-input:rgba(255,255,255,.92);--ui-outer:rgba(255,255,255,.83);
+  --ui-highlight:rgba(255,255,255,.88);--ui-shadow:0 20px 48px rgba(41,27,101,.10);
+  --ui-orb-a:rgba(160,124,250,.25);--ui-orb-b:rgba(95,205,243,.21);
 }
-body.yanbi .brand{min-width:0;font-size:17px;font-weight:850;letter-spacing:-.035em;line-height:1.15}
-body.yanbi .brand img{width:46px;height:46px;border-radius:15px;object-fit:cover;border:1px solid var(--studio-shine);box-shadow:0 7px 19px #1b315a26}
-body.yanbi .brand small{display:block;margin-top:3px;font-weight:550;color:var(--muted);font-size:11px;letter-spacing:.01em}
-body.yanbi .brand-owner{display:inline-flex;align-items:center;max-width:100%;margin-top:5px;padding:3px 9px;border:1px solid color-mix(in srgb,var(--accent) 24%,var(--line));border-radius:99px;background:color-mix(in srgb,var(--accent) 8%,transparent);color:var(--accent);font-size:10px;letter-spacing:.02em;font-weight:760}
-body.yanbi #connection{flex:0 0 auto;max-width:106px;padding:7px 9px;border:1px solid var(--line);border-radius:999px;text-align:center;font-size:10px;line-height:1.3;font-weight:760;background:var(--studio-glass);color:var(--muted)}
-body.yanbi #connection[data-state=CONNECTED]{color:#0c8b68;border-color:#37b89954;background:#27b78712}
-:root[data-theme=dark] body.yanbi #connection[data-state=CONNECTED]{color:#81e6bd}
-body.yanbi #connection[data-state=AUTH_REQUIRED],body.yanbi #connection[data-state=ACCESS_DENIED]{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 30%,transparent)}
-body.yanbi #refresh{display:grid;place-items:center;min-width:40px;width:40px;height:40px;padding:0;background:var(--studio-glass);border-radius:13px}
-body.yanbi #pages{height:calc(100dvh - var(--v11-header) - var(--v11-nav) - max(10px,var(--safe)));scroll-behavior:smooth;scrollbar-width:none}
-body.yanbi #pages section{padding:19px clamp(15px,4vw,30px) 36px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
-body.yanbi #pages section>*{max-width:770px}
-body.yanbi h1{font-size:clamp(24px,5.8vw,36px);line-height:1.15;letter-spacing:-.045em;color:var(--fg);font-weight:840}
-body.yanbi h2{font-size:17px;line-height:1.3;color:var(--fg);letter-spacing:-.025em;font-weight:780}
-body.yanbi p{line-height:1.65;color:var(--muted)}
-body.yanbi .eyebrow{color:var(--accent);font-size:11px;letter-spacing:.14em;font-weight:800}
-body.yanbi article,body.yanbi .card,body.yanbi .metric,body.yanbi .file-category{
-  position:relative;min-width:0;padding:17px;
-  border-radius:22px;border:1px solid var(--studio-shine);outline:1px solid var(--line);
-  background:var(--studio-glass);box-shadow:var(--studio-shadow);
-  backdrop-filter:blur(18px) saturate(125%);-webkit-backdrop-filter:blur(18px) saturate(125%);
+:root[data-accent=rose] {--accent:#ff86b2;--accent2:#ffc18c;--ui-orb-a:rgba(245,76,151,.27);--ui-orb-b:rgba(250,148,96,.18)}
+:root[data-theme=light][data-accent=rose] {--accent:#c03772;--accent2:#ae6236}
+:root[data-accent=mint] {--accent:#72e6c9;--accent2:#67c8ff;--ui-orb-a:rgba(32,184,144,.25);--ui-orb-b:rgba(46,164,236,.16)}
+:root[data-theme=light][data-accent=mint] {--accent:#007f75;--accent2:#2576bd}
+* {box-sizing:border-box}
+html {background:var(--bg);-webkit-tap-highlight-color:transparent}
+body.yanbi {
+  position:relative;isolation:isolate;min-width:280px;overflow:hidden;
+  background:
+    radial-gradient(ellipse 94% 55% at -12% -6%,var(--ui-orb-a),transparent 72%),
+    radial-gradient(ellipse 60% 45% at 116% 65%,var(--ui-orb-b),transparent 73%),
+    var(--bg);
+  color:var(--fg);font-family:inherit;
+}
+body.yanbi::before {
+  content:"";position:fixed;inset:-35%;z-index:-1;pointer-events:none;
+  background:
+    radial-gradient(circle at 28% 26%,var(--ui-orb-a),transparent 33%),
+    radial-gradient(circle at 76% 68%,var(--ui-orb-b),transparent 31%);
+  filter:blur(38px);opacity:.72;
+}
+body.yanbi::after {
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:-1;
+  background:linear-gradient(95deg,transparent 0%,rgba(255,255,255,.014) 50%,transparent 100%);
+  background-size:260px 100%;opacity:.6;
+}
+/* Header: no image tile or decorative square. */
+body.yanbi header {
+  position:relative;z-index:12;display:flex;align-items:center;gap:11px;
+  height:var(--v11-header);min-height:var(--v11-header);padding:11px clamp(15px,3vw,28px);
+  border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--ui-solid) 81%,transparent);
+  box-shadow:0 10px 35px rgba(5,5,30,.15);
+  backdrop-filter:blur(26px) saturate(150%);-webkit-backdrop-filter:blur(26px) saturate(150%);
+}
+body.yanbi header::after {
+  content:"";position:absolute;height:1px;bottom:-1px;left:3%;width:38%;
+  background:linear-gradient(90deg,transparent,var(--accent),var(--accent2),transparent);
+  opacity:.78;pointer-events:none
+}
+body.yanbi .brand{display:flex;align-items:center;min-width:0;flex:1;gap:12px;letter-spacing:0;line-height:1.1}
+body.yanbi .brand-identity{display:grid;min-width:0;gap:5px}
+body.yanbi .brand-wordmark{display:block;width:max-content;font-size:24px;font-weight:900;letter-spacing:-.075em;line-height:1;background:linear-gradient(105deg,var(--fg) 12%,var(--accent) 72%,var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+body.yanbi .brand-meta{font-size:10px;font-weight:550;letter-spacing:.035em;color:var(--muted);white-space:nowrap}
+body.yanbi .brand-owner{display:flex;align-items:center;gap:5px;flex-wrap:nowrap;white-space:nowrap;margin:0;padding:6px 9px;border:1px solid color-mix(in srgb,var(--accent) 34%,transparent);border-radius:999px;color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);font-size:10px;font-weight:850;letter-spacing:.045em}
+body.yanbi .brand-owner small{color:var(--muted);font-size:9px;font-weight:650;letter-spacing:.02em}
+body.yanbi #connection{max-width:112px;flex:0 0 auto;padding:8px 9px;font-size:10px;line-height:1.32;border-radius:999px;border:1px solid var(--line);color:var(--muted);background:var(--ui-input);font-weight:750;text-align:center}
+body.yanbi #connection[data-state=CONNECTED]{color:var(--accent2);border-color:color-mix(in srgb,var(--accent2) 30%,transparent)}
+body.yanbi #connection[data-state=AUTH_REQUIRED],body.yanbi #connection[data-state=ACCESS_DENIED]{color:var(--danger)}
+body.yanbi #refresh{flex:0 0 auto;width:39px;min-width:39px;height:39px;min-height:39px;display:grid;place-items:center;padding:0;border-radius:13px;color:var(--accent);background:var(--ui-input);border:1px solid var(--line);font-size:22px}
+/* All seven destinations stay discoverable; horizontally scrollable and touch-friendly. */
+body.yanbi #tabs{
+  position:relative!important;inset:auto!important;z-index:11;
+  display:flex!important;align-items:center!important;gap:8px!important;
+  width:100%!important;height:var(--top-tabs)!important;min-height:var(--top-tabs)!important;
+  padding:8px 16px!important;border:0!important;border-bottom:1px solid var(--line)!important;
+  clip-path:none!important;overflow-x:auto!important;overflow-y:hidden!important;
+  white-space:nowrap!important;visibility:visible!important;
+  background:color-mix(in srgb,var(--ui-solid) 77%,transparent)!important;
+  scrollbar-width:none;scroll-padding-inline:16px;overscroll-behavior-x:contain;
+  backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+}
+body.yanbi #tabs::-webkit-scrollbar{display:none}
+body.yanbi #tabs button{
+  position:relative;flex:0 0 auto;min-height:39px;padding:9px 15px;min-width:max-content;
+  border-radius:12px;border:1px solid transparent;background:transparent;
+  color:var(--muted);font-size:12px;font-weight:720;letter-spacing:.008em;
+  box-shadow:none;white-space:nowrap;outline-offset:3px;
+}
+body.yanbi #tabs button[aria-selected=true]{
+  color:var(--fg);background:linear-gradient(120deg,color-mix(in srgb,var(--accent) 19%,var(--ui-glass)),color-mix(in srgb,var(--accent2) 8%,var(--ui-glass)));
+  border:1px solid color-mix(in srgb,var(--accent) 32%,var(--line));box-shadow:inset 0 1px var(--ui-highlight),0 5px 19px rgba(1,2,12,.12)
+}
+body.yanbi #tabs button[aria-selected=true]::after{
+  content:"";position:absolute;left:23%;right:23%;bottom:-2px;height:2px;border:0;border-radius:3px;
+  background:linear-gradient(90deg,var(--accent),var(--accent2));
+  box-shadow:0 0 10px color-mix(in srgb,var(--accent) 55%,transparent)
+}
+/* Scrollable panels preserve all existing native horizontal swipes and APIs. */
+body.yanbi #pages {
+  height:calc(100dvh - var(--v11-header) - var(--top-tabs) - var(--v11-nav) - max(8px,var(--safe)));
+  scroll-behavior:smooth;scroll-snap-type:x mandatory;scrollbar-width:none;
+}
+body.yanbi #pages section{
+  min-width:0;height:100%;overflow-y:auto;overscroll-behavior-y:contain;
+  padding:22px clamp(16px,4.5vw,35px) 35px;
+  scrollbar-width:thin;scrollbar-color:var(--line) transparent;
+}
+body.yanbi #pages section>*{max-width:790px}
+body.yanbi #pages h1{font-size:clamp(26px,6.5vw,38px);letter-spacing:-.05em;line-height:1.13;font-weight:865;color:var(--fg);margin:6px 0 19px}
+body.yanbi #pages h2{font-size:18px;font-weight:780;line-height:1.3;letter-spacing:-.027em;color:var(--fg)}
+body.yanbi #pages p{font-size:14px;line-height:1.65;color:var(--muted)}
+body.yanbi #pages .eyebrow{margin:2px 0 9px;font-size:11px;letter-spacing:.16em;font-weight:850;color:var(--accent)}
+/* Surface system, common to account, Discord, Zalo, tasks, activity, settings. */
+body.yanbi #pages article,body.yanbi #pages .card,body.yanbi #pages .metric,body.yanbi #pages .file-category{
+  position:relative;min-width:0;margin-bottom:13px;padding:18px;
+  border:1px solid var(--line);border-radius:21px;
+  background:linear-gradient(155deg,color-mix(in srgb,var(--ui-glass) 91%,var(--ui-highlight)),var(--ui-glass));
+  box-shadow:var(--ui-shadow),inset 0 1px var(--ui-highlight);
+  backdrop-filter:blur(19px) saturate(138%);-webkit-backdrop-filter:blur(19px) saturate(138%);
   overflow-wrap:anywhere;
 }
-body.yanbi .stack{gap:12px}
+body.yanbi #pages article::before,body.yanbi #pages .metric::before{
+  content:"";position:absolute;inset:0;pointer-events:none;border-radius:inherit;
+  background:linear-gradient(115deg,rgba(255,255,255,.055),transparent 38%,transparent 75%);
+}
+body.yanbi .stack{gap:11px}
 body.yanbi .grid{gap:11px}
-body.yanbi .metric{min-height:94px;margin:0;padding:15px;justify-content:center;gap:4px}
-body.yanbi .metric strong{color:var(--fg);font-size:clamp(22px,5vw,30px)}
-body.yanbi .metric span{color:var(--muted);font-size:11px}
 body.yanbi #home .overview-heading{
-  position:relative;isolation:isolate;overflow:hidden;padding:24px 21px;
-  border-radius:26px;border:1px solid var(--studio-shine);
-  outline:1px solid var(--line);
-  background:linear-gradient(120deg,color-mix(in srgb,var(--studio-glass) 91%,#fff),color-mix(in srgb,var(--studio-glass) 76%,var(--studio-glow)));
-  box-shadow:var(--studio-shadow);
+  position:relative;isolation:isolate;overflow:hidden;min-width:0;margin:0 0 16px;
+  padding:27px clamp(20px,4vw,30px);border:1px solid color-mix(in srgb,var(--accent) 31%,var(--line));
+  border-radius:25px;background:
+    radial-gradient(ellipse at 93% 0%,color-mix(in srgb,var(--accent2) 17%,transparent),transparent 54%),
+    linear-gradient(118deg,color-mix(in srgb,var(--accent) 18%,var(--ui-glass)),var(--ui-glass));
+  box-shadow:var(--ui-shadow),inset 0 1px var(--ui-highlight);
+  backdrop-filter:blur(23px);-webkit-backdrop-filter:blur(23px);
 }
-body.yanbi #home .overview-heading::before{inset:-75% -10% -75% 25%;background:radial-gradient(ellipse at 64% 40%,color-mix(in srgb,var(--studio-glow) 66%,transparent),transparent 65%)}
-body.yanbi #home .overview-heading::after{content:"";position:absolute;inset:1px;border-radius:inherit;border-top:1px solid var(--studio-shine);pointer-events:none}
-body.yanbi #home .overview-heading h1{font-size:clamp(26px,6vw,38px);margin:0 0 5px}
-body.yanbi #home #updated{margin:0;color:var(--muted);font-size:12px}
-body.yanbi #quick-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:15px 0}
-body.yanbi #quick-actions button{width:100%;min-width:0;margin:0;justify-content:flex-start;text-align:left;padding:13px 14px;min-height:48px}
-body.yanbi #quick-actions button:first-child{background:color-mix(in srgb,var(--accent) 11%,var(--studio-glass));border-color:color-mix(in srgb,var(--accent) 26%,var(--line))}
-body.yanbi #account-quicklinks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-body.yanbi #account-quicklinks button{min-width:0;min-height:47px}
+body.yanbi #home .overview-heading::before{
+  content:"";position:absolute;z-index:-1;inset:-100% -20% -85% 5%;
+  background:radial-gradient(ellipse at 65% 48%,color-mix(in srgb,var(--accent) 21%,transparent),transparent 54%);pointer-events:none
+}
+body.yanbi #home .overview-kicker{display:flex;align-items:center;gap:9px;margin:0 0 17px;font-size:11px;font-weight:800;letter-spacing:.14em;color:var(--accent)}
+body.yanbi .overview-pulse,body.yanbi .auth-led{display:inline-block;width:7px;height:7px;flex:0 0 7px;border-radius:99px;background:var(--accent2);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent2) 13%,transparent),0 0 18px color-mix(in srgb,var(--accent2) 45%,transparent)}
+body.yanbi #home .overview-heading h1{font-size:clamp(27px,6.7vw,43px);line-height:1.13;margin:0 0 12px;max-width:660px;color:var(--fg)}
+body.yanbi #home .overview-heading h1 span{background:linear-gradient(110deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+body.yanbi #home .overview-heading>p:not(.overview-kicker){margin:0 0 7px;font-size:13px;line-height:1.5}
+body.yanbi #home #updated{margin-top:17px;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+body.yanbi #home #metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;margin:0 0 17px}
+body.yanbi #home #metrics .metric{min-width:0;min-height:103px;margin:0;padding:17px;justify-content:center;gap:6px}
+body.yanbi #home #metrics .metric strong{font-size:clamp(22px,5.5vw,32px);color:var(--fg);font-weight:850}
+body.yanbi #home #metrics .metric span{font-size:11px;color:var(--muted);font-weight:680;line-height:1.3}
+body.yanbi #home #metrics .metric:nth-child(1){border-color:color-mix(in srgb,var(--accent) 36%,var(--line))}
+body.yanbi #home #metrics .metric:nth-child(2){border-color:color-mix(in srgb,var(--accent2) 32%,var(--line))}
+body.yanbi #home #quick-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:13px 0 17px}
+body.yanbi #home #quick-actions button{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  width:100%;min-width:0;min-height:53px;margin:0;padding:12px 15px;
+  text-align:left;color:var(--fg);font-size:13px;font-weight:760;
+  border:1px solid var(--line);border-radius:15px;background:var(--ui-glass);
+}
+body.yanbi #home #quick-actions button::after{content:"↗";flex:0 0 auto;font-size:16px;line-height:1;color:var(--accent)}
+body.yanbi #home #quick-actions button:nth-child(1){background:color-mix(in srgb,var(--accent) 15%,var(--ui-glass))}
+body.yanbi #home #quick-actions button:nth-child(2){background:color-mix(in srgb,var(--accent2) 12%,var(--ui-glass))}
+body.yanbi #home #chart{height:85px;max-height:85px}
+body.yanbi #home #chart:empty{display:none}
+/* Inputs: large tap targets, stable contrast. */
+body.yanbi #pages label{display:block;font-size:13px;line-height:1.5;color:var(--fg);font-weight:680;margin:11px 0}
+body.yanbi #pages input,body.yanbi #pages select,body.yanbi #pages textarea{
+  width:100%;max-width:100%;min-height:49px;padding:12px 14px;font-size:16px;
+  border:1px solid var(--line);border-radius:14px;
+  background:var(--ui-input);color:var(--fg);box-shadow:inset 0 1px rgba(255,255,255,.04);
+}
+body.yanbi #pages textarea{min-height:104px;resize:vertical}
+body.yanbi #pages input::placeholder,body.yanbi #pages textarea::placeholder{color:var(--muted);opacity:.8}
+body.yanbi #pages input[type=checkbox]{display:inline-block;width:21px;min-width:21px;height:21px;min-height:21px;margin-right:8px;vertical-align:middle;accent-color:var(--accent)}
+body.yanbi #pages fieldset{min-width:0;border:1px solid var(--line);border-radius:17px;padding:13px}
+body.yanbi #pages details{padding-top:9px;border-top:1px solid var(--line)}
+body.yanbi #pages summary{min-height:44px;padding:12px 0;color:var(--accent);font-size:13px;font-weight:740}
+body.yanbi #pages .row{border-bottom-color:var(--line)}
+body.yanbi #pages a{color:var(--accent);text-underline-offset:3px}
+/* Buttons and micro-interactions. */
 body.yanbi button,body.yanbi .primary,body.yanbi .btn{
-  border-radius:14px;border:1px solid var(--line);background:var(--studio-glass);
-  color:var(--fg);font-size:13px;font-weight:730;min-height:43px;
-  box-shadow:inset 0 1px var(--studio-shine);
-  transition:transform .2s cubic-bezier(.18,.8,.3,1),box-shadow .2s ease,border-color .2s ease,background-color .2s ease;
-  touch-action:manipulation;
+  position:relative;min-height:45px;border:1px solid var(--line);
+  border-radius:14px;background:var(--ui-glass);color:var(--fg);
+  font-size:13px;font-weight:745;line-height:1.4;cursor:pointer;touch-action:manipulation;
+  box-shadow:inset 0 1px var(--ui-highlight);
+  transition:transform .19s cubic-bezier(.2,.85,.25,1),border-color .2s ease,box-shadow .2s ease,background-color .2s ease,color .2s ease;
 }
+body.yanbi button:active,body.yanbi .btn:active{transform:translateY(1px) scale(.978)}
+body.yanbi button:disabled{opacity:.48;cursor:default}
 body.yanbi button.primary,body.yanbi .primary,body.yanbi .btn{
-  background:linear-gradient(130deg,var(--accent),color-mix(in srgb,var(--accent) 74%,var(--accent2)));
-  color:#fff;border:1px solid color-mix(in srgb,var(--accent) 75%,transparent);
-  box-shadow:0 8px 23px color-mix(in srgb,var(--accent) 24%,transparent),inset 0 1px #ffffff50;
+  background:linear-gradient(115deg,var(--accent),color-mix(in srgb,var(--accent2) 43%,var(--accent)));
+  border:1px solid color-mix(in srgb,var(--accent) 55%,transparent);
+  color:#101025;font-weight:850;box-shadow:0 9px 27px color-mix(in srgb,var(--accent) 24%,transparent),inset 0 1px rgba(255,255,255,.3);
 }
-:root[data-theme=dark] body.yanbi button.primary,:root[data-theme=dark] body.yanbi .primary{color:#0e1930}
-body.yanbi button:active,body.yanbi .btn:active{transform:translateY(1px) scale(.975)}
-body.yanbi button:focus-visible,body.yanbi a:focus-visible,body.yanbi input:focus-visible,body.yanbi select:focus-visible,body.yanbi textarea:focus-visible{outline:3px solid var(--studio-ring);outline-offset:3px}
-body.yanbi button.danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 32%,var(--line));background:color-mix(in srgb,var(--danger) 7%,var(--studio-glass))}
-body.yanbi label{font-size:13px;line-height:1.5;color:var(--fg);font-weight:670}
-body.yanbi input,body.yanbi select,body.yanbi textarea{
-  max-width:100%;font-size:15px;min-height:46px;padding:12px 14px;
-  border-radius:14px;background:var(--studio-input);border:1px solid var(--line);
-  color:var(--fg);box-shadow:inset 0 1px 4px #17223509;
-}
-body.yanbi input::placeholder,body.yanbi textarea::placeholder{color:var(--muted);opacity:.75}
-body.yanbi input:focus,body.yanbi select:focus,body.yanbi textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--studio-ring) 29%,transparent)}
-body.yanbi fieldset{border:1px solid var(--line);border-radius:18px;padding:13px}
-body.yanbi details{border-top:1px solid var(--line);padding-top:7px}
-body.yanbi summary{font-size:13px;font-weight:740}
-body.yanbi a{color:var(--accent);text-underline-offset:3px}
+:root[data-theme=light] body.yanbi button.primary,:root[data-theme=light] body.yanbi .primary,:root[data-theme=light] body.yanbi .btn{color:#fff}
+body.yanbi button.danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,var(--line));background:color-mix(in srgb,var(--danger) 7%,var(--ui-glass))}
+body.yanbi button:focus-visible,body.yanbi a:focus-visible,body.yanbi input:focus-visible,body.yanbi select:focus-visible,body.yanbi textarea:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+body.yanbi #account-quicklinks,body.yanbi #task-quick-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:11px 0 17px}
+body.yanbi #account-quicklinks button,body.yanbi #task-quick-actions button{min-height:49px;min-width:0}
+body.yanbi #task-list .card{background:var(--ui-glass);border-left:2px solid color-mix(in srgb,var(--accent) 44%,var(--line))}
+body.yanbi #task-list .card>strong{font-size:14px;color:var(--fg)}
+body.yanbi #tasks .task-filters{position:sticky;top:-22px;z-index:3;padding:10px 0;border-radius:12px;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(17px)}
+body.yanbi #tasks #task-account-status{border-left:2px solid var(--accent);background:var(--ui-glass);border-radius:0 12px 12px 0;padding:12px}
+body.yanbi #settings .owner-credit{background:linear-gradient(110deg,color-mix(in srgb,var(--accent) 16%,var(--ui-glass)),var(--ui-glass));border-color:color-mix(in srgb,var(--accent) 30%,var(--line))}
+body.yanbi #settings .owner-credit strong{color:var(--accent);font-size:16px}
+body.yanbi .account-status{border-color:var(--line);background:var(--ui-input)}
+/* Five favorite destinations, custom icon glyphs + floating glass dock. */
 body.yanbi #bottom,body.yanbi #bottom.bottom-nav{
-  bottom:calc(11px + var(--safe));height:70px;
-  width:min(calc(100% - 28px),470px);padding:6px;gap:4px;
-  border:1px solid var(--studio-shine);outline:1px solid var(--line);border-radius:23px;
-  background:var(--studio-glass);box-shadow:0 15px 40px #12243e2e;
-  backdrop-filter:blur(26px) saturate(165%);-webkit-backdrop-filter:blur(26px) saturate(165%);
+  position:fixed;left:50%;transform:translateX(-50%);bottom:calc(10px + var(--safe));
+  z-index:24;display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;
+  align-items:center;width:min(calc(100% - 26px),485px);height:78px;padding:7px;
+  column-gap:4px;border:1px solid var(--ui-outer);border-radius:25px;
+  background:color-mix(in srgb,var(--ui-solid) 86%,transparent);
+  box-shadow:0 17px 45px rgba(2,3,22,.4),inset 0 1px var(--ui-highlight);
+  backdrop-filter:blur(30px) saturate(145%);-webkit-backdrop-filter:blur(30px) saturate(145%);
+}
+:root[data-theme=light] body.yanbi #bottom,:root[data-theme=light] body.yanbi #bottom.bottom-nav{box-shadow:0 16px 45px rgba(47,32,128,.17),inset 0 1px var(--ui-highlight)}
+body.yanbi #bottom::before{
+  content:"";position:absolute;inset:0;pointer-events:none;border-radius:inherit;
+  background:linear-gradient(110deg,color-mix(in srgb,var(--accent) 7%,transparent),transparent 52%,color-mix(in srgb,var(--accent2) 8%,transparent))
 }
 body.yanbi #bottom button.bottom-nav-button{
-  height:56px;min-height:56px;min-width:0;padding:5px 1px;display:flex!important;
-  flex-direction:column;align-items:center;justify-content:center;gap:4px;
-  border-radius:17px;background:transparent;box-shadow:none;border:1px solid transparent;
+  min-width:0;width:100%;height:63px;min-height:63px;max-width:none;
+  display:flex!important;flex-direction:column;align-items:center;justify-content:center;
+  padding:5px 2px;gap:5px;border:1px solid transparent;border-radius:18px;
+  box-shadow:none;background:transparent;line-height:1;overflow:hidden;
 }
-body.yanbi #bottom button.bottom-nav-button .bottom-icon{width:22px;height:22px;flex:0 0 22px;stroke-width:1.9;transition:transform .25s cubic-bezier(.2,.85,.3,1.25),color .2s ease}
-body.yanbi #bottom .nav-caption{display:block;max-width:100%;font-size:10px;line-height:1.15;letter-spacing:-.02em;color:var(--muted);font-weight:680;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-body.yanbi #bottom button.bottom-nav-button[aria-current=page]{background:color-mix(in srgb,var(--accent) 13%,var(--studio-glass));border-color:color-mix(in srgb,var(--accent) 23%,var(--line));box-shadow:inset 0 1px var(--studio-shine)}
-body.yanbi #bottom button.bottom-nav-button[aria-current=page] .bottom-icon,
-body.yanbi #bottom button.bottom-nav-button[aria-current=page] .nav-caption{color:var(--accent);font-weight:840}
-body.yanbi #bottom button.bottom-nav-button[aria-current=page] .bottom-icon{transform:translateY(-2px) scale(1.06)!important}
-body.yanbi #auth-gate{
-  position:relative;isolation:isolate;width:min(calc(100% - 30px),470px);max-width:470px;
-  min-height:auto;margin:clamp(40px,10vh,100px) auto 35px;padding:30px clamp(21px,6vw,34px);
-  display:flex;align-items:stretch;gap:14px;overflow:hidden;
-  border:1px solid var(--studio-shine);outline:1px solid var(--line);
-  border-radius:28px;background:var(--studio-glass);color:var(--fg);
-  box-shadow:0 30px 90px #11294a26;
-  backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);
+body.yanbi #bottom button.bottom-nav-button .bottom-icon{
+  display:block;flex:0 0 24px;width:24px;height:24px;min-width:24px;min-height:24px;
+  color:var(--muted);stroke-width:1.85;
+  transition:transform .27s cubic-bezier(.2,.8,.3,1.2),color .25s ease!important;
+}
+body.yanbi #bottom .nav-caption{
+  display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;color:var(--muted);font-size:10px;line-height:1.15;font-weight:720;letter-spacing:-.017em
+}
+body.yanbi #bottom button.bottom-nav-button[aria-current=page]{
+  background:linear-gradient(160deg,color-mix(in srgb,var(--accent) 22%,var(--ui-glass)),color-mix(in srgb,var(--accent2) 10%,var(--ui-glass)));
+  border-color:color-mix(in srgb,var(--accent) 30%,var(--line));
+  box-shadow:0 6px 16px color-mix(in srgb,var(--accent) 11%,transparent),inset 0 1px var(--ui-highlight);
+}
+body.yanbi #bottom button.bottom-nav-button[aria-current=page] .bottom-icon{color:var(--accent);transform:translateY(-2px)!important}
+body.yanbi #bottom button.bottom-nav-button[aria-current=page] .nav-caption{color:var(--fg);font-weight:820}
+body.yanbi #bottom button.bottom-nav-button[aria-current=page]::after{
+  content:"";position:absolute;bottom:0;left:34%;width:32%;height:2px;border-radius:3px;
+  background:linear-gradient(90deg,var(--accent),var(--accent2));box-shadow:0 0 9px var(--accent)
+}
+/* Authentication: replace the old bulky diamond tile with a small secure status line. */
+body.yanbi #auth-gate {
+  width:min(calc(100% - 32px),490px);max-width:490px;min-height:0;
+  margin:clamp(38px,10vh,90px) auto 36px;padding:clamp(24px,5vw,39px);
+  display:flex;align-items:stretch;gap:16px;position:relative;overflow:hidden;isolation:isolate;
+  border:1px solid color-mix(in srgb,var(--accent) 27%,var(--line));border-radius:27px;
+  background:var(--ui-glass);box-shadow:0 27px 75px rgba(1,2,16,.37);
+  color:var(--fg);backdrop-filter:blur(25px) saturate(145%);-webkit-backdrop-filter:blur(25px) saturate(145%)
 }
 body.yanbi #auth-gate::before{
-  content:"";position:absolute;z-index:-1;inset:-130px -90px auto 25%;
-  height:260px;transform:rotate(-18deg);
-  background:radial-gradient(circle,color-mix(in srgb,var(--studio-glow) 80%,transparent),transparent 67%);
-  pointer-events:none
+  content:"";z-index:-1;position:absolute;pointer-events:none;inset:-45% -40% 40% 8%;
+  background:radial-gradient(ellipse at 65% 45%,color-mix(in srgb,var(--accent) 22%,transparent),transparent 62%);
 }
-body.yanbi #auth-gate .auth-icon{height:64px;width:64px;border-radius:20px;font-size:28px;background:color-mix(in srgb,var(--accent) 12%,var(--studio-glass));border:1px solid color-mix(in srgb,var(--accent) 24%,var(--line));box-shadow:inset 0 1px var(--studio-shine)}
-body.yanbi #auth-gate h1{font-size:clamp(25px,6vw,32px);margin:0;letter-spacing:-.045em}
-body.yanbi #auth-gate p{color:var(--muted);font-size:14px;line-height:1.65}
-body.yanbi #auth-gate .auth-hint{font-size:12px;color:var(--muted);padding-top:7px;border-top:1px solid var(--line)}
-body.yanbi #auth-gate .auth-login-link{display:flex;align-items:center;justify-content:center;min-height:52px;padding:13px 15px;border-radius:15px;text-decoration:none;font-weight:800;font-size:15px;line-height:1.35}
-body.yanbi #auth-gate #auth-retry{min-height:49px;font-size:14px}
+body.yanbi #auth-gate .auth-icon{display:none!important}
+body.yanbi #auth-gate .auth-kicker{display:flex;align-items:center;gap:11px;margin:0;font-size:11px;letter-spacing:.15em;color:var(--accent);font-weight:800}
+body.yanbi #auth-gate h1{font-size:clamp(27px,6vw,34px);letter-spacing:-.05em;line-height:1.15;margin:0}
+body.yanbi #auth-gate p:not(.eyebrow){font-size:14px;line-height:1.65;color:var(--muted);margin:0}
+body.yanbi #auth-gate .auth-hint{padding-top:15px;border-top:1px solid var(--line);font-size:12px}
+body.yanbi #auth-gate a.auth-login-link{
+  display:flex;align-items:center;justify-content:center;min-height:53px;padding:12px 17px;
+  text-align:center;text-decoration:none;border-radius:15px;font-size:15px;font-weight:850
+}
+body.yanbi #auth-gate #auth-retry{min-height:49px}
 body.yanbi.auth-locked{overflow:auto;min-height:100dvh}
-body.yanbi.auth-locked #auth-gate{margin-top:clamp(24px,8vh,90px)}
-body.yanbi #startup-panel{
-  background:var(--studio-glass);color:var(--fg);border:1px solid var(--line);
-  box-shadow:var(--studio-shadow);backdrop-filter:blur(18px);border-radius:21px;
-}
-body.yanbi #startup-panel[hidden]{display:none!important}
-body.yanbi #error{border-radius:12px;margin:8px 16px;background:color-mix(in srgb,var(--danger) 7%,var(--panel));border:1px solid color-mix(in srgb,var(--danger) 20%,var(--line))}
-body.yanbi #music .music-hero{display:grid;gap:9px;padding:18px 20px;margin-bottom:13px;border-radius:21px;background:linear-gradient(125deg,color-mix(in srgb,var(--accent) 9%,var(--studio-glass)),var(--studio-glass));border:1px solid var(--line)}
-body.yanbi #music .music-hero strong{font-size:18px}
-body.yanbi #music .music-hero p{margin:0}
-body.yanbi #music .music-notice{margin:10px 0;padding:12px 14px;border-radius:13px;background:color-mix(in srgb,var(--accent) 8%,var(--studio-glass));font-size:12px;line-height:1.6}
-body.yanbi #music .music-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
-body.yanbi #music .music-actions>*{min-width:0;min-height:47px;display:flex;align-items:center;justify-content:center;margin:0;padding:9px 10px;text-decoration:none;text-align:center;font-weight:760;border-radius:14px}
-body.yanbi #music .music-actions #music-playlist{border:1px solid var(--line);background:var(--studio-input)}
-body.yanbi #music .music-actions > [hidden]{display:none!important}
-body.yanbi #music #music-player iframe{display:block;width:100%;min-height:352px;max-width:100%;height:380px;border:0;border-radius:18px;margin-top:14px}
-body.yanbi #music-tracks{display:grid;gap:10px}
-body.yanbi #music-tracks .music-track{display:flex;gap:12px;align-items:center;padding:12px 15px;margin:0}
-body.yanbi #music-tracks .track-number{flex:0 0 26px;font-size:12px;font-weight:780;color:var(--muted);text-align:center}
-body.yanbi #music-tracks .track-info{flex:1;min-width:0}
-body.yanbi #music-tracks .track-info strong{display:block;color:var(--fg);font-size:13px;line-height:1.4}
-body.yanbi #music-tracks .track-info small{color:var(--muted);font-size:12px}
-body.yanbi #music-tracks .track-open{flex:0 0 auto;padding:8px 11px;min-height:36px;text-decoration:none;white-space:nowrap;border-radius:11px;background:color-mix(in srgb,var(--accent) 10%,var(--studio-glass));font-size:12px;font-weight:760}
-body.yanbi #sheet{background:var(--studio-glass);color:var(--fg);border:1px solid var(--studio-shine);box-shadow:0 20px 70px #02081750;backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px)}
-body.yanbi .toast{background:var(--fg);color:var(--bg);box-shadow:0 10px 30px #1c2b462b}
-body.yanbi #tasks .task-filters{background:color-mix(in srgb,var(--bg) 84%,transparent);backdrop-filter:blur(12px);border-radius:16px}
-body.yanbi #tasks #task-account-status{background:var(--studio-glass)}
-body.yanbi #task-list .card{background:var(--studio-glass)}
-body.yanbi #settings .owner-credit{padding:15px 17px;border:1px solid color-mix(in srgb,var(--accent) 27%,var(--line));border-radius:18px;background:color-mix(in srgb,var(--accent) 8%,var(--studio-glass));font-size:13px;line-height:1.6}
-body.yanbi #settings .owner-credit strong{color:var(--accent);font-size:16px}
+/* Security contract: legacy hide rule must outrank the visible Aurora tab/dock !important rules. */
+body.yanbi.auth-locked #pages,body.yanbi.auth-locked #tabs,body.yanbi.auth-locked #bottom,body.yanbi.auth-locked #error{display:none!important}
+body.yanbi.auth-locked #auth-gate{margin-top:clamp(22px,7vh,70px)}
+body.yanbi #auth-gate[hidden],body.yanbi #startup-panel[hidden]{display:none!important}
+body.yanbi #startup-panel{border:1px solid var(--line);background:var(--ui-glass);border-radius:18px;box-shadow:var(--ui-shadow);color:var(--fg);backdrop-filter:blur(18px)}
+body.yanbi #error{padding:12px 16px;margin:8px;border-radius:13px;background:color-mix(in srgb,var(--danger) 8%,var(--ui-glass));border:1px solid color-mix(in srgb,var(--danger) 23%,var(--line));color:var(--danger)}
+body.yanbi #sheet{background:var(--ui-solid);color:var(--fg);border-color:var(--line);box-shadow:0 22px 70px rgba(0,0,0,.3);border-radius:25px 25px 0 0}
+body.yanbi .toast{background:var(--fg);color:var(--bg);box-shadow:0 10px 25px rgba(0,0,0,.3)}
+/* /login is rendered by Flask with its own legacy inline CSS: scoped selectors win. */
+body.yanbi:has(.login-card){--bg:#090b17;--fg:#f8f8ff;--muted:#b0b6d0;--line:rgba(182,177,252,.22);--accent:#ad8aff;--accent2:#58d9ff;--ui-glass:rgba(24,29,54,.84);--ui-input:rgba(10,15,34,.85);min-height:100dvh}
 body.yanbi .login-card{
-  position:relative;isolation:isolate;width:min(100%,450px);max-width:450px;
-  padding:36px clamp(22px,5vw,38px);border-radius:29px;
-  background:var(--studio-glass);border:1px solid var(--studio-shine);
-  outline:1px solid var(--line);box-shadow:0 30px 90px #142d4c24;
-  backdrop-filter:blur(26px);-webkit-backdrop-filter:blur(26px)
+  position:relative;isolation:isolate;width:min(100%,465px);max-width:465px;
+  padding:clamp(27px,6vw,41px);border:1px solid var(--line);border-radius:28px;
+  background:var(--ui-glass);box-shadow:0 25px 80px rgba(1,2,16,.4);
+  backdrop-filter:blur(25px);-webkit-backdrop-filter:blur(25px)
 }
-body.yanbi .login-card::before{content:"GLAZE  /  OWNER · YANBI";display:block;margin:0 0 17px;color:var(--accent);font-size:11px;font-weight:800;letter-spacing:.12em}
-body.yanbi .login-card .login-mark{width:64px;height:64px;display:block;object-fit:cover;margin:0 0 19px;border-radius:19px;box-shadow:0 8px 22px #12284c24;border:1px solid var(--studio-shine)}
-body.yanbi .login-card h1{font-size:clamp(26px,6vw,32px);margin:0 0 8px;color:var(--fg);letter-spacing:-.045em}
-body.yanbi .login-card p.sub{color:var(--muted);margin:0 0 24px;font-size:14px}
-body.yanbi .login-card label{color:var(--fg);font-size:13px}
-body.yanbi .login-card input[type=password]{width:100%;min-height:51px;padding:14px 15px;background:var(--studio-input);color:var(--fg);border:1px solid var(--line);border-radius:14px;font-size:16px}
-body.yanbi .login-card .btn{display:block;width:100%;min-height:52px;border-radius:14px;background:linear-gradient(120deg,var(--accent),var(--accent2));color:#fff;font-size:15px}
-body.yanbi .login-card .quick-link{color:var(--accent);margin-top:22px;font-weight:730;text-decoration:none}
-body.yanbi .login-card .err{border-radius:13px;padding:12px 14px;color:var(--danger);background:color-mix(in srgb,var(--danger) 8%,var(--studio-glass));border:1px solid color-mix(in srgb,var(--danger) 26%,var(--line))}
+body.yanbi .login-card::before{content:"GLAZE   /   YANBI · OWNER";display:block;margin:0 0 24px;color:var(--accent);letter-spacing:.15em;font-size:11px;font-weight:820}
+body.yanbi .login-card .login-mark{display:none!important}
+body.yanbi .login-card h1{color:var(--fg);font-size:clamp(28px,6vw,34px);letter-spacing:-.05em;line-height:1.15;margin:0 0 10px}
+body.yanbi .login-card p.sub{color:var(--muted);font-size:14px}
+body.yanbi .login-card label{font-size:13px;color:var(--fg)}
+body.yanbi .login-card input[type=password]{width:100%;min-height:53px;border:1px solid var(--line);border-radius:14px;padding:13px 15px;background:var(--ui-input);color:var(--fg);font-size:16px}
+body.yanbi .login-card .btn{width:100%;min-height:52px;display:block;border-radius:14px;background:linear-gradient(110deg,var(--accent),var(--accent2));color:#101025;font-weight:840;font-size:15px}
+body.yanbi .login-card .quick-link{color:var(--accent);text-decoration:none;font-size:13px;font-weight:730}
+body.yanbi .login-card .err{padding:12px 14px;border-radius:12px;background:rgba(245,63,114,.11);color:#ffb3c7;border:1px solid rgba(255,122,155,.2)}
+/* Motion with explicit accessibility escape hatch. */
 @media(hover:hover){
-  body.yanbi button:hover{border-color:color-mix(in srgb,var(--accent) 32%,var(--line));box-shadow:0 8px 24px color-mix(in srgb,var(--accent) 10%,transparent)}
-  body.yanbi article:hover,body.yanbi .card:hover{border-color:color-mix(in srgb,var(--accent) 18%,var(--studio-shine))}
+  body.yanbi #tabs button:hover,body.yanbi button:hover{border-color:color-mix(in srgb,var(--accent) 32%,var(--line));filter:brightness(1.065)}
+  body.yanbi #bottom button.bottom-nav-button:hover .bottom-icon{transform:translateY(-2px) scale(1.1)}
+  body.yanbi #pages article:hover,body.yanbi #pages .card:hover{border-color:color-mix(in srgb,var(--accent) 28%,var(--line))}
 }
 @media(prefers-reduced-motion:no-preference){
-  body.yanbi::before{animation:yanbi-ambient 23s ease-in-out infinite alternate}
-  body.yanbi .overview-heading::before{animation:yanbi-shine 12s ease-in-out infinite alternate}
-  body.yanbi #pages section[aria-hidden=false]>.eyebrow,body.yanbi #pages section[aria-hidden=false]>h1{animation:yanbi-reveal .38s cubic-bezier(.2,.8,.25,1) both}
-  body.yanbi #auth-gate,body.yanbi .login-card{animation:yanbi-reveal .48s cubic-bezier(.2,.8,.25,1) both}
-  body.yanbi #music-tracks .music-track{animation:yanbi-reveal .3s ease-out both}
+  body.yanbi::before{animation:aurora-drift 18s ease-in-out infinite alternate}
+  body.yanbi::after{animation:aurora-haze 24s linear infinite}
+  body.yanbi header::after{animation:aurora-line 5s ease-in-out infinite alternate}
+  body.yanbi #home .overview-heading::before{animation:aurora-drift 12s ease-in-out infinite alternate}
+  body.yanbi #pages section[aria-hidden=false]>.eyebrow,
+  body.yanbi #pages section[aria-hidden=false]>h1,
+  body.yanbi #home[aria-hidden=false] .overview-heading{animation:aurora-enter .4s cubic-bezier(.2,.8,.25,1) both}
+  body.yanbi #auth-gate,body.yanbi .login-card{animation:aurora-enter .48s cubic-bezier(.16,.8,.22,1) both}
+  body.yanbi #pages section[aria-hidden=false]>.card,
+  body.yanbi #pages section[aria-hidden=false]>article{animation:aurora-enter .36s ease-out both}
+  body.yanbi #pages section[aria-hidden=false]>article:nth-of-type(2){animation-delay:.05s}
+  body.yanbi #pages section[aria-hidden=false]>article:nth-of-type(3){animation-delay:.09s}
+  body.yanbi .overview-pulse,body.yanbi .auth-led{animation:aurora-status 3.6s ease-in-out infinite}
 }
-@keyframes yanbi-ambient{from{transform:translate3d(-2%,-1%,0) scale(1)}to{transform:translate3d(2%,2%,0) scale(1.07)}}
-@keyframes yanbi-shine{from{transform:translateX(-8%) scale(1)}to{transform:translateX(8%) scale(1.13)}}
-@keyframes yanbi-reveal{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes aurora-drift{0%{transform:translate3d(-1.5%,-1%,0) scale(1)}100%{transform:translate3d(2%,2%,0) scale(1.07)}}
+@keyframes aurora-haze{from{background-position:-260px 0}to{background-position:260px 0}}
+@keyframes aurora-line{from{opacity:.3;transform:translateX(-12%)}to{opacity:.95;transform:translateX(30%)}}
+@keyframes aurora-enter{from{opacity:.35;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes aurora-status{50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--accent2) 10%,transparent),0 0 20px var(--accent2)}}
+/* Large screens keep the app visually composed, not stretched edge-to-edge. */
+@media(min-width:740px){
+  body.yanbi #home #metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
+  body.yanbi #tabs{justify-content:center}
+}
 @media(max-width:520px){
- body.yanbi header{padding:11px 14px}
- body.yanbi .brand img{width:40px;height:40px;border-radius:13px}
- body.yanbi .brand{font-size:15px}
- body.yanbi .brand small{font-size:10px}
- body.yanbi .brand-owner{font-size:9px;padding:2px 7px}
- body.yanbi #connection{max-width:104px;font-size:9px}
- body.yanbi #pages section{padding:16px 15px 35px}
- body.yanbi #auth-gate{margin-top:clamp(26px,7vh,70px)}
- body.yanbi #home .overview-heading{padding:21px 17px}
- body.yanbi #bottom{width:calc(100% - 24px)}
- body.yanbi #music-tracks .track-open{font-size:11px;padding:9px}
- body.yanbi #music .music-actions{grid-template-columns:minmax(0,1fr)}
- body.yanbi #music .music-actions>*{min-height:46px}
+  :root{--v11-header:73px;--top-tabs:55px;--v11-nav:87px}
+  body.yanbi header{padding:10px 13px;gap:8px}
+  body.yanbi .brand{gap:8px}
+  body.yanbi .brand-wordmark{font-size:21px}
+  body.yanbi .brand-meta{font-size:9px}
+  body.yanbi .brand-owner{font-size:9px;padding:6px 7px}
+  body.yanbi .brand-owner small{font-size:8px}
+  body.yanbi #connection{max-width:94px;font-size:9px;padding:7px 8px}
+  body.yanbi #refresh{width:35px;min-width:35px;height:35px;min-height:35px}
+  body.yanbi #tabs{padding:8px 12px!important;gap:6px!important}
+  body.yanbi #tabs button{padding:8px 13px;font-size:12px}
+  body.yanbi #pages section{padding:18px 15px 36px}
+  body.yanbi #home .overview-heading{padding:23px 20px}
+  body.yanbi #bottom,body.yanbi #bottom.bottom-nav{width:calc(100% - 23px);height:75px;bottom:calc(9px + var(--safe));border-radius:23px;padding:6px}
+  body.yanbi #bottom button.bottom-nav-button{min-height:61px;height:61px}
+  body.yanbi #bottom .nav-caption{font-size:10px}
+  body.yanbi #auth-gate{margin-top:clamp(22px,7vh,65px)}
 }
-@media(max-width:350px){
- body.yanbi #bottom .nav-caption{font-size:9px}
- body.yanbi #bottom,body.yanbi #bottom.bottom-nav{width:calc(100% - 12px)}
- body.yanbi #quick-actions{gap:7px}
- body.yanbi #music-tracks .track-open{font-size:10px}
+@media(max-width:355px){
+  body.yanbi .brand-owner small{display:none}
+  body.yanbi .brand-wordmark{font-size:19px}
+  body.yanbi .brand-meta{font-size:8px}
+  body.yanbi #connection{max-width:86px;padding:6px}
+  body.yanbi #bottom,body.yanbi #bottom.bottom-nav{width:calc(100% - 12px);column-gap:2px;padding:5px}
+  body.yanbi #bottom .nav-caption{font-size:9px}
+  body.yanbi #pages section{padding-left:12px;padding-right:12px}
+  body.yanbi #home #quick-actions{gap:7px}
 }
 @media(prefers-reduced-motion:reduce){
- body.yanbi::before,body.yanbi *::before{animation:none!important}
- body.yanbi #pages{scroll-behavior:auto}
- body.yanbi button,body.yanbi .bottom-icon{transition:none!important}
+  body.yanbi::before,body.yanbi::after,body.yanbi *::before,body.yanbi *::after{animation:none!important}
+  body.yanbi *,body.yanbi *::before,body.yanbi *::after{transition:none!important;scroll-behavior:auto!important}
+  body.yanbi #pages{scroll-behavior:auto}
 }

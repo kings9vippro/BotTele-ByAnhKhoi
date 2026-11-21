@@ -13,7 +13,7 @@ import app
 class CompactV11Tests(unittest.TestCase):
     def test_compact_ui_preserves_all_functional_pages(self):
         template=(Path(__file__).resolve().parents[1] / "templates" / "miniapp.html").read_text()
-        for section in ("home","accounts","discord","zalo","tasks","activity","music","settings"):
+        for section in ("home","accounts","discord","zalo","tasks","activity","settings"):
             self.assertIn('id="'+section+'"', template)
         self.assertIn('id="auth-gate"',template)
         self.assertIn('id="account-open-zalo"',template)

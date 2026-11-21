@@ -7,7 +7,6 @@
 :root[data-text-size=large] button,:root[data-text-size=large] input,:root[data-text-size=large] select,:root[data-text-size=large] textarea{font-size:17px;font-weight:650}
 :root[data-text-size=large] p,:root[data-text-size=large] label{font-size:16px;font-weight:600}
 .skip-link{position:fixed;top:8px;left:8px;z-index:20;padding:10px 14px;border-radius:12px;background:var(--accent);color:var(--bg);font-weight:700;transform:translateY(-150%);transition:transform .18s ease}.skip-link:focus{transform:translateY(0)}
-#music-player iframe{display:block;width:100%;height:352px;margin-top:16px;border:0;border-radius:18px;background:var(--panel)}
 #tabs{position:sticky;top:0;z-index:3;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(14px)}
 #tabs button{position:relative;min-height:42px}
 #tabs button[aria-selected=true]::after{content:'';position:absolute;left:16%;right:16%;bottom:2px;height:3px;border-radius:3px;background:var(--accent);box-shadow:0 0 16px color-mix(in srgb,var(--accent) 70%,transparent)}

@@ -6,7 +6,7 @@
  const REQUEST_TIMEOUT_MS=18000,STREAM_BASE_DELAY_MS=1000,STREAM_MAX_DELAY_MS=30000,STREAM_JITTER=0.2,STREAM_STALE_MS=12000,SDK_BOOT_WAIT_MS=2000;
  const connectionLabels={CONNECTING:'Đang kết nối…',CONNECTED:'Đã đồng bộ',RECONNECTING:'Đang kết nối lại…',DEGRADED:'Luồng gián đoạn · đang thử lại',DISCONNECTED:'Mất kết nối · dữ liệu cũ',AUTH_REQUIRED:'Cần đăng nhập',ACCESS_DENIED:'Không đủ quyền truy cập',SERVER_CONFIG:'Máy chủ cần cấu hình xác thực'};
  let tg, active='home', data={}, accounts=[], identities=[], eventRows=[], cursor=0, stream, refreshing, refreshController, toastTimer, streamGeneration=0, legacyTelemetry, reconnectTimer, reconnectAttempt=0, lastStreamAt=0, streamConnected=false, requestSequence=0, terminalAuth=false, retryAfterDelay=0, csrfToken='';
- const names={home:'Tổng quan',accounts:'Tài khoản',discord:'Discord',zalo:'Zalo',tasks:'Task',activity:'Nhật ký',music:'Âm nhạc',settings:'Cài đặt'};
+ const names={home:'Tổng quan',accounts:'Tài khoản',discord:'Discord',zalo:'Zalo',tasks:'Tác vụ',activity:'Nhật ký',settings:'Cài đặt'};
  const keys=Object.keys(names), pages=$('pages');
  const element=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  function hideStartupPanel(){$('startup-panel').hidden=true;}
@@ -53,14 +53,14 @@
  function button(text,fn,cls){const b=element('button',text,cls);b.type='button';b.onclick=async()=>{if(b.disabled)return;b.disabled=true;b.setAttribute('aria-busy','true');try{await fn();}catch(e){failed(e);toast(e.message);}finally{b.disabled=false;b.removeAttribute('aria-busy');}};return b;}
  function theme(){const mode=$('theme').value;document.documentElement.dataset.theme=mode==='system'?(tg?.colorScheme||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark')):mode;}
  function initTelegram(){const sdk=window.Telegram?.WebApp;if(!sdk||tg===sdk)return;tg=sdk;tg.ready();tg.expand();tg.onEvent?.('themeChanged',theme);tg.onEvent?.('viewportChanged',()=>{document.documentElement.style.setProperty('--safe',Math.max(tg.safeAreaInset?.bottom||0,tg.contentSafeAreaInset?.bottom||0)+'px');});tg.BackButton?.onClick(()=>{if($('sheet').open)$('sheet').close();else go('home');});theme();}
- initTelegram();$('telegram-sdk').addEventListener('load',initTelegram);$('theme').onchange=()=>{try{localStorage.setItem('glaze-theme',$('theme').value);}catch{}theme();};try{$('theme').value=localStorage.getItem('glaze-theme')||'light';}catch{$('theme').value='light';}theme();
+ initTelegram();$('telegram-sdk').addEventListener('load',initTelegram);$('theme').onchange=()=>{try{localStorage.setItem('glaze-theme',$('theme').value);}catch{}theme();};try{$('theme').value=localStorage.getItem('glaze-theme')||'dark';}catch{$('theme').value='dark';}theme();
  for(const [id,allowed,fallback] of [['text-size',['normal','large'],'normal'],['accent',['blue','rose','mint'],'blue']]){
   const input=$(id),key='glaze-'+id;
   try{const saved=localStorage.getItem(key);input.value=allowed.includes(saved)?saved:fallback;}catch{input.value=fallback;}
   const apply=()=>{document.documentElement.setAttribute('data-'+id,input.value);try{localStorage.setItem(key,input.value);}catch{}};
   input.addEventListener('change',apply);apply();
  }
- function select(name){active=name;document.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===name;b.setAttribute('aria-selected',on);b.setAttribute('aria-current',on?'page':'false');b.tabIndex=on?0:-1;});document.querySelectorAll('[data-bottom]').forEach(b=>b.setAttribute('aria-current',b.dataset.bottom===name?'page':'false'));keys.forEach(key=>$(key)?.setAttribute('aria-hidden',key===name?'false':'true'));$('tab-'+name)?.scrollIntoView({block:'nearest',inline:'nearest',behavior:reduced.matches?'auto':'smooth'});if(name==='music')loadMusic();if(name==='zalo'&&!terminalAuth)refreshZaloWatches().catch(failed);if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();}
+ function select(name){active=name;document.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===name;b.setAttribute('aria-selected',on);b.setAttribute('aria-current',on?'page':'false');b.tabIndex=on?0:-1;});document.querySelectorAll('[data-bottom]').forEach(b=>b.setAttribute('aria-current',b.dataset.bottom===name?'page':'false'));keys.forEach(key=>$(key)?.setAttribute('aria-hidden',key===name?'false':'true'));$('tab-'+name)?.scrollIntoView({block:'nearest',inline:'nearest',behavior:reduced.matches?'auto':'smooth'});if(name==='zalo'&&!terminalAuth)refreshZaloWatches().catch(failed);if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();}
  function go(name){select(name);pages.scrollTo({left:keys.indexOf(name)*pages.clientWidth,behavior:reduced.matches?'auto':'smooth'});tg?.HapticFeedback?.selectionChanged();if(!terminalAuth&&['accounts','zalo','discord'].includes(name)&&Date.now()-lastFullSync>30000)refresh().catch(failed);}
  keys.forEach((key,i)=>{const b=button(names[key],()=>go(key));b.id='tab-'+key;b.dataset.tab=key;b.role='tab';b.setAttribute('aria-controls',key);$(key).setAttribute('aria-labelledby',b.id);$(key).tabIndex=0;b.onkeydown=e=>{const d=e.key==='ArrowRight'||e.key==='ArrowDown'?1:e.key==='ArrowLeft'||e.key==='ArrowUp'?-1:0;if(d||e.key==='Home'||e.key==='End'){e.preventDefault();const next=e.key==='Home'?keys[0]:e.key==='End'?keys[keys.length-1]:keys[(i+d+keys.length)%keys.length];go(next);$('tab-'+next).focus();}};$('tabs').append(b);});
  // Consistent 24×24 outline SVG icons prevent iOS font glyph misalignment.
@@ -68,11 +68,11 @@
   home:'M3 11.5 12 4l9 7.5V21h-6v-7H9v7H3z',
   accounts:'M16 19v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2h14z M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M18 10a3 3 0 0 1 0 6 M18 4a3 3 0 0 1 0 6',
   tasks:'M12 3v9l5 3 M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z',
-  music:'M9 18V5l12-2v13 M9 8l12-2 M9 18a3 2 0 1 1-6 0 3 2 0 0 1 6 0z M21 16a3 2 0 1 1-6 0 3 2 0 0 1 6 0z',
+  discord:'M20 11.5a7.5 7.5 0 0 1-7.5 7.5c-1.8 0-3.3-.5-4.8-1.3L3.5 19l1.4-4.1A7.5 7.5 0 1 1 20 11.5z M8.5 11h.01 M12 11h.01 M15.5 11h.01',
   settings:'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z M12 2v3 M12 19v3 M4.9 4.9 7 7 M17 17l2.1 2.1 M2 12h3 M19 12h3 M4.9 19.1 7 17 M17 7l2.1-2.1'
  };
  const ns='http://www.w3.org/2000/svg';
- for(const key of ['home','accounts','tasks','music','settings']){
+ for(const key of ['home','accounts','discord','tasks','settings']){
   const b=button('',()=>go(key));
   const svg=document.createElementNS(ns,'svg');
   svg.classList.add('bottom-icon');svg.setAttribute('viewBox','0 0 24 24');
@@ -84,7 +84,7 @@
   b.append(svg,element('span',names[key],'nav-caption'));b.dataset.bottom=key;b.classList.add('bottom-nav-button');
   b.setAttribute('aria-label',names[key]);b.title=names[key];$('bottom').append(b);
  }
- for(const [id,page] of [['home-open-accounts','accounts'],['home-open-tasks','tasks'],['home-open-zalo','zalo'],['home-open-discord','discord'],['home-open-music','music'],['home-open-activity','activity'],['account-open-zalo','zalo'],['account-open-discord','discord'],['task-open-activity','activity'],['task-open-zalo','zalo']]){
+ for(const [id,page] of [['home-open-accounts','accounts'],['home-open-tasks','tasks'],['home-open-zalo','zalo'],['home-open-discord','discord'],['home-open-activity','activity'],['account-open-zalo','zalo'],['account-open-discord','discord'],['task-open-activity','activity'],['task-open-zalo','zalo']]){
   const target=$(id);if(target)target.addEventListener('click',()=>go(page));
  }
  $('auth-retry')?.addEventListener('click',()=>{
@@ -93,48 +93,6 @@
   terminalAuth=false;hideAuthGate();setConnection('CONNECTING');
   refresh().finally(()=>{if(!terminalAuth)scheduleReconnect(streamGeneration,100);});
  });
- let musicData,musicLoading;
- async function loadMusic(){
-  if(musicData||musicLoading)return musicLoading;
-  musicLoading=(async()=>{
-   const response=await fetch('/static/viet_hits.json',{cache:'force-cache'});
-   if(!response.ok)throw Error('Không tải được danh sách nhạc.');
-   const payload=await response.json();
-   if(!/^[A-Za-z0-9]{22}$/.test(payload.playlist_id)||!Array.isArray(payload.tracks))throw Error('Danh sách nhạc không hợp lệ.');
-   musicData=payload;
-   $('music-source').textContent=`${payload.source} · kiểm tra ${payload.checked_at}. Danh sách có thể thay đổi trên Spotify.`;
-   const playlist=new URL(payload.playlist_url);
-   if(playlist.origin==='https://open.spotify.com'){$('music-playlist').href=playlist.href;$('music-playlist').hidden=false;}
-   // Metadata is browsable in full; audio itself stays inside Spotify's
-   // official Embed, where account, Premium and WebView policy decide whether
-   // full-track playback is available.
-   $('music-tracks').replaceChildren(...payload.tracks.map((track,index)=>{
-    const card=element('article',undefined,'card music-track');
-    const number=element('span',String(index+1).padStart(2,'0'),'track-number');
-    const info=element('div',undefined,'track-info');
-    info.append(element('strong',track.name),element('small',track.artist));
-    const url=new URL(track.url);
-    if(url.origin==='https://open.spotify.com'&&/^\/track\/[A-Za-z0-9]+$/.test(url.pathname)){
-     const open=element('a','Nghe đầy đủ','track-open');
-     open.href=url.href;open.target='_blank';open.rel='noopener noreferrer';
-     open.setAttribute('aria-label','Mở '+track.name+' trên Spotify');
-     card.append(number,info,open);
-    }else{card.append(number,info);}
-    return card;
-   }));
-   $('music-tracks').setAttribute('aria-busy','false');
-  })().catch(error=>{$('music-tracks').replaceChildren(element('p',error.message));$('music-tracks').setAttribute('aria-busy','false');}).finally(()=>musicLoading=null);
-  return musicLoading;
- }
- $('music-play').onclick=async()=>{
-  await loadMusic();if(!musicData)return;
-  const frame=element('iframe');frame.title='Spotify · Hot Hits Vietnam';frame.loading='lazy';
-  frame.src='https://open.spotify.com/embed/playlist/'+musicData.playlist_id+'?utm_source=generator';
-  frame.allow='autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture';
-  frame.referrerPolicy='strict-origin-when-cross-origin';
-  $('music-player').replaceChildren(frame);$('music-play').hidden=true;
-  // Embedded playback is license/device-dependent; direct Spotify links remain visible.
- };
  let scrollFrame;pages.onscroll=()=>{if(scrollFrame)return;scrollFrame=requestAnimationFrame(()=>{scrollFrame=null;select(keys[Math.round(pages.scrollLeft/pages.clientWidth)]||'home');});};window.addEventListener('resize',()=>pages.scrollTo({left:keys.indexOf(active)*pages.clientWidth}));select('home');
  let sheetReturnFocus;
  function sheet(title,content,actions=[]){sheetReturnFocus=document.activeElement;$('sheet-title').textContent=title;$('sheet-content').replaceChildren(typeof content==='string'?element('p',content):content);$('sheet-actions').replaceChildren(...actions);$('sheet').showModal();$('sheet-close').focus();}
