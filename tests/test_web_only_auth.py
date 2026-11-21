@@ -72,7 +72,8 @@ class WebOnlyAuthTests(unittest.TestCase):
                 denied = self.client.post("/login", data={"password": "wrong"})
                 accepted = self.client.post("/login", data={"password": password})
         self.assertEqual(denied.status_code, 200)
-        self.assertEqual(accepted.status_code, 302)
+        self.assertEqual(accepted.status_code, 303)
+        self.assertEqual(accepted.headers["Location"], "/login/check")
         with self.client.session_transaction() as browser_session:
             self.assertTrue(browser_session.get("logged_in"))
 
