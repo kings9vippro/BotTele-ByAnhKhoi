@@ -5,7 +5,7 @@ const crypto=require('crypto'),assert=require('assert/strict');
  const check=Object.keys(values).sort().map(k=>`${k}=${values[k]}`).join('\n');
  values.hash=crypto.createHmac('sha256',crypto.createHmac('sha256','WebAppData').update('test-token').digest()).update(check).digest('hex');
  const auth=new URLSearchParams(values).toString();
- const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+ const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||undefined,args:['--no-sandbox']});
  try{
  const external=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
  await external.route('https://telegram.org/**',r=>r.abort());
