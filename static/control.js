@@ -4,8 +4,8 @@
  const $=id=>document.getElementById(id), reduced=matchMedia('(prefers-reduced-motion: reduce)');
  const launch=new URLSearchParams(location.hash.slice(1)).get('tgWebAppData')||'';
  const REQUEST_TIMEOUT_MS=18000,STREAM_BASE_DELAY_MS=1000,STREAM_MAX_DELAY_MS=30000,STREAM_JITTER=0.2,STREAM_STALE_MS=12000,SDK_BOOT_WAIT_MS=2000;
- const connectionLabels={CONNECTING:'Đang kết nối…',CONNECTED:'Đã đồng bộ',RECONNECTING:'Đang kết nối lại…',DEGRADED:'Luồng gián đoạn · đang thử lại',DISCONNECTED:'Mất kết nối · dữ liệu cũ',AUTH_REQUIRED:'Cần đăng nhập',ACCESS_DENIED:'Không đủ quyền truy cập',SERVER_CONFIG:'Máy chủ cần cấu hình xác thực'};
- let tg, active='home', data={}, accounts=[], identities=[], eventRows=[], cursor=0, stream, refreshing, refreshController, toastTimer, streamGeneration=0, legacyTelemetry, reconnectTimer, reconnectAttempt=0, lastStreamAt=0, streamConnected=false, requestSequence=0, terminalAuth=false, retryAfterDelay=0, csrfToken='';
+ const connectionLabels={CONNECTING:'Đang kết nối…',CONNECTED:'Đã đồng bộ',AUTHENTICATED:'Đã đăng nhập',PARTIAL:'Đã đăng nhập · đồng bộ một phần',RECONNECTING:'Đang kết nối lại…',DEGRADED:'Luồng gián đoạn · đang thử lại',DISCONNECTED:'Mất kết nối · dữ liệu cũ',AUTH_REQUIRED:'Cần đăng nhập',ACCESS_DENIED:'Không đủ quyền truy cập',SERVER_CONFIG:'Máy chủ cần cấu hình xác thực'};
+ let tg, active='home', data={}, accounts=[], identities=[], eventRows=[], cursor=0, stream, refreshing, refreshController, toastTimer, streamGeneration=0, legacyTelemetry, reconnectTimer, reconnectAttempt=0, lastStreamAt=0, streamConnected=false, requestSequence=0, terminalAuth=false, retryAfterDelay=0, csrfToken='',sessionValidated=false,syncWarnings=[];
  const names={home:'Tổng quan',accounts:'Tài khoản',discord:'Discord',zalo:'Zalo',tasks:'Tác vụ',activity:'Nhật ký',settings:'Cài đặt'};
  const keys=Object.keys(names), pages=$('pages');
  const element=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
@@ -29,17 +29,27 @@
  class MiniAppError extends Error{constructor(message,{kind='temporary',status=0,retryAfterMs=0}={}){super(message);this.name='MiniAppError';this.kind=kind;this.status=status;this.retryAfterMs=retryAfterMs;}}
  function initData(){return String(tg?.initData||launch||'').trim();}
  function setConnection(state){const n=$('connection');n.dataset.state=state;n.textContent=connectionLabels[state]||connectionLabels.DISCONNECTED;n.classList.toggle('live',state==='CONNECTED');}
- function failed(error,state='DISCONNECTED'){
+ function failed(error,state='DEGRADED'){
   if(error?.name==='AbortError')return;
-  if(error?.status===401){terminalAuth=true;state='AUTH_REQUIRED';stream?.abort();clearTimeout(reconnectTimer);showAuthGate(state,error?.code==='expired_init_data'?'expired':error?.code==='missing_init_data'?'missing':'invalid');}
-  else if(error?.status===403){terminalAuth=true;state='ACCESS_DENIED';showAuthGate(state,'forbidden');}
-  else if(error?.code==='server_configuration'||error?.status===503){terminalAuth=true;state='SERVER_CONFIG';showAuthGate(state,'server');}
+  const authenticationLost=error?.status===401 ||
+   (error?.status===403&&error?.code==='unauthorized_account'&&!sessionValidated);
+  if(authenticationLost){
+   sessionValidated=false;terminalAuth=true;stream?.abort();clearTimeout(reconnectTimer);
+   showAuthGate('AUTH_REQUIRED',error?.code==='expired_init_data'?'expired':error?.code==='missing_init_data'?'missing':'invalid');
+  }else if(error?.code==='server_configuration'&&!sessionValidated){
+   terminalAuth=true;showAuthGate('SERVER_CONFIG','server');
+  }
   if(Number.isFinite(error?.retryAfterMs))retryAfterDelay=Math.max(retryAfterDelay,error.retryAfterMs);
   const startup=$('startup-panel');
-  if(!startup.hidden)startup.querySelector('[role="status"]').textContent='Chưa kết nối được. Hãy thử làm mới hoặc đăng nhập.';
-  $('error').hidden=false;
-  $('error').textContent=error?.message||'Không thể đồng bộ dữ liệu.';
-  setConnection(state);
+  if(!sessionValidated&&!terminalAuth&&!startup.hidden){
+   startup.querySelector('[role="status"]').textContent='Chưa kết nối được với API. Bạn có thể thử lại mà không cần đăng nhập lần nữa.';
+  }
+  $('error').hidden=terminalAuth;
+  $('error').textContent=error?.message||'Một chức năng đang tạm gián đoạn.';
+  if(!terminalAuth){
+   if(!sessionValidated)setConnection(state);
+   else if(!error?.status||error.status>=500||error.status===429)setConnection('PARTIAL');
+  }
  }
  function requestId(prefix='miniapp'){requestSequence=(requestSequence+1)%1000000;const random=window.crypto?.randomUUID?.()||Math.random().toString(36).slice(2);return `${prefix}-${Date.now().toString(36)}-${requestSequence.toString(36)}-${random}`;}
  function requestSignal(parent,timeout=REQUEST_TIMEOUT_MS){const controller=new AbortController();let timedOut=false;const timer=setTimeout(()=>{timedOut=true;controller.abort();},timeout),abort=()=>controller.abort();if(parent?.aborted)abort();else parent?.addEventListener('abort',abort,{once:true});return {signal:controller.signal,isTimeout:()=>timedOut,cleanup:()=>{clearTimeout(timer);parent?.removeEventListener('abort',abort);}};}
@@ -60,20 +70,59 @@
   const apply=()=>{document.documentElement.setAttribute('data-'+id,input.value);try{localStorage.setItem(key,input.value);}catch{}};
   input.addEventListener('change',apply);apply();
  }
- function select(name){active=name;document.querySelectorAll('[data-tab]').forEach(b=>{const on=b.dataset.tab===name;b.setAttribute('aria-selected',on);b.setAttribute('aria-current',on?'page':'false');b.tabIndex=on?0:-1;});document.querySelectorAll('[data-bottom]').forEach(b=>b.setAttribute('aria-current',b.dataset.bottom===name?'page':'false'));keys.forEach(key=>$(key)?.setAttribute('aria-hidden',key===name?'false':'true'));$('tab-'+name)?.scrollIntoView({block:'nearest',inline:'nearest',behavior:reduced.matches?'auto':'smooth'});if(name==='zalo'&&!terminalAuth)refreshZaloWatches().catch(failed);if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();}
- function go(name){select(name);pages.scrollTo({left:keys.indexOf(name)*pages.clientWidth,behavior:reduced.matches?'auto':'smooth'});tg?.HapticFeedback?.selectionChanged();if(!terminalAuth&&['accounts','zalo','discord'].includes(name)&&Date.now()-lastFullSync>30000)refresh().catch(failed);}
- keys.forEach((key,i)=>{const b=button(names[key],()=>go(key));b.id='tab-'+key;b.dataset.tab=key;b.role='tab';b.setAttribute('aria-controls',key);$(key).setAttribute('aria-labelledby',b.id);$(key).tabIndex=0;b.onkeydown=e=>{const d=e.key==='ArrowRight'||e.key==='ArrowDown'?1:e.key==='ArrowLeft'||e.key==='ArrowUp'?-1:0;if(d||e.key==='Home'||e.key==='End'){e.preventDefault();const next=e.key==='Home'?keys[0]:e.key==='End'?keys[keys.length-1]:keys[(i+d+keys.length)%keys.length];go(next);$('tab-'+next).focus();}};$('tabs').append(b);});
- // Consistent 24×24 outline SVG icons prevent iOS font glyph misalignment.
+ const primaryNav=new Set(['home','accounts','tasks']);
+ let requestedPage=null;
+ const moreMenu=$('more-menu');
+ function closeMore(){
+  if(!moreMenu)return;
+  moreMenu.hidden=true;
+  $('more-trigger')?.setAttribute('aria-expanded','false');
+ }
+ function toggleMore(){
+  if(!moreMenu)return;
+  const opening=moreMenu.hidden;
+  moreMenu.hidden=!opening;
+  $('more-trigger')?.setAttribute('aria-expanded',opening?'true':'false');
+  if(opening)moreMenu.querySelector('button')?.focus({preventScroll:true});
+  else $('more-trigger')?.focus({preventScroll:true});
+ }
+ function select(name){
+  if(!keys.includes(name)||active===name&&$(name)?.getAttribute('aria-hidden')==='false')return;
+  active=name;
+  document.querySelectorAll('[data-bottom]').forEach(b=>{
+   const current=b.dataset.bottom===name||(b.dataset.bottom==='more'&&!primaryNav.has(name));
+   b.setAttribute('aria-current',current?'page':'false');
+  });
+  keys.forEach(key=>{
+   const section=$(key);
+   if(section){
+    section.setAttribute('aria-hidden',key===name?'false':'true');
+    section.setAttribute('aria-label',names[key]);
+   }
+  });
+  closeMore();
+  revealPage(name);
+  if(name==='zalo'&&!terminalAuth)refreshZaloWatches().catch(failed);
+  if(name==='home')tg?.BackButton?.hide();else tg?.BackButton?.show();
+ }
+ function go(name){
+  if(!keys.includes(name))return;
+  requestedPage=name;
+  select(name);
+  pages.scrollTo({left:keys.indexOf(name)*pages.clientWidth,behavior:reduced.matches?'auto':'smooth'});
+  tg?.HapticFeedback?.selectionChanged();
+  if(!terminalAuth&&['accounts','zalo','discord'].includes(name)&&Date.now()-lastFullSync>30000)refresh().catch(failed);
+ }
  const navPaths={
   home:'M3 11.5 12 4l9 7.5V21h-6v-7H9v7H3z',
-  accounts:'M16 19v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2h14z M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M18 10a3 3 0 0 1 0 6 M18 4a3 3 0 0 1 0 6',
+  accounts:'M16 19v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2h14z M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   tasks:'M12 3v9l5 3 M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z',
-  discord:'M20 11.5a7.5 7.5 0 0 1-7.5 7.5c-1.8 0-3.3-.5-4.8-1.3L3.5 19l1.4-4.1A7.5 7.5 0 1 1 20 11.5z M8.5 11h.01 M12 11h.01 M15.5 11h.01',
-  settings:'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z M12 2v3 M12 19v3 M4.9 4.9 7 7 M17 17l2.1 2.1 M2 12h3 M19 12h3 M4.9 19.1 7 17 M17 7l2.1-2.1'
+  more:'M4 7h16 M4 12h16 M4 17h16'
  };
  const ns='http://www.w3.org/2000/svg';
- for(const key of ['home','accounts','discord','tasks','settings']){
-  const b=button('',()=>go(key));
+ for(const key of ['home','accounts','tasks','more']){
+  const label=key==='more'?'Thêm':names[key];
+  const b=button('',()=>key==='more'?toggleMore():go(key));
   const svg=document.createElementNS(ns,'svg');
   svg.classList.add('bottom-icon');svg.setAttribute('viewBox','0 0 24 24');
   svg.setAttribute('width','24');svg.setAttribute('height','24');
@@ -81,19 +130,89 @@
   svg.setAttribute('stroke-width','1.8');svg.setAttribute('stroke-linejoin','round');
   svg.setAttribute('stroke-linecap','round');svg.setAttribute('aria-hidden','true');
   const path=document.createElementNS(ns,'path');path.setAttribute('d',navPaths[key]);svg.append(path);
-  b.append(svg,element('span',names[key],'nav-caption'));b.dataset.bottom=key;b.classList.add('bottom-nav-button');
-  b.setAttribute('aria-label',names[key]);b.title=names[key];$('bottom').append(b);
+  b.append(svg,element('span',label,'nav-caption'));b.dataset.bottom=key;b.classList.add('bottom-nav-button');
+  b.setAttribute('aria-label',label);b.title=label;
+  if(key==='more'){b.id='more-trigger';b.setAttribute('aria-expanded','false');b.setAttribute('aria-controls','more-menu');}
+  $('bottom').append(b);
  }
+ for(const key of ['discord','zalo','activity','settings']){
+  const b=button(names[key],()=>go(key));
+  b.dataset.more=key;b.classList.add('more-option');moreMenu.append(b);
+ }
+ document.addEventListener('pointerdown',e=>{
+  if(!moreMenu.hidden&&!moreMenu.contains(e.target)&&!$('more-trigger').contains(e.target))closeMore();
+ });
+ document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&!moreMenu.hidden){closeMore();$('more-trigger').focus();}
+ });
  for(const [id,page] of [['home-open-accounts','accounts'],['home-open-tasks','tasks'],['home-open-zalo','zalo'],['home-open-discord','discord'],['home-open-activity','activity'],['account-open-zalo','zalo'],['account-open-discord','discord'],['task-open-activity','activity'],['task-open-zalo','zalo']]){
   const target=$(id);if(target)target.addEventListener('click',()=>go(page));
  }
+ $('startup-retry')?.addEventListener('click',()=>{terminalAuth=false;refresh();});
  $('auth-retry')?.addEventListener('click',()=>{
   initTelegram();
   // Web sessions authenticate using cookies; the server still enforces access.
   terminalAuth=false;hideAuthGate();setConnection('CONNECTING');
   refresh().finally(()=>{if(!terminalAuth)scheduleReconnect(streamGeneration,100);});
  });
- let scrollFrame;pages.onscroll=()=>{if(scrollFrame)return;scrollFrame=requestAnimationFrame(()=>{scrollFrame=null;select(keys[Math.round(pages.scrollLeft/pages.clientWidth)]||'home');});};window.addEventListener('resize',()=>pages.scrollTo({left:keys.indexOf(active)*pages.clientWidth}));select('home');
+ let scrollFrame;
+ pages.onscroll=()=>{
+  if(scrollFrame)return;
+  scrollFrame=requestAnimationFrame(()=>{
+   scrollFrame=null;
+   if(requestedPage){
+    const target=keys.indexOf(requestedPage)*pages.clientWidth;
+    if(Math.abs(pages.scrollLeft-target)>3)return;
+    requestedPage=null;
+   }
+   const next=keys[Math.round(pages.scrollLeft/pages.clientWidth)]||'home';
+   if(next!==active)select(next);
+  });
+ };
+ pages.addEventListener('pointerdown',()=>{requestedPage=null;},{passive:true});
+ pages.addEventListener('scrollend',()=>{
+  requestedPage=null;
+  const next=keys[Math.round(pages.scrollLeft/pages.clientWidth)]||'home';
+  if(next!==active)select(next);
+ });
+ window.addEventListener('resize',()=>{
+  requestedPage=null;
+  pages.scrollTo({left:keys.indexOf(active)*pages.clientWidth,behavior:'instant'});
+ });
+ let revealFrame=0;
+ const revealObserver=!reduced.matches&&'IntersectionObserver' in window?
+  new IntersectionObserver(entries=>{
+   for(const entry of entries)if(entry.isIntersecting){
+    entry.target.classList.add('is-visible');
+    revealObserver.unobserve(entry.target);
+   }
+  },{threshold:.08,rootMargin:'0px 0px 8px 0px'}):null;
+ function revealPage(name){
+  if(reduced.matches)return;
+  const section=$(name);
+  if(!section)return;
+  section.classList.remove('page-enter');
+  requestAnimationFrame(()=>{
+   if(active!==name)return;
+   section.classList.add('page-enter');
+   observeReveals();
+  });
+ }
+ function observeReveals(){
+  if(!revealObserver)return;
+  const section=$(active);
+  section?.querySelectorAll('article,.card,.metric,.file-category').forEach(el=>{
+   if(el.dataset.revealReady)return;
+   el.dataset.revealReady='1';el.classList.add('scroll-reveal');revealObserver.observe(el);
+  });
+ }
+ const contentObserver='MutationObserver' in window?
+  new MutationObserver(()=>{
+   if(revealFrame)return;
+   revealFrame=requestAnimationFrame(()=>{revealFrame=0;observeReveals();});
+  }):null;
+ contentObserver?.observe(pages,{childList:true,subtree:true});
+ select('home');
  let sheetReturnFocus;
  function sheet(title,content,actions=[]){sheetReturnFocus=document.activeElement;$('sheet-title').textContent=title;$('sheet-content').replaceChildren(typeof content==='string'?element('p',content):content);$('sheet-actions').replaceChildren(...actions);$('sheet').showModal();$('sheet-close').focus();}
  function closeSheet(){if($('sheet').open)$('sheet').close();sheetReturnFocus?.focus?.();sheetReturnFocus=null;}
@@ -448,43 +567,122 @@
  async function refresh(){
   if(terminalAuth)return;
   if(refreshing)return refreshing;
-  const controller=new AbortController();refreshController=controller;const options={signal:controller.signal};
+  const controller=new AbortController();
+  refreshController=controller;
+  const options={signal:controller.signal};
   const operation=(async()=>{
-   const viewer=await api('session',undefined,options);csrfToken=viewer.csrf_token||'';
+   // Authentication is independent of optional telemetry, storage and task endpoints.
+   const viewer=await api('session',undefined,options);
+   sessionValidated=true;
+   csrfToken=viewer.csrf_token||'';
+   hideAuthGate();
+   setConnection('AUTHENTICATED');
+   if(!legacyTelemetry)legacyTelemetry={running_tasks:0,ram_mb:'—',tasks:[]};
+   paintMetrics();
+   $('updated').textContent='Đã xác thực · đang cập nhật dữ liệu…';
+   const warnings=[];
+   const jobs=[];
    if(viewer.role==='admin'){
-    const [links,t,a,f,c]=await Promise.all([api('credential_links',undefined,options),api('telemetry',undefined,options),api('accounts',undefined,options),api('files',undefined,options),api('commands',undefined,options)]);
-    identities=links.links;renderCredentialLinks();
-    accounts=a.accounts;legacyTelemetry=t;renderLaunchAccounts();renderTaskAccounts();
-    $('storage').textContent='Kho: '+t.storage_id;
-    $('selected-files').textContent=`Nhây: ${f.selected_nhay||'—'} · Ngôn: ${f.selected_ngon||'—'}`;
-    $('file-list').replaceChildren(...['nhay','ngon'].map(target=>{
-      const title=target==='nhay'?'KHO NHÂY · từng dòng (.n)':'KHO NGÔN · nguyên đoạn (.g)';
-      const box=element('article',undefined,'file-category');
-      box.append(element('h2',title));
-      const subset=f.files.filter(file=>file.file_type===target);
-      if(!subset.length)box.append(element('p','Chưa có file thuộc loại này.'));
-      for(const file of subset){
-       const card=row(file.filename,(file.lines||0)+' dòng · '+(file.size_kb||0)+' KB');
-       if(file.filename===(target==='nhay'?f.selected_nhay:f.selected_ngon))
-        card.append(element('small','✓ Đang chọn'));
-       else card.append(button('Dùng cho '+(target==='nhay'?'Nhây':'Ngôn'),async()=>{
-        await api('select_file',{filename:file.filename,target});await refresh();
-       },'primary'));
-       box.append(card);
-      }
-      return box;
-    }));
-    $('zalo-commands').replaceChildren(...c.commands.filter(x=>x.platforms.includes('zalo')).map(x=>row(x.usage,x.description)));
-    $('legacy-tasks').replaceChildren(...t.tasks.map(task=>{const r=row(task.name,`${task.status} · ${task.target_label}`);if(task.can_stop)r.append(button('Dừng',async()=>{await api('stop_task',{task_id:task.id});await refresh();}));return r;}));
+    jobs.push({
+     name:'Liên kết tài khoản',load:()=>api('credential_links',undefined,options),
+     use:r=>{identities=Array.isArray(r.links)?r.links:[];renderCredentialLinks();}
+    });
+    jobs.push({
+     name:'Trạng thái xử lý',load:()=>api('telemetry',undefined,options),
+     use:r=>{
+      legacyTelemetry=r;
+      $('storage').textContent='Kho: '+(r.storage_id||'Chưa có dữ liệu');
+      $('legacy-tasks').replaceChildren(...(r.tasks||[]).map(task=>{
+       const card=row(task.name,(task.status||'')+' · '+(task.target_label||''));
+       if(task.can_stop)card.append(button('Dừng',async()=>{
+        await api('stop_task',{task_id:task.id});await refresh();
+       }));
+       return card;
+      }));
+     }
+    });
+    jobs.push({
+     name:'Tài khoản',load:()=>api('accounts',undefined,options),
+     use:r=>{
+      accounts=Array.isArray(r.accounts)?r.accounts:[];
+      renderLaunchAccounts();renderTaskAccounts();renderAccounts();
+     }
+    });
+    jobs.push({
+     name:'Kho tệp',load:()=>api('files',undefined,options),
+     use:r=>{
+      $('selected-files').textContent='Nhây: '+(r.selected_nhay||'—')+' · Ngôn: '+(r.selected_ngon||'—');
+      $('file-list').replaceChildren(...['nhay','ngon'].map(target=>{
+       const title=target==='nhay'?'KHO NHÂY · từng dòng (.n)':'KHO NGÔN · nguyên đoạn (.g)';
+       const box=element('article',undefined,'file-category');
+       box.append(element('h2',title));
+       const subset=(r.files||[]).filter(file=>file.file_type===target);
+       if(!subset.length)box.append(element('p','Chưa có file thuộc loại này.'));
+       for(const file of subset){
+        const card=row(file.filename,(file.lines||0)+' dòng · '+(file.size_kb||0)+' KB');
+        if(file.filename===(target==='nhay'?r.selected_nhay:r.selected_ngon))card.append(element('small','✓ Đang chọn'));
+        else card.append(button('Dùng cho '+(target==='nhay'?'Nhây':'Ngôn'),async()=>{
+         await api('select_file',{filename:file.filename,target});await refresh();
+        },'primary'));
+        box.append(card);
+       }
+       return box;
+      }));
+     }
+    });
+    jobs.push({
+     name:'Danh sách lệnh',load:()=>api('commands',undefined,options),
+     use:r=>{
+      $('zalo-commands').replaceChildren(...(r.commands||[]).filter(x=>(x.platforms||[]).includes('zalo')).map(x=>row(x.usage,x.description)));
+     }
+    });
    }else{
-    identities=[];renderCredentialLinks();accounts=[];legacyTelemetry={running_tasks:0,ram_mb:'—'};renderTaskAccounts();
-    if(!$('member-notice')){const notice=element('article','Tài khoản Zalo và tệp hiện do quản trị viên chính điều khiển. Discord và task trong trang này chỉ hiển thị dữ liệu của bạn.');notice.id='member-notice';$('zalo').replaceChildren(notice);$('discord-credential-form').hidden=true;$('facebook-credential-form').hidden=true;$('stop-all').hidden=true;}
+    identities=[];renderCredentialLinks();accounts=[];renderTaskAccounts();
+    if(!$('member-notice')){
+     const notice=element('article','Tài khoản Zalo và tệp hiện do quản trị viên chính điều khiển. Discord và task chỉ hiển thị dữ liệu của bạn.');
+     notice.id='member-notice';$('zalo').replaceChildren(notice);
+     $('discord-credential-form').hidden=true;$('facebook-credential-form').hidden=true;$('stop-all').hidden=true;
+    }
    }
-   await Promise.all([refreshControl(options),refreshRegistry(options)]);renderAccounts();paintMetrics();hideAuthGate();lastFullSync=Date.now();
-   $('updated').textContent='Đồng bộ: '+new Date().toLocaleTimeString();
-   $('error').hidden=true;if(streamConnected)setConnection('CONNECTED');
+   jobs.push({name:'Tổng quan',load:()=>refreshControl(options),use:()=>{}});
+   // Every independent service settles without blocking authenticated UI.
+   const results=await Promise.allSettled(jobs.map(job=>job.load()));
+   for(let i=0;i<jobs.length;i++){
+    const result=results[i];
+    if(result.status==='rejected'&&result.reason?.status===401)throw result.reason;
+    if(result.status==='fulfilled'){
+     try{jobs[i].use(result.value);}
+     catch(error){warnings.push(jobs[i].name);console.warn('GLAZE render issue:',jobs[i].name,error?.name||'Error');}
+    }else warnings.push(jobs[i].name);
+   }
+   try{await refreshRegistry(options);}
+   catch(error){
+    if(error?.status===401)throw error;
+    warnings.push('Tác vụ');
+   }
+   renderAccounts();paintMetrics();
+   syncWarnings=warnings;
+   lastFullSync=Date.now();
+   $('updated').textContent='Đã xác thực · cập nhật '+new Date().toLocaleTimeString();
+   if(warnings.length){
+    $('error').hidden=false;
+    $('error').textContent='Tạm chưa tải được: '+warnings.join(', ')+'. Các phần khác vẫn có thể sử dụng. Bấm làm mới để thử lại.';
+    setConnection('PARTIAL');
+   }else{
+    $('error').hidden=true;
+    $('error').textContent='';
+    setConnection('CONNECTED');
+   }
   })();
-  refreshing=operation.catch(error=>{if(error?.name!=='AbortError'){controller.abort();failed(error);}}).finally(()=>{if(refreshController===controller)refreshController=null;refreshing=null;});
+  refreshing=operation.catch(error=>{
+   if(error?.name!=='AbortError'){
+    controller.abort();
+    failed(error,sessionValidated?'PARTIAL':'DISCONNECTED');
+   }
+  }).finally(()=>{
+   if(refreshController===controller)refreshController=null;
+   refreshing=null;
+  });
   return refreshing;
  }
  function form(id,path,extra={},after){$(id).onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');try{const body={...Object.fromEntries(new FormData(form)),...extra};const result=await api(path,body);after?.(result);toast('Đã lưu trên máy chủ');await refresh();}catch(e){failed(e);}finally{submit.disabled=false;submit.removeAttribute('aria-busy');}};}
@@ -555,10 +753,10 @@
  $('stop-all-zalo').onclick=()=>confirmAction('Dừng tác vụ trên mọi tài khoản Zalo?',()=>api('quick_action',{action:'stop_all'}));
  $('refresh').onclick=refresh;
  function reconnectDelay(){const exponential=Math.min(STREAM_MAX_DELAY_MS,STREAM_BASE_DELAY_MS*2**Math.min(reconnectAttempt,6));reconnectAttempt=Math.min(reconnectAttempt+1,10);return Math.round(exponential*(1-STREAM_JITTER+Math.random()*STREAM_JITTER*2));}
- function scheduleReconnect(generation,delay){if(terminalAuth||document.hidden||navigator.onLine===false||generation!==streamGeneration)return;clearTimeout(reconnectTimer);const wait=delay===undefined?Math.max(reconnectDelay(),retryAfterDelay):delay;retryAfterDelay=0;setConnection('RECONNECTING');reconnectTimer=setTimeout(connect,wait);}
+ function scheduleReconnect(generation,delay){if(terminalAuth||document.hidden||navigator.onLine===false||generation!==streamGeneration)return;clearTimeout(reconnectTimer);const wait=delay===undefined?Math.max(reconnectDelay(),retryAfterDelay):delay;retryAfterDelay=0;if(!sessionValidated)setConnection('RECONNECTING');reconnectTimer=setTimeout(connect,wait);}
  async function connect(){
   if(terminalAuth||document.hidden||navigator.onLine===false)return;
-  clearTimeout(reconnectTimer);const generation=++streamGeneration;stream?.abort();stream=new AbortController();streamConnected=false;setConnection(reconnectAttempt?'RECONNECTING':'CONNECTING');
+  clearTimeout(reconnectTimer);const generation=++streamGeneration;stream?.abort();stream=new AbortController();streamConnected=false;if(!sessionValidated)setConnection(reconnectAttempt?'RECONNECTING':'CONNECTING');
   let received=false,retryError,handshakeTimedOut=false,handshakeTimer;
   try{
    const r=await fetch('/api/miniapp/events?cursor='+cursor,{headers:{'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId('sse')},signal:stream.signal,cache:'no-store'});
@@ -575,15 +773,15 @@
     lastStreamAt=Date.now();buffer+=decoder.decode(value,{stream:true});let at;
     while((at=buffer.indexOf('\n\n'))>=0){
      const msg=buffer.slice(0,at);buffer=buffer.slice(at+2);const line=msg.split('\n').find(x=>x.startsWith('data: '));
-     if(line){const snapshot=JSON.parse(line.slice(6));renderControl(snapshot);received=true;streamConnected=true;reconnectAttempt=0;$('error').hidden=true;setConnection('CONNECTED');}
+     if(line){const snapshot=JSON.parse(line.slice(6));renderControl(snapshot);received=true;streamConnected=true;reconnectAttempt=0;if(!syncWarnings.length){$('error').hidden=true;setConnection('CONNECTED');}else setConnection('PARTIAL');}
     }
    }
-   if(generation===streamGeneration){streamConnected=false;setConnection('DEGRADED');}
+   if(generation===streamGeneration){streamConnected=false;if(!received)setConnection(sessionValidated?'PARTIAL':'DEGRADED');}
   }catch(e){if(e.name!=='AbortError'&&generation===streamGeneration){streamConnected=false;failed(e,'DEGRADED');}}
   finally{if(!terminalAuth&&!document.hidden&&navigator.onLine!==false&&generation===streamGeneration){if(!received)streamConnected=false;scheduleReconnect(generation);}}
  }
- function checkStreamHealth(){if(document.hidden||navigator.onLine===false||!stream||stream.signal.aborted||!lastStreamAt)return;if(Date.now()-lastStreamAt>STREAM_STALE_MS){streamConnected=false;setConnection('DEGRADED');stream.abort();}}
- document.addEventListener('visibilitychange',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();if(document.hidden){streamConnected=false;return;}reconnectAttempt=0;lastStreamAt=0;setConnection('CONNECTING');if(!terminalAuth)refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
+ function checkStreamHealth(){if(document.hidden||navigator.onLine===false||!stream||stream.signal.aborted||!lastStreamAt)return;if(Date.now()-lastStreamAt>STREAM_STALE_MS){streamConnected=false;setConnection(sessionValidated?'PARTIAL':'DEGRADED');stream.abort();}}
+ document.addEventListener('visibilitychange',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();if(document.hidden){streamConnected=false;return;}reconnectAttempt=0;lastStreamAt=0;setConnection(sessionValidated?'PARTIAL':'CONNECTING');if(!terminalAuth)refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
  window.addEventListener('offline',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();streamConnected=false;setConnection('DISCONNECTED');});
  window.addEventListener('online',()=>{if(document.hidden)return;reconnectAttempt=0;setConnection('CONNECTING');refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
  setInterval(()=>{if(!terminalAuth&&!document.hidden&&navigator.onLine!==false&&Date.now()-lastFullSync>=60000)refresh();},15000);

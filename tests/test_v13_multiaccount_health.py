@@ -86,9 +86,10 @@ class ListenerHealthTests(unittest.TestCase):
 class UIContractTests(unittest.TestCase):
     def test_mobile_tabs_have_icons_and_labels(self):
         js = Path("static/control.js").read_text(encoding="utf-8")
-        css = Path("static/v11.css").read_text(encoding="utf-8")
-        self.assertIn("b.append(svg,element('span',names[key],'nav-caption'))", js)
-        self.assertIn("grid-template-columns:repeat(5,minmax(0,1fr))", css)
+        css = Path("static/yanbi.css").read_text(encoding="utf-8")
+        self.assertIn("b.append(svg,element('span',label,'nav-caption'))", js)
+        self.assertIn("grid-template-columns:repeat(4,minmax(0,1fr))!important", css)
+        self.assertIn("aria-expanded", js)
 
     def test_live_health_and_account_scoped_tasks(self):
         js = Path("static/control.js").read_text(encoding="utf-8")

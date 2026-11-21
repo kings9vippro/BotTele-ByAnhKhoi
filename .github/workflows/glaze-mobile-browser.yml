@@ -1,0 +1,55 @@
+name: GLAZE mobile browser smoke
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  mobile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DISABLE_TELEGRAM_BOT: '1'
+      DISABLE_BACKGROUND_WORKERS: '1'
+      TELEGRAM_BOT_TOKEN: test-token
+      TELEGRAM_ADMIN_ID: '123'
+      ADMIN_PRINCIPAL_ID: '123'
+      SECRET_KEY: ci-browser-only-session-secret
+      ADMIN_PASS: ci-browser-only-password
+      PORT: '5873'
+      BIND_HOST: '127.0.0.1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.9'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install runtime and browser test tool
+        run: |
+          pip install -r requirements.txt
+          npm install --no-save --no-package-lock playwright@1.65.1
+          npx playwright install --with-deps chromium
+      - name: Run authenticated mobile smoke and partial-API regression
+        run: |
+          gunicorn app:app --config gunicorn.conf.py > /tmp/glaze-browser.log 2>&1 &
+          echo $! > /tmp/glaze-browser.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:5873/healthz >/dev/null; then break; fi
+            sleep 2
+          done
+          if ! curl -fsS http://127.0.0.1:5873/healthz >/dev/null; then
+            cat /tmp/glaze-browser.log
+            exit 1
+          fi
+          node tests/control-browser.cjs || {
+            cat /tmp/glaze-browser.log
+            exit 1
+          }
+      - name: Upload UI screenshot on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glaze-mobile-browser-failure
+          path: /tmp/glaze-v4.png
+          if-no-files-found: ignore

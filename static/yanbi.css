@@ -373,3 +373,133 @@ body.yanbi .login-card .err{padding:12px 14px;border-radius:12px;background:rgba
   body.yanbi *,body.yanbi *::before,body.yanbi *::after{transition:none!important;scroll-behavior:auto!important}
   body.yanbi #pages{scroll-behavior:auto}
 }
+
+
+/* GLAZE UX 2.3 · Single dock / progressive data loading / scroll-driven surfaces.
+   Deliberately overrides the removed double-tier Aurora navigation. */
+:root{--top-tabs:0px}
+body.yanbi #tabs{display:none!important}
+body.yanbi #pages{
+  height:calc(100dvh - var(--v11-header) - var(--v11-nav) - max(8px,var(--safe)));
+  overscroll-behavior-x:contain;
+  scroll-snap-type:x mandatory;
+}
+body.yanbi #pages section{
+  overflow-y:auto!important;
+  -webkit-overflow-scrolling:touch;
+  overscroll-behavior-y:contain;
+  padding-bottom:calc(40px + max(10px,env(safe-area-inset-bottom,0px)));
+}
+body.yanbi #bottom,body.yanbi #bottom.bottom-nav{
+  display:grid!important;
+  grid-template-columns:repeat(4,minmax(0,1fr))!important;
+  column-gap:7px;
+  max-width:410px;
+}
+body.yanbi #bottom button.bottom-nav-button{
+  min-width:0;
+  gap:6px;
+}
+body.yanbi #bottom button.bottom-nav-button .bottom-icon{
+  width:24px;min-width:24px;height:24px;
+}
+body.yanbi #bottom button.bottom-nav-button[aria-current=page]{
+  border-color:color-mix(in srgb,var(--accent) 36%,var(--line));
+  box-shadow:0 4px 20px color-mix(in srgb,var(--accent) 13%,transparent),inset 0 1px var(--ui-highlight);
+}
+body.yanbi #bottom #more-trigger[aria-expanded=true]{
+  color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 18%,var(--ui-glass));
+  border-color:color-mix(in srgb,var(--accent) 38%,var(--line));
+}
+body.yanbi #more-menu{
+  position:fixed;z-index:28;left:50%;transform:translateX(-50%);
+  bottom:calc(102px + var(--safe));
+  width:min(calc(100% - 30px),410px);max-width:410px;
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:9px;padding:14px;
+  border:1px solid color-mix(in srgb,var(--accent) 31%,var(--line));
+  border-radius:23px;background:color-mix(in srgb,var(--ui-solid) 92%,transparent);
+  box-shadow:0 24px 62px rgba(0,0,14,.38),inset 0 1px var(--ui-highlight);
+  backdrop-filter:blur(27px) saturate(145%);
+  -webkit-backdrop-filter:blur(27px) saturate(145%);
+}
+body.yanbi #more-menu[hidden],body.yanbi.auth-locked #more-menu{display:none!important}
+body.yanbi #more-menu button.more-option{
+  min-height:55px;width:100%;padding:12px 10px;
+  border:1px solid var(--line);border-radius:15px;
+  background:color-mix(in srgb,var(--accent) 9%,var(--ui-glass));
+  color:var(--fg);font-size:13px;font-weight:780;
+  text-align:center;white-space:normal;
+}
+body.yanbi #more-menu button.more-option::after{
+  content:" ↗";font-size:15px;color:var(--accent);
+}
+body.yanbi #startup-panel{
+  display:grid;gap:10px;justify-items:start;
+  width:min(calc(100% - 36px),450px);
+  margin-top:32px;padding:22px;
+}
+body.yanbi #startup-panel button#startup-retry{
+  min-height:45px;
+  padding-inline:17px;
+  color:#121428;
+  font-weight:800;
+  background:linear-gradient(115deg,var(--accent),var(--accent2));
+  border:1px solid color-mix(in srgb,var(--accent) 55%,transparent);
+}
+body.yanbi #error[hidden]{display:none!important}
+body.yanbi #error{
+  max-width:min(780px,calc(100% - 24px));
+  margin:12px auto;
+  color:var(--danger);
+  background:color-mix(in srgb,var(--danger) 7%,var(--ui-glass));
+  line-height:1.5;
+}
+body.yanbi #connection[data-state=AUTHENTICATED],
+body.yanbi #connection[data-state=PARTIAL]{
+  color:var(--accent2);
+  border-color:color-mix(in srgb,var(--accent2) 28%,var(--line));
+}
+body.yanbi #connection[data-state=PARTIAL]{color:var(--fg)}
+@media(prefers-reduced-motion:no-preference){
+  body.yanbi #more-menu:not([hidden]){
+    animation:glaze-menu-rise .25s cubic-bezier(.17,.8,.25,1) both;
+  }
+  body.yanbi .scroll-reveal{
+    opacity:0;transform:translate3d(0,19px,0) scale(.989);
+    transition:opacity .48s cubic-bezier(.2,.8,.2,1),transform .55s cubic-bezier(.2,.8,.2,1);
+    animation:none!important;
+  }
+  body.yanbi .scroll-reveal.is-visible{
+    opacity:1;transform:translate3d(0,0,0) scale(1);
+  }
+  body.yanbi #pages section.page-enter>.eyebrow,
+  body.yanbi #pages section.page-enter>h1{
+    animation:glaze-page-title .38s cubic-bezier(.22,.8,.26,1) both;
+  }
+  body.yanbi #bottom button.bottom-nav-button[aria-current=page]::after{
+    animation:glaze-active-glow 2.8s ease-in-out infinite alternate;
+  }
+}
+@keyframes glaze-menu-rise{
+  from{opacity:0;transform:translate(-50%,13px) scale(.97)}
+  to{opacity:1;transform:translate(-50%,0) scale(1)}
+}
+@keyframes glaze-page-title{
+  from{opacity:.3;transform:translateY(13px)}
+  to{opacity:1;transform:translateY(0)}
+}
+@keyframes glaze-active-glow{to{box-shadow:0 0 15px var(--accent2)}}
+@media(max-width:520px){
+  body.yanbi #pages{height:calc(100dvh - var(--v11-header) - var(--v11-nav) - max(8px,var(--safe)))}
+  body.yanbi #more-menu{width:calc(100% - 24px);bottom:calc(99px + var(--safe))}
+}
+@media(max-width:355px){
+  body.yanbi #bottom,body.yanbi #bottom.bottom-nav{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+  body.yanbi #more-menu{width:calc(100% - 15px)}
+}
+@media(prefers-reduced-motion:reduce){
+  body.yanbi .scroll-reveal{opacity:1!important;transform:none!important}
+  body.yanbi #more-menu{animation:none!important}
+}
