@@ -539,6 +539,9 @@
   holder.append(element('pre',fields.join('\\n')));
   if(!status.account_id){holder.append(element('p','Chưa tìm thấy phiên đã lưu. Hãy kiểm tra tài khoản trước khi tải.'));return;}
   holder.append(button('Tải Cookie + IMEI .txt',()=>downloadZaloSession(status.account_id),'primary'));
+  if(!$('sheet').open)sheet('Phiên Zalo đã sẵn sàng','Cookie và IMEI đã được lưu cho ACC-'+status.account_id+'. Chạm nút bên dưới để tải tệp .txt về thiết bị.',[
+   button('Tải tệp .txt',async()=>{await downloadZaloSession(status.account_id);closeSheet();},'primary')
+  ]);
  }
  $('qr').onclick=async()=>{
   const trigger=$('qr'),image=$('qr-image');
