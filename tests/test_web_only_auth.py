@@ -76,6 +76,43 @@ class WebOnlyAuthTests(unittest.TestCase):
         with self.client.session_transaction() as browser_session:
             self.assertTrue(browser_session.get("logged_in"))
 
+    def test_key_login_validates_cookie_on_next_request(self):
+        with patch.object(app, "ACCESS_KEY", "ci-test-access-key"), \
+             patch.object(app, "DEFAULT_ADMIN_PASS", ""):
+            with self.client.session_transaction() as browser_session:
+                browser_session["csrf_token"] = "stale-csrf"
+            accepted = self.client.post("/login",
+                                        data={"password": "ci-test-access-key"},
+                                        follow_redirects=False)
+            self.assertEqual(accepted.status_code, 303)
+            self.assertEqual(accepted.headers["Location"], "/login/check")
+            self.assertIn("session=", accepted.headers.get("Set-Cookie", ""))
+            checked = self.client.get("/login/check", follow_redirects=False)
+            self.assertEqual(checked.status_code, 303)
+            self.assertEqual(checked.headers["Location"], "/")
+            viewer = self.client.get("/api/miniapp/session")
+            self.assertEqual(viewer.status_code, 200)
+            self.assertEqual(viewer.json["auth_mode"], "web_session")
+            self.assertTrue(viewer.json["csrf_token"])
+            self.assertNotEqual(viewer.json["csrf_token"], "stale-csrf")
+
+    def test_missing_cookie_is_reported_without_granting_access(self):
+        outside = app.app.test_client()
+        result = outside.get("/login/check")
+        self.assertEqual(result.status_code, 401)
+        self.assertIn("Không tìm thấy phiên quản trị".encode("utf-8"), result.data)
+        self.assertIn(b'name="password"', result.data)
+        blocked = outside.get("/api/miniapp/session")
+        self.assertEqual(blocked.status_code, 401)
+
+    def test_login_page_has_real_animated_letters_and_toggle(self):
+        page = self.client.get("/login")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(b'class="login-flora"', page.data)
+        self.assertIn(b'class="login-letter"', page.data)
+        self.assertIn(b'id="login-motion-toggle"', page.data)
+        self.assertIn(b'aria-label="', page.data)
+
     def test_empty_password_never_authenticates_seeded_legacy_admin(self):
         with patch.object(app, "ACCESS_KEY", ""), patch.object(app, "DEFAULT_ADMIN_PASS", ""):
             response = self.client.post("/login", data={"password": ""})
