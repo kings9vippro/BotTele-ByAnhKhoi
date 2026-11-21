@@ -284,3 +284,9 @@ header{padding:13px 15px;}
   from { transform:translateX(12%) scale(.85); opacity:.45; }
   to { transform:translateX(0) scale(1); opacity:1; }
 }
+
+#facebook-links,#discord-links { margin-top:12px; }
+#facebook-links .card,#discord-links .card { display:grid; gap:5px; }
+#facebook-links .card button,#discord-links .card button { justify-self:start; min-height:34px; }
+#facebook-credential-form textarea { font:12px/1.5 ui-monospace,SFMono-Regular,monospace; }
+#discord-credential-form input { font:12px/1.5 ui-monospace,SFMono-Regular,monospace; }

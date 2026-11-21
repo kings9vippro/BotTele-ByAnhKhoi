@@ -8,10 +8,6 @@
  let tg, active='home', data={}, accounts=[], identities=[], eventRows=[], cursor=0, stream, refreshing, refreshController, toastTimer, streamGeneration=0, legacyTelemetry, reconnectTimer, reconnectAttempt=0, lastStreamAt=0, streamConnected=false, requestSequence=0, terminalAuth=false, retryAfterDelay=0, csrfToken='';
  const names={home:'Tổng quan',accounts:'Tài khoản',discord:'Discord',zalo:'Zalo',tasks:'Task',activity:'Nhật ký',music:'Âm nhạc',settings:'Cài đặt'};
  const keys=Object.keys(names), pages=$('pages');
- const oauthViews={
-  discord:{button:'discord-login',link:'oauth-link',status:'oauth-status',label:'Discord'},
-  facebook:{button:'facebook-login',link:'facebook-oauth-link',status:'facebook-oauth-status',label:'Facebook'}
- };
  const element=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  function hideStartupPanel(){$('startup-panel').hidden=true;}
  function showAuthGate(state,reason){
@@ -48,7 +44,7 @@
  function requestId(prefix='miniapp'){requestSequence=(requestSequence+1)%1000000;const random=window.crypto?.randomUUID?.()||Math.random().toString(36).slice(2);return `${prefix}-${Date.now().toString(36)}-${requestSequence.toString(36)}-${random}`;}
  function requestSignal(parent,timeout=REQUEST_TIMEOUT_MS){const controller=new AbortController();let timedOut=false;const timer=setTimeout(()=>{timedOut=true;controller.abort();},timeout),abort=()=>controller.abort();if(parent?.aborted)abort();else parent?.addEventListener('abort',abort,{once:true});return {signal:controller.signal,isTimeout:()=>timedOut,cleanup:()=>{clearTimeout(timer);parent?.removeEventListener('abort',abort);}};}
  function retryAfterMs(response){const seconds=Number(response.headers.get('Retry-After'));return Number.isFinite(seconds)&&seconds>0?Math.min(60000,Math.round(seconds*1000)):0;}
- async function api(path,body,options={}){const h={'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId()};if(body!==undefined){h['Content-Type']='application/json';if(csrfToken)h['X-CSRF-Token']=csrfToken;}const request=requestSignal(options.signal,options.timeout||REQUEST_TIMEOUT_MS);try{const r=await fetch('/api/miniapp/'+path,{method:body===undefined?'GET':'POST',headers:h,body:body===undefined?undefined:JSON.stringify(body),signal:request.signal,cache:'no-store'});let d;try{d=await r.json();}catch{throw Object.assign(new Error('API trả về dữ liệu không phải JSON hợp lệ.'),{status:r.status,code:'invalid_json'});}
+ async function api(path,body,options={}){const h={'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId()};if(body!==undefined){h['Content-Type']='application/json';if(csrfToken)h['X-CSRF-Token']=csrfToken;}const request=requestSignal(options.signal,options.timeout||REQUEST_TIMEOUT_MS);try{const r=await fetch('/api/miniapp/'+path,{method:options.method||(body===undefined?'GET':'POST'),headers:h,body:body===undefined?undefined:JSON.stringify(body),signal:request.signal,cache:'no-store'});let d;try{d=await r.json();}catch{throw Object.assign(new Error('API trả về dữ liệu không phải JSON hợp lệ.'),{status:r.status,code:'invalid_json'});}
   if(!r.ok||d.ok===false)throw Object.assign(new Error(d.error||d.message||'Yêu cầu thất bại'),{status:r.status,code:d.code||'http_error',retryAfterMs:retryAfterMs(r)});
   return d;
  }catch(e){if(e?.name==='AbortError'&&request.isTimeout())throw Object.assign(new Error('Yêu cầu vượt quá thời gian chờ.'),{code:'timeout'});throw e;}
@@ -144,6 +140,7 @@
   document.body.append(link);link.click();link.remove();
   setTimeout(()=>URL.revokeObjectURL(uri),1000);
  }
+ let accountPage=1;
  function renderAccounts(){
   const target=$('account-list'), q=$('account-search').value.trim().toLowerCase();
   const live=accounts.filter(a=>a.enabled&&a.listener_health?.code==='running'&&a.listener_health?.session_hint!=='relogin_required').length;
@@ -155,9 +152,10 @@
    const details=element('small',reauth?reauth+' ACC cần cập nhật phiên.':'Mỗi ACC có mã riêng, không hiển thị cookie đăng nhập.');
    summary.replaceChildren(headline,caption,details,button('Kiểm tra ngay',refreshAccountHealth,'account-refresh'));
   }
-  target.replaceChildren();
+  target.replaceChildren();let matched=0;
   for(const a of accounts){
    if(!(''+a.name+' '+a.id+' '+(a.uid||'')).toLowerCase().includes(q))continue;
+   if(++matched>accountPage*30)continue;
    const health=a.listener_health||{},code=health.code||'not_started';
    const state=health.session_hint==='relogin_required'?'Cần đăng nhập lại':
      code==='running'?'Listener đang chạy':
@@ -186,14 +184,16 @@
    card.append(actions);target.append(card);
   }
   for(const a of identities){
-   if(!(''+a.display_name+' '+a.id).toLowerCase().includes(q))continue;
-   const provider=a.provider==='facebook'?'Facebook':'Discord';
-   const card=row(a.display_name||provider,provider+' · #'+a.id+' · '+(a.status||'Đã liên kết'));
-   card.append(button('Ngắt liên kết',()=>confirmAction('Xác nhận '+a.display_name,()=>api('oauth/disconnect',{id:a.id})),'danger'));target.append(card);
+   if(!(''+a.name+' '+a.uid).toLowerCase().includes(q))continue;
+   if(++matched>accountPage*30)continue;
+   const provider=a.platform==='facebook'?'Facebook':'Discord';
+   const card=row(a.name||provider,provider+' · ID '+a.uid+' · Phiên đã kiểm tra');
+   card.append(button('Gỡ kết nối',()=>confirmAction('Gỡ tài khoản này?',()=>api('credential_links',{id:a.id},{method:'DELETE'})),'danger'));target.append(card);
   }
-  if(!target.children.length)target.append(element('p','Chưa có tài khoản phù hợp.'));
+  if(!matched)target.append(element('p','Chưa có tài khoản phù hợp.'));
+  else if(matched>accountPage*30)target.append(button('Xem thêm tài khoản · '+(matched-accountPage*30)+' còn lại',()=>{accountPage++;renderAccounts();}));
  }
- $('account-search').oninput=renderAccounts;
+ $('account-search').oninput=()=>{accountPage=1;renderAccounts();};
  let healthPending=null;
  async function refreshAccountHealth(){
   if(healthPending)return healthPending;
@@ -470,7 +470,8 @@
  $('task-filter').onchange=()=>{taskPage=1;renderTasks();};
  $('task-filter').append(new Option('Đã dừng','STOPPED'));
  $('task-search').oninput=()=>{taskPage=1;renderTasks();};
- function paintMetrics(){if(!legacyTelemetry)return;const t=legacyTelemetry,discord=identities.filter(x=>x.provider==='discord').length,facebook=identities.filter(x=>x.provider==='facebook').length;const values=[['Tài khoản',accounts.length+identities.length],['Discord',discord],['Facebook',facebook],['Zalo',accounts.length],['Đang chạy',(data.counts?.RUNNING||0)+t.running_tasks],['Đang chờ',(data.counts?.QUEUED||0)+(data.counts?.RETRYING||0)],['Hoàn tất',data.counts?.COMPLETED||0],['Thất bại',data.counts?.FAILED||0],['Worker',data.workers||0],['Kênh',data.channels?.length||0],['Thông lượng',data.completed_last_minute===undefined?'—':data.completed_last_minute+'/phút'],['API',data.api_latency_seconds==null?'Chưa đo':data.api_latency_seconds.toFixed(2)+'s'],['RAM',t.ram_mb+' MB']];$('metrics').replaceChildren(...values.map(([label,value])=>{const r=element('div',undefined,'metric');r.append(element('span',label),element('strong',value));return r;}));$('metrics').setAttribute('aria-busy','false');}
+ function paintMetrics(){if(!legacyTelemetry)return;const t=legacyTelemetry,discord=identities.filter(x=>x.platform==='discord').length,facebook=identities.filter(x=>x.platform==='facebook').length;const values=[['Tài khoản',accounts.length+identities.length],['Discord',discord],['Facebook',facebook],['Zalo',accounts.length],['Đang chạy',(data.counts?.RUNNING||0)+t.running_tasks],['Đang chờ',(data.counts?.QUEUED||0)+(data.counts?.RETRYING||0)],['Hoàn tất',data.counts?.COMPLETED||0],['Thất bại',data.counts?.FAILED||0],['Worker',data.workers||0],['Kênh',data.channels?.length||0],['Thông lượng',data.completed_last_minute===undefined?'—':data.completed_last_minute+'/phút'],['API',data.api_latency_seconds==null?'Chưa đo':data.api_latency_seconds.toFixed(2)+'s'],['RAM',t.ram_mb+' MB']];$('metrics').replaceChildren(...values.map(([label,value])=>{const r=element('div',undefined,'metric');r.append(element('span',label),element('strong',value));return r;}));$('metrics').setAttribute('aria-busy','false');}
+ function renderCredentialLinks(){for(const platform of ['discord','facebook']){const target=$(platform+'-links');if(!target)continue;const linked=identities.filter(item=>item.platform===platform);target.replaceChildren(...(linked.length?linked.map(item=>{const card=row(item.name,'ID '+item.uid+' · kiểm tra lúc '+new Date(item.updated*1000).toLocaleString());card.append(button('Gỡ kết nối',()=>confirmAction('Gỡ tài khoản này?',async()=>{await api('credential_links',{id:item.id},{method:'DELETE'});}), 'danger'));return card;}):[element('p','Chưa có tài khoản đã kiểm tra.')]))}}
  let channelSignature='';function renderControl(next){data=next;cursor=next.cursor||cursor;paintMetrics();if(next.reset)eventRows=[];for(const e of next.events||[])if(!eventRows.some(r=>r.seq===e.seq))eventRows.push(e);eventRows=eventRows.slice(-200);renderTasks();$('health').textContent=`${next.workers} worker · ${next.channels.length} kênh · API trung bình ${next.api_latency_seconds===null?'Chưa đo':next.api_latency_seconds.toFixed(3)+'s'}`;$('event-list').replaceChildren(...eventRows.slice().reverse().map(e=>row(e.status,`${e.task} · ${new Date(e.at*1000).toLocaleTimeString()}`)));$('commands').replaceChildren(...next.commands.map(c=>{const r=element('div',undefined,'row');r.append(element('strong','/'+c.name),element('small',c.description));return r;}));const signature=JSON.stringify(next.channels);if(signature!==channelSignature){channelSignature=signature;const chosen=new Set([...$('channel-options').querySelectorAll(':checked')].map(x=>x.value));$('channels').replaceChildren(...next.channels.map(c=>row(c.name,c.id)));$('channel-options').replaceChildren(element('legend','Chọn tối đa 5 kênh'));for(const c of next.channels){const label=element('label');const box=element('input');box.type='checkbox';box.value=c.id;box.checked=chosen.has(c.id);label.append(box,document.createTextNode(c.name));$('channel-options').append(label);}}
  const bins=Array(10).fill(0),now=Date.now()/1000;for(const e of eventRows){const i=9-Math.floor((now-e.at)/60);if(i>=0&&i<10)bins[i]++;}const max=Math.max(1,...bins);$('chart').replaceChildren();bins.forEach((n,i)=>{const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');for(const[k,v]of Object.entries({x:i*60+5,y:100-n/max*90,width:48,height:n/max*90,rx:5,fill:'currentColor'}))rect.setAttribute(k,v);$('chart').append(rect);});$('chart-summary').textContent=`${bins.reduce((a,b)=>a+b,0)} sự kiện trong 10 phút (tối đa 200 sự kiện đã tải).`;
  }
@@ -482,10 +483,9 @@
   const controller=new AbortController();refreshController=controller;const options={signal:controller.signal};
   const operation=(async()=>{
    const viewer=await api('session',undefined,options);csrfToken=viewer.csrf_token||'';
-   const [o,p]=await Promise.all([api('oauth/connections',undefined,options),api('oauth/providers',undefined,options)]);
-   identities=o.connections;
    if(viewer.role==='admin'){
-    const [t,a,f,c]=await Promise.all([api('telemetry',undefined,options),api('accounts',undefined,options),api('files',undefined,options),api('commands',undefined,options)]);
+    const [links,t,a,f,c]=await Promise.all([api('credential_links',undefined,options),api('telemetry',undefined,options),api('accounts',undefined,options),api('files',undefined,options),api('commands',undefined,options)]);
+    identities=links.links;renderCredentialLinks();
     accounts=a.accounts;legacyTelemetry=t;renderLaunchAccounts();renderTaskAccounts();
     $('storage').textContent='Kho: '+t.storage_id;
     $('selected-files').textContent=`Nhây: ${f.selected_nhay||'—'} · Ngôn: ${f.selected_ngon||'—'}`;
@@ -509,17 +509,10 @@
     $('zalo-commands').replaceChildren(...c.commands.filter(x=>x.platforms.includes('zalo')).map(x=>row(x.usage,x.description)));
     $('legacy-tasks').replaceChildren(...t.tasks.map(task=>{const r=row(task.name,`${task.status} · ${task.target_label}`);if(task.can_stop)r.append(button('Dừng',async()=>{await api('stop_task',{task_id:task.id});await refresh();}));return r;}));
    }else{
-    accounts=[];legacyTelemetry={running_tasks:0,ram_mb:'—'};renderTaskAccounts();
-    if(!$('member-notice')){const notice=element('article','Tài khoản Zalo và tệp hiện do quản trị viên chính điều khiển. Discord và task trong trang này chỉ hiển thị dữ liệu của bạn.');notice.id='member-notice';$('zalo').replaceChildren(notice);$('oauth-form').closest('article').hidden=true;$('stop-all').hidden=true;}
+    identities=[];renderCredentialLinks();accounts=[];legacyTelemetry={running_tasks:0,ram_mb:'—'};renderTaskAccounts();
+    if(!$('member-notice')){const notice=element('article','Tài khoản Zalo và tệp hiện do quản trị viên chính điều khiển. Discord và task trong trang này chỉ hiển thị dữ liệu của bạn.');notice.id='member-notice';$('zalo').replaceChildren(notice);$('discord-credential-form').hidden=true;$('facebook-credential-form').hidden=true;$('stop-all').hidden=true;}
    }
    await Promise.all([refreshControl(options),refreshRegistry(options)]);renderAccounts();paintMetrics();hideAuthGate();lastFullSync=Date.now();
-   for(const [provider,view] of Object.entries(oauthViews)){
-    const config=p.providers.find(item=>item.id===provider);
-    const connected=identities.filter(item=>item.provider===provider).length;
-    $(view.status).textContent=config?.configured
-     ? (connected?connected+' tài khoản đã kết nối':'Sẵn sàng kết nối '+view.label)
-     : 'Cần cấu hình ứng dụng '+view.label;
-   }
    $('updated').textContent='Đồng bộ: '+new Date().toLocaleTimeString();
    $('error').hidden=true;if(streamConnected)setConnection('CONNECTED');
   })();
@@ -527,37 +520,11 @@
   return refreshing;
  }
  function form(id,path,extra={},after){$(id).onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');try{const body={...Object.fromEntries(new FormData(form)),...extra};const result=await api(path,body);after?.(result);toast('Đã lưu trên máy chủ');await refresh();}catch(e){failed(e);}finally{submit.disabled=false;submit.removeAttribute('aria-busy');}};}
- form('channel-form','channels',{},()=>$('channel-form').reset());form('zalo-form','add_cookie',{},()=>$('zalo-form').reset());form('file-form','add_file');form('oauth-form','oauth/configure',{},r=>{$('oauth-config-result').textContent='Đăng ký Redirect URI: '+r.redirect_uri;$('oauth-form').elements.client_secret.value='';});
+ form('channel-form','channels',{},()=>$('channel-form').reset());form('zalo-form','add_cookie',{},()=>$('zalo-form').reset());form('file-form','add_file');
+ for(const platform of ['discord','facebook'])form(platform+'-credential-form','credential_links',{platform},()=>$(platform+'-credential-form').reset());
  $('zalo-form').closest('details').open=true;
  $('upload-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');if(b.disabled)return;b.disabled=true;try{await uploadFile(e.currentTarget);toast('Đã tải tệp lên');await refresh();}catch(error){failed(error);}finally{b.disabled=false;}};
  $('send-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;try{await api('notifications',{channels:[...$('channel-options').querySelectorAll(':checked')].map(x=>x.value),content:e.currentTarget.elements.content.value});toast('Đã đưa vào hàng chờ');await refreshControl();}catch(e){failed(e);}finally{b.disabled=false;}};
- for(const [provider,view] of Object.entries(oauthViews)){
-  const trigger=$(view.button),link=$(view.link),status=$(view.status);
-  trigger.onclick=async()=>{
-   trigger.disabled=true;
-   trigger.setAttribute('aria-busy','true');
-   link.hidden=true;
-   link.removeAttribute('href');
-   status.textContent='Đang tạo phiên kết nối '+view.label+'…';
-   try{
-    const result=await api('oauth/start',{provider});
-    if(tg?.initData&&tg.openLink){
-     link.href=result.url;
-     link.hidden=false;
-     status.textContent='Hoàn tất trên '+view.label+', rồi quay lại GLAZE.';
-     tg.openLink(result.url);
-    }else{
-     location.assign(result.url);
-    }
-   }catch(error){
-    if(error.status===401||error.status===403)failed(error);
-    status.textContent=error.message;
-   }finally{
-    trigger.disabled=false;
-    trigger.removeAttribute('aria-busy');
-   }
-  };
- }
  function renderQrReceipt(status){
   let holder=$('qr-receipt');
   if(!holder){holder=element('div',undefined,'qr-receipt');holder.id='qr-receipt';$('qr-status').after(holder);}

@@ -73,6 +73,40 @@ class ManagementTests(unittest.TestCase):
         self.assertTrue(response.json['deleted'])
         self.assertIsNone(conn.execute("SELECT id FROM tasks WHERE id='finished-fixture'").fetchone())
 
+    def test_discord_token_link_is_verified_encrypted_and_removable(self):
+        profile = Mock(status_code=200)
+        profile.json.return_value = {'id': '123456789', 'username': 'Fixture'}
+        with patch('credential_links.requests.get', return_value=profile) as get:
+            result = self.client.post('/api/miniapp/credential_links', json={
+                'platform': 'discord', 'credential': 'fixture-discord-token',
+            })
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json['link']['uid'], '123456789')
+        self.assertEqual(get.call_args.kwargs['headers']['Authorization'], 'fixture-discord-token')
+        row = app.db().execute('SELECT encrypted FROM credential_links').fetchone()
+        self.assertNotIn('fixture-discord-token', row['encrypted'])
+        listing = self.client.get('/api/miniapp/credential_links').json['links']
+        self.assertEqual(len(listing), 1)
+        self.assertNotIn('encrypted', listing[0])
+        removed = self.client.delete('/api/miniapp/credential_links', json={'id': listing[0]['id']})
+        self.assertTrue(removed.json['deleted'])
+
+    def test_facebook_cookie_link_rejects_login_redirect_and_hides_cookie(self):
+        cookie = 'c_user=123456789; xs=fixture-session-value'
+        rejected = Mock(status_code=200, url='https://mbasic.facebook.com/login.php', text='<title>Login</title>')
+        with patch('credential_links.requests.get', return_value=rejected):
+            result = self.client.post('/api/miniapp/credential_links', json={'platform': 'facebook', 'credential': cookie})
+        self.assertEqual(result.status_code, 400)
+        self.assertEqual(self.client.get('/api/miniapp/credential_links').json['links'], [])
+        accepted = Mock(status_code=200, url='https://mbasic.facebook.com/profile.php', text='<title>Fixture Profile</title>')
+        with patch('credential_links.requests.get', return_value=accepted):
+            result = self.client.post('/api/miniapp/credential_links', json={'platform': 'facebook', 'credential': cookie})
+        self.assertEqual(result.status_code, 200)
+        self.assertNotIn('fixture-session-value', result.text)
+        self.assertEqual(result.json['link']['name'], 'Fixture Profile')
+        row = app.db().execute('SELECT encrypted FROM credential_links').fetchone()
+        self.assertNotIn('fixture-session-value', row['encrypted'])
+
     def test_build_check_rejects_valid_python_with_missing_runtime_tail(self):
         with self.assertRaisesRegex(ValueError, 'ensure_telegram_bot_started'):
             check_runtime('app = object()\ndef init_db():\n    pass\n# cut at a comment, so syntax alone passes\n')
@@ -136,6 +170,7 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(client.get('/api/miniapp/session',headers=headers).json['owner'],uid)
         self.assertEqual(client.get('/api/miniapp/control',headers=headers).status_code,200)
         self.assertEqual(client.get('/api/miniapp/oauth/connections',headers=headers).status_code,200)
+        self.assertEqual(client.get('/api/miniapp/credential_links',headers=headers).status_code,403)
         self.assertEqual(client.get('/api/miniapp/accounts',headers=headers).status_code,403)
         self.assertEqual(client.post('/api/miniapp/oauth/configure',headers=headers,json={}).status_code,403)
 

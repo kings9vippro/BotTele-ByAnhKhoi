@@ -592,6 +592,8 @@ def init_db():
     cur = conn.cursor()
     init_oauth_tables(conn)
     init_official_tables(conn)
+    from credential_links import ensure_schema as ensure_credential_links_schema
+    ensure_credential_links_schema(conn)
     ensure_telegram_acl_schema(conn)
 
     cur.execute("""
@@ -15888,6 +15890,34 @@ def api_miniapp_account_health():
         for a in get_all_accounts_from_ram(platform="zalo")
     ]
     return jsonify({"ok": True, "accounts": items, "snapshot_at": time.time()})
+
+
+@app.route("/api/miniapp/credential_links", methods=["GET", "POST", "DELETE"])
+def api_miniapp_credential_links():
+    """Link a verified Discord token or Facebook cookie without exposing it."""
+    if miniapp_request_owner() != admin_principal_id():
+        return jsonify(ok=False, error="Chỉ quản trị viên được quản lý phiên tài khoản"), 403
+    from credential_links import delete, list_links, save
+    connection = db()
+    try:
+        if request.method == "GET":
+            return jsonify(ok=True, links=list_links(connection, miniapp_request_owner()))
+        body = request.get_json(silent=True) or {}
+        if request.method == "DELETE":
+            try:
+                link_id = int(body.get("id"))
+            except (TypeError, ValueError):
+                return jsonify(ok=False, error="ID kết nối không hợp lệ"), 400
+            return jsonify(ok=True, deleted=delete(connection, miniapp_request_owner(), link_id))
+        platform = str(body.get("platform") or "").strip().lower()
+        raw = str(body.get("credential") or "")
+        try:
+            link = save(connection, miniapp_request_owner(), platform, raw, SECRET_KEY)
+        except ValueError as error:
+            return jsonify(ok=False, error=str(error)), 400
+        return jsonify(ok=True, link=link)
+    finally:
+        connection.close()
 
 
 @app.route("/api/miniapp/add_cookie", methods=["POST"])
