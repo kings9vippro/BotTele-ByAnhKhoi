@@ -27,13 +27,22 @@ class YanbiStudioTests(unittest.TestCase):
             self.assertIn('id="' + identifier + '"', self.html)
             self.assertIn("'" + identifier + "'", self.js)
 
-    def test_top_tabs_and_bottom_nav_without_music(self):
-        self.assertIn('role="tablist"', self.html)
-        self.assertIn("for(const key of ['home','accounts','discord','tasks','settings'])", self.js)
+    def test_single_dock_and_more_menu_without_music(self):
+        self.assertNotIn('id="tabs"', self.html)
+        self.assertIn('id="more-menu"', self.html)
+        self.assertIn("for(const key of ['home','accounts','tasks','more'])", self.js)
+        self.assertIn("for(const key of ['discord','zalo','activity','settings'])", self.js)
         self.assertIn("activity:'Nhật ký'", self.js)
         self.assertNotIn("music:'Âm nhạc'", self.js)
-        self.assertIn("body.yanbi #tabs", self.css)
-        self.assertIn("clip-path:none!important", self.css)
+        self.assertIn("grid-template-columns:repeat(4,minmax(0,1fr))!important", self.css)
+        self.assertIn("body.yanbi #more-menu[hidden]", self.css)
+
+    def test_authentication_does_not_wait_for_every_service(self):
+        self.assertIn("sessionValidated=true", self.js)
+        self.assertIn("hideAuthGate();", self.js)
+        self.assertIn("Promise.allSettled(jobs.map(job=>job.load()))", self.js)
+        self.assertIn("setConnection('PARTIAL')", self.js)
+        self.assertIn("csrfToken=viewer.csrf_token", self.js)
 
     def test_remove_oversized_diamond_and_logo_tiles(self):
         self.assertNotIn('class="auth-icon"', self.html)
@@ -44,12 +53,12 @@ class YanbiStudioTests(unittest.TestCase):
     def test_effects_and_mobile_accessibility(self):
         for marker in ("prefers-reduced-motion:reduce", "focus-visible",
                        "max-width:520px", "aurora-enter", "aurora-drift",
-                       "backdrop-filter", "scroll-snap-type:x mandatory"):
+                       "backdrop-filter", "scroll-snap-type:x mandatory", "scroll-reveal", "IntersectionObserver"):
             self.assertIn(marker, self.css)
 
     def test_unauthenticated_user_sees_no_navigation_or_private_pages(self):
         self.assertIn("body.yanbi.auth-locked #pages", self.css)
-        self.assertIn("body.yanbi.auth-locked #tabs", self.css)
+        self.assertIn("body.yanbi.auth-locked #more-menu", self.css)
         self.assertIn("body.yanbi.auth-locked #bottom", self.css)
         self.assertIn("body.yanbi.auth-locked #error{display:none!important}", self.css)
 
