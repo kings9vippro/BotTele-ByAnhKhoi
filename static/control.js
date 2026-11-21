@@ -5,7 +5,7 @@
  const launch=new URLSearchParams(location.hash.slice(1)).get('tgWebAppData')||'';
  const REQUEST_TIMEOUT_MS=18000,STREAM_BASE_DELAY_MS=1000,STREAM_MAX_DELAY_MS=30000,STREAM_JITTER=0.2,STREAM_STALE_MS=12000,SDK_BOOT_WAIT_MS=2000;
  const connectionLabels={CONNECTING:'Đang kết nối…',CONNECTED:'Đã đồng bộ',AUTHENTICATED:'Đã đăng nhập',PARTIAL:'Đã đăng nhập · đồng bộ một phần',RECONNECTING:'Đang kết nối lại…',DEGRADED:'Luồng gián đoạn · đang thử lại',DISCONNECTED:'Mất kết nối · dữ liệu cũ',AUTH_REQUIRED:'Cần đăng nhập',ACCESS_DENIED:'Không đủ quyền truy cập',SERVER_CONFIG:'Máy chủ cần cấu hình xác thực'};
- let tg, active='home', data={}, accounts=[], identities=[], eventRows=[], cursor=0, stream, refreshing, refreshController, toastTimer, streamGeneration=0, legacyTelemetry, reconnectTimer, reconnectAttempt=0, lastStreamAt=0, streamConnected=false, requestSequence=0, terminalAuth=false, retryAfterDelay=0, csrfToken='',sessionValidated=false;
+ let tg, active='home', data={}, accounts=[], identities=[], eventRows=[], cursor=0, stream, refreshing, refreshController, toastTimer, streamGeneration=0, legacyTelemetry, reconnectTimer, reconnectAttempt=0, lastStreamAt=0, streamConnected=false, requestSequence=0, terminalAuth=false, retryAfterDelay=0, csrfToken='',sessionValidated=false,syncWarnings=[];
  const names={home:'Tổng quan',accounts:'Tài khoản',discord:'Discord',zalo:'Zalo',tasks:'Tác vụ',activity:'Nhật ký',settings:'Cài đặt'};
  const keys=Object.keys(names), pages=$('pages');
  const element=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
@@ -647,6 +647,7 @@
     warnings.push('Tác vụ');
    }
    renderAccounts();paintMetrics();
+   syncWarnings=warnings;
    lastFullSync=Date.now();
    $('updated').textContent='Đã xác thực · cập nhật '+new Date().toLocaleTimeString();
    if(warnings.length){
@@ -758,7 +759,7 @@
     lastStreamAt=Date.now();buffer+=decoder.decode(value,{stream:true});let at;
     while((at=buffer.indexOf('\n\n'))>=0){
      const msg=buffer.slice(0,at);buffer=buffer.slice(at+2);const line=msg.split('\n').find(x=>x.startsWith('data: '));
-     if(line){const snapshot=JSON.parse(line.slice(6));renderControl(snapshot);received=true;streamConnected=true;reconnectAttempt=0;$('error').hidden=true;setConnection('CONNECTED');}
+     if(line){const snapshot=JSON.parse(line.slice(6));renderControl(snapshot);received=true;streamConnected=true;reconnectAttempt=0;if(!syncWarnings.length){$('error').hidden=true;setConnection('CONNECTED');}else setConnection('PARTIAL');}
     }
    }
    if(generation===streamGeneration){streamConnected=false;setConnection(sessionValidated?'PARTIAL':'DEGRADED');}
