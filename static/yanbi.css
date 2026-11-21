@@ -503,3 +503,132 @@ body.yanbi #connection[data-state=PARTIAL]{color:var(--fg)}
   body.yanbi .scroll-reveal{opacity:1!important;transform:none!important}
   body.yanbi #more-menu{animation:none!important}
 }
+
+
+/* GLAZE motion & QR 2.4: visible, testable interaction without moving QR pixels. */
+body.yanbi .qr-panel{
+  border-color:color-mix(in srgb,var(--accent2) 25%,var(--line))!important;
+  background:linear-gradient(140deg,color-mix(in srgb,var(--accent) 8%,var(--ui-glass)),var(--ui-glass))!important;
+}
+body.yanbi .qr-panel h2{margin:0 0 8px}
+body.yanbi .qr-panel>p{margin:0 0 16px}
+body.yanbi .qr-actions{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;
+}
+body.yanbi .qr-actions #qr{min-height:51px;width:100%;border-radius:15px}
+body.yanbi .qr-actions #qr-cancel{
+  min-width:83px;min-height:51px;border-radius:15px;
+  border:1px solid color-mix(in srgb,var(--danger) 25%,var(--line));
+  color:var(--danger);
+}
+body.yanbi .qr-actions #qr-cancel[hidden]{display:none!important}
+body.yanbi .qr-stage{
+  position:relative;isolation:isolate;overflow:hidden;
+  display:grid;justify-items:center;gap:11px;
+  margin-top:14px;padding:16px 12px;
+  background:radial-gradient(ellipse at top,color-mix(in srgb,var(--accent2) 10%,transparent),transparent 70%),var(--ui-input);
+  border:1px solid var(--line);border-radius:20px;
+  transition:border-color .25s ease,box-shadow .25s ease;
+}
+body.yanbi .qr-stage[data-state=waiting_scan],
+body.yanbi .qr-stage[data-state=scanned],
+body.yanbi .qr-stage[data-state=confirmed]{
+  border-color:color-mix(in srgb,var(--accent2) 43%,var(--line));
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--accent2) 12%,transparent),inset 0 0 32px color-mix(in srgb,var(--accent2) 10%,transparent);
+}
+body.yanbi .qr-stage[data-state=success]{border-color:color-mix(in srgb,#23c99f 56%,var(--line))}
+body.yanbi .qr-stage[data-state=error],
+body.yanbi .qr-stage[data-state=expired],
+body.yanbi .qr-stage[data-state=image_error]{
+  border-color:color-mix(in srgb,var(--danger) 52%,var(--line));
+}
+body.yanbi .qr-loading{
+  display:flex;align-items:center;justify-content:center;gap:12px;
+  min-height:56px;color:var(--muted);font-size:13px;text-align:center;
+}
+body.yanbi .qr-loading[hidden]{display:none!important}
+body.yanbi .qr-spinner{
+  display:block;width:22px;height:22px;flex:0 0 22px;
+  border-radius:50%;
+  border:2px solid color-mix(in srgb,var(--accent) 23%,transparent);
+  border-top-color:var(--accent2);
+}
+body.yanbi #qr-image{
+  width:min(260px,100%);height:auto;aspect-ratio:1;
+  object-fit:contain;background:#fff;padding:10px;border-radius:15px;
+  box-shadow:0 10px 35px rgba(0,0,0,.2);
+  margin:5px auto;filter:none;transform:none;
+}
+body.yanbi #qr-image[hidden],body.yanbi #qr-remaining[hidden]{display:none!important}
+body.yanbi #qr-status{
+  margin:0;text-align:center;max-width:380px;
+  color:var(--fg);font-size:13px;line-height:1.6;
+  overflow-wrap:anywhere;
+}
+body.yanbi #qr-remaining{
+  margin:0;font-size:12px;font-weight:720;color:var(--accent2);
+  font-variant-numeric:tabular-nums;
+}
+body.yanbi .motion-note{color:var(--muted);font-size:12px;margin:7px 0 13px}
+:root[data-motion=off] body.yanbi *,
+:root[data-motion=off] body.yanbi *::before,
+:root[data-motion=off] body.yanbi *::after{
+  animation:none!important;transition:none!important;
+}
+:root[data-motion=off] body.yanbi::before,
+:root[data-motion=off] body.yanbi::after,
+:root[data-motion=off] body.yanbi header::after{animation:none!important}
+:root[data-motion=off] body.yanbi .scroll-reveal{
+  opacity:1!important;transform:none!important
+}
+:root[data-motion=on] body.yanbi .brand-wordmark{
+  background-size:230% 230%;
+  animation:glaze-logo-flow 9s ease-in-out infinite alternate!important;
+}
+:root[data-motion=on] body.yanbi .overview-heading{
+  background-size:150% 150%;
+  animation:glaze-hero-breathe 9s ease-in-out infinite alternate!important;
+}
+:root[data-motion=on] body.yanbi .overview-heading h1 span{
+  background-size:220% auto;
+  animation:glaze-logo-flow 6s ease-in-out infinite alternate!important;
+}
+:root[data-motion=on] body.yanbi .qr-spinner{
+  animation:glaze-qr-spin 1.1s linear infinite!important;
+}
+:root[data-motion=on] body.yanbi .qr-stage[data-state=waiting_scan]::before{
+  content:"";position:absolute;z-index:-1;inset:0;
+  background:linear-gradient(105deg,transparent 0%,color-mix(in srgb,var(--accent2) 9%,transparent) 43%,transparent 70%);
+  background-size:230% 100%;
+  animation:glaze-qr-sheen 4.5s linear infinite!important;
+  pointer-events:none;
+}
+:root[data-motion=on] body.yanbi #bottom button.bottom-nav-button[aria-current=page]::after{
+  animation:glaze-active-glow 2.8s ease-in-out infinite alternate!important;
+}
+:root[data-motion=on] body.yanbi .scroll-reveal{
+  opacity:0!important;
+  transform:translate3d(0,18px,0) scale(.99)!important;
+  transition:opacity .52s cubic-bezier(.2,.8,.25,1),transform .55s cubic-bezier(.2,.8,.25,1)!important;
+  animation:none!important;
+}
+:root[data-motion=on] body.yanbi .scroll-reveal.is-visible{
+  opacity:1!important;transform:translate3d(0,0,0) scale(1)!important;
+}
+:root[data-motion=on] body.yanbi #more-menu:not([hidden]){
+  animation:glaze-menu-rise .25s cubic-bezier(.17,.8,.25,1) both!important;
+}
+:root[data-motion=on] body.yanbi #pages section.page-enter>.eyebrow,
+:root[data-motion=on] body.yanbi #pages section.page-enter>h1{
+  animation:glaze-page-title .4s cubic-bezier(.2,.8,.25,1) both!important;
+}
+@keyframes glaze-logo-flow{
+  from{background-position:0% 50%}
+  to{background-position:100% 50%}
+}
+@keyframes glaze-hero-breathe{
+  from{background-position:0% 38%}
+  to{background-position:100% 70%}
+}
+@keyframes glaze-qr-spin{to{transform:rotate(360deg)}}
+@keyframes glaze-qr-sheen{from{background-position:200% 0}to{background-position:-200% 0}}
