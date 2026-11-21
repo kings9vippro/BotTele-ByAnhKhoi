@@ -776,7 +776,7 @@
      if(line){const snapshot=JSON.parse(line.slice(6));renderControl(snapshot);received=true;streamConnected=true;reconnectAttempt=0;if(!syncWarnings.length){$('error').hidden=true;setConnection('CONNECTED');}else setConnection('PARTIAL');}
     }
    }
-   if(generation===streamGeneration){streamConnected=false;setConnection(sessionValidated?'PARTIAL':'DEGRADED');}
+   if(generation===streamGeneration){streamConnected=false;if(!received)setConnection(sessionValidated?'PARTIAL':'DEGRADED');}
   }catch(e){if(e.name!=='AbortError'&&generation===streamGeneration){streamConnected=false;failed(e,'DEGRADED');}}
   finally{if(!terminalAuth&&!document.hidden&&navigator.onLine!==false&&generation===streamGeneration){if(!received)streamConnected=false;scheduleReconnect(generation);}}
  }
