@@ -19,7 +19,7 @@ const crypto=require('crypto'),assert=require('assert/strict');
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('https://telegram.org/**',r=>r.abort());
  await page.goto('http://127.0.0.1:5873/miniapp#tgWebAppData='+encodeURIComponent(auth),{waitUntil:'domcontentloaded'});
- assert.equal(await page.locator('html').getAttribute('data-theme'),'dark','new Mini App should default to the compact dark theme');
+ assert.equal(await page.locator('html').getAttribute('data-theme'),'light','new Mini App should default to the Yanbi pearl-glass theme');
  await page.waitForFunction(()=>document.querySelector('#metrics').getAttribute('aria-busy')==='false');
  assert.equal(await page.locator('#tabs button').count(),8);
  assert.equal(await page.locator('#bottom .bottom-nav-button').count(),5);

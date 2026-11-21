@@ -34,7 +34,10 @@ class CompactV11Tests(unittest.TestCase):
 
     def test_telegram_auth_recovery_blocks_private_dashboard(self):
         js=(Path(__file__).resolve().parents[1] / "static" / "control.js").read_text()
-        self.assertIn("showAuthGate('AUTH_REQUIRED','missing')",js)
+        # Retry may be invoked from a web-cookie session without Telegram data.
+        # A server 401 must still restore the locked authentication gate.
+        self.assertIn("if(error?.status===401)",js)
+        self.assertIn("showAuthGate(state",js)
         self.assertIn("document.body.classList.add('auth-locked')",js)
 
     def test_account_scoped_registry_does_not_read_unrelated_discord_tasks(self):

@@ -14,7 +14,7 @@
   hideStartupPanel();
   const card=$('auth-gate');if(!card)return;
   const variants={
-   missing:'Chưa có phiên quản trị. Hãy đăng nhập web, hoặc mở Mini App từ Telegram nếu máy chủ đã bật tích hợp Telegram.',
+   missing:'Chưa có phiên quản trị. Đăng nhập bằng mật khẩu web để tiếp tục. Nếu sử dụng Telegram Mini App, hãy mở từ bot đã cấp quyền.',
    expired:'Phiên Telegram đã hết hạn. Đóng Mini App và mở lại từ bot để lấy phiên mới.',
    forbidden:'Tài khoản Telegram này chưa được cấp quyền quản lý.',
    server:'Máy chủ chưa có cấu hình xác thực Telegram hợp lệ. Quản trị viên cần kiểm tra hosting.',
@@ -53,7 +53,7 @@
  function button(text,fn,cls){const b=element('button',text,cls);b.type='button';b.onclick=async()=>{if(b.disabled)return;b.disabled=true;b.setAttribute('aria-busy','true');try{await fn();}catch(e){failed(e);toast(e.message);}finally{b.disabled=false;b.removeAttribute('aria-busy');}};return b;}
  function theme(){const mode=$('theme').value;document.documentElement.dataset.theme=mode==='system'?(tg?.colorScheme||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark')):mode;}
  function initTelegram(){const sdk=window.Telegram?.WebApp;if(!sdk||tg===sdk)return;tg=sdk;tg.ready();tg.expand();tg.onEvent?.('themeChanged',theme);tg.onEvent?.('viewportChanged',()=>{document.documentElement.style.setProperty('--safe',Math.max(tg.safeAreaInset?.bottom||0,tg.contentSafeAreaInset?.bottom||0)+'px');});tg.BackButton?.onClick(()=>{if($('sheet').open)$('sheet').close();else go('home');});theme();}
- initTelegram();$('telegram-sdk').addEventListener('load',initTelegram);$('theme').onchange=()=>{try{localStorage.setItem('glaze-theme',$('theme').value);}catch{}theme();};try{$('theme').value=localStorage.getItem('glaze-theme')||'dark';}catch{$('theme').value='dark';}theme();
+ initTelegram();$('telegram-sdk').addEventListener('load',initTelegram);$('theme').onchange=()=>{try{localStorage.setItem('glaze-theme',$('theme').value);}catch{}theme();};try{$('theme').value=localStorage.getItem('glaze-theme')||'light';}catch{$('theme').value='light';}theme();
  for(const [id,allowed,fallback] of [['text-size',['normal','large'],'normal'],['accent',['blue','rose','mint'],'blue']]){
   const input=$(id),key='glaze-'+id;
   try{const saved=localStorage.getItem(key);input.value=allowed.includes(saved)?saved:fallback;}catch{input.value=fallback;}
@@ -84,11 +84,12 @@
   b.append(svg,element('span',names[key],'nav-caption'));b.dataset.bottom=key;b.classList.add('bottom-nav-button');
   b.setAttribute('aria-label',names[key]);b.title=names[key];$('bottom').append(b);
  }
- for(const [id,page] of [['home-open-accounts','accounts'],['home-open-tasks','tasks'],['home-open-zalo','zalo'],['account-open-zalo','zalo'],['account-open-discord','discord'],['task-open-activity','activity'],['task-open-zalo','zalo']]){
+ for(const [id,page] of [['home-open-accounts','accounts'],['home-open-tasks','tasks'],['home-open-zalo','zalo'],['home-open-discord','discord'],['home-open-music','music'],['home-open-activity','activity'],['account-open-zalo','zalo'],['account-open-discord','discord'],['task-open-activity','activity'],['task-open-zalo','zalo']]){
   const target=$(id);if(target)target.addEventListener('click',()=>go(page));
  }
  $('auth-retry')?.addEventListener('click',()=>{
-  initTelegram();if(!(tg?.initData||launch)){showAuthGate('AUTH_REQUIRED','missing');return;}
+  initTelegram();
+  // Web sessions authenticate using cookies; the server still enforces access.
   terminalAuth=false;hideAuthGate();setConnection('CONNECTING');
   refresh().finally(()=>{if(!terminalAuth)scheduleReconnect(streamGeneration,100);});
  });
@@ -108,10 +109,18 @@
    // official Embed, where account, Premium and WebView policy decide whether
    // full-track playback is available.
    $('music-tracks').replaceChildren(...payload.tracks.map((track,index)=>{
-    const card=element('article',undefined,'card');const link=element('a',`${index+1}. ${track.name}`);
+    const card=element('article',undefined,'card music-track');
+    const number=element('span',String(index+1).padStart(2,'0'),'track-number');
+    const info=element('div',undefined,'track-info');
+    info.append(element('strong',track.name),element('small',track.artist));
     const url=new URL(track.url);
-    if(url.origin==='https://open.spotify.com'&&url.pathname.startsWith('/track/')){link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';}
-    card.append(link,element('p',track.artist));return card;
+    if(url.origin==='https://open.spotify.com'&&/^\/track\/[A-Za-z0-9]+$/.test(url.pathname)){
+     const open=element('a','Nghe đầy đủ','track-open');
+     open.href=url.href;open.target='_blank';open.rel='noopener noreferrer';
+     open.setAttribute('aria-label','Mở '+track.name+' trên Spotify');
+     card.append(number,info,open);
+    }else{card.append(number,info);}
+    return card;
    }));
    $('music-tracks').setAttribute('aria-busy','false');
   })().catch(error=>{$('music-tracks').replaceChildren(element('p',error.message));$('music-tracks').setAttribute('aria-busy','false');}).finally(()=>musicLoading=null);
@@ -124,6 +133,7 @@
   frame.allow='autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture';
   frame.referrerPolicy='strict-origin-when-cross-origin';
   $('music-player').replaceChildren(frame);$('music-play').hidden=true;
+  // Embedded playback is license/device-dependent; direct Spotify links remain visible.
  };
  let scrollFrame;pages.onscroll=()=>{if(scrollFrame)return;scrollFrame=requestAnimationFrame(()=>{scrollFrame=null;select(keys[Math.round(pages.scrollLeft/pages.clientWidth)]||'home');});};window.addEventListener('resize',()=>pages.scrollTo({left:keys.indexOf(active)*pages.clientWidth}));select('home');
  let sheetReturnFocus;

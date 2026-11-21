@@ -1,33 +1,245 @@
-body.yanbi {
-  --yanbi-shade: rgba(7, 11, 17, .54);
-  background: #111820 url("yanbi-background.webp") center 44% / cover no-repeat;
-  background-image: linear-gradient(var(--yanbi-shade), rgba(7, 11, 17, .82)), url("yanbi-background.webp");
+/* GLAZE · Yanbi Studio — mobile-first pearl glass. CSS only; existing IDs and API contracts stay intact. */
+:root[data-theme=light],:root:not([data-theme]){
+  color-scheme:light;
+  --bg:#f4f6fb;--panel:#ffffffd9;--fg:#172235;--muted:#66748b;
+  --line:#354a6a22;--accent:#365dd7;--accent2:#7360c9;--danger:#b83255;
+  --studio-ring:#b7c6ff;--studio-shadow:0 20px 55px #19325214;
+  --studio-glass:rgba(255,255,255,.78);--studio-input:#ffffffdc;
+  --studio-shine:#ffffffb8;--studio-glow:#c8d4ff;
+  --v11-header:80px;--v11-nav:84px;
 }
-:root[data-theme=light] body.yanbi {
-  --yanbi-shade: rgba(7, 11, 17, .34);
+:root[data-theme=dark]{
+  color-scheme:dark;
+  --bg:#0c1220;--panel:#172238d9;--fg:#f2f5ff;--muted:#a7b5ce;
+  --line:#b7ceff29;--accent:#94b5ff;--accent2:#c2a9ff;--danger:#ff91a7;
+  --studio-ring:#536ca3;--studio-shadow:0 20px 55px #03081366;
+  --studio-glass:rgba(19,30,51,.78);--studio-input:#111c31d9;
+  --studio-shine:#ffffff13;--studio-glow:#4861a0;
+  --v11-header:80px;--v11-nav:84px;
 }
-body.yanbi header {
-  background: color-mix(in srgb, var(--bg) 93%, transparent);
+:root[data-accent=rose]{--accent:#b74377;--accent2:#8d62b9;--studio-ring:#e8accb;--studio-glow:#ebc6e1}
+:root[data-accent=mint]{--accent:#087d76;--accent2:#327fa6;--studio-ring:#8bd6cb;--studio-glow:#a1e0d7}
+:root[data-theme=dark][data-accent=rose]{--accent:#ff9ac5;--accent2:#c0a7ff;--studio-ring:#a76791;--studio-glow:#693b62}
+:root[data-theme=dark][data-accent=mint]{--accent:#76e4cb;--accent2:#8ec6fa;--studio-ring:#458e83;--studio-glow:#27565b}
+html{background:var(--bg);-webkit-tap-highlight-color:transparent}
+body.yanbi{
+  isolation:isolate;position:relative;min-width:280px;color:var(--fg);
+  background:
+    radial-gradient(ellipse 75% 48% at 7% -5%,color-mix(in srgb,var(--studio-glow) 46%,transparent),transparent 74%),
+    radial-gradient(ellipse 56% 40% at 100% 60%,color-mix(in srgb,var(--studio-glow) 27%,transparent),transparent 73%),
+    linear-gradient(155deg,var(--bg),color-mix(in srgb,var(--bg) 94%,#fff));
+  background-attachment:fixed;
+  font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
 }
-body.yanbi .overview-heading {
-  background-color: color-mix(in srgb, var(--panel) 82%, transparent);
+body.yanbi::before{
+  content:"";position:fixed;z-index:-1;inset:-25%;pointer-events:none;
+  background:radial-gradient(circle at 22% 23%,color-mix(in srgb,var(--studio-glow) 24%,transparent),transparent 32%),
+    radial-gradient(circle at 81% 75%,color-mix(in srgb,var(--accent2) 11%,transparent),transparent 28%);
+  filter:blur(38px);opacity:.8;
 }
-body.yanbi #auth-gate {
-  color: #fff;
-  background: rgba(12, 16, 22, .86);
-  border-inline: 1px solid #ffffff22;
+body.yanbi::after{content:"";position:fixed;z-index:-1;inset:0;pointer-events:none;background-image:linear-gradient(90deg,#ffffff08 1px,transparent 1px),linear-gradient(#ffffff08 1px,transparent 1px);background-size:34px 34px;mask-image:linear-gradient(to bottom,transparent,#0003,transparent)}
+body.yanbi header{
+  display:flex;align-items:center;gap:12px;min-height:var(--v11-header);
+  padding:14px max(16px,env(safe-area-inset-right)) 12px max(16px,env(safe-area-inset-left));
+  background:var(--studio-glass);border-bottom:1px solid var(--studio-shine);
+  box-shadow:0 4px 30px #1729460b;backdrop-filter:blur(24px) saturate(160%);
+  -webkit-backdrop-filter:blur(24px) saturate(160%);
 }
-body.yanbi #auth-gate p {
-  color: #e2e8f0;
+body.yanbi .brand{min-width:0;font-size:17px;font-weight:850;letter-spacing:-.035em;line-height:1.15}
+body.yanbi .brand img{width:46px;height:46px;border-radius:15px;object-fit:cover;border:1px solid var(--studio-shine);box-shadow:0 7px 19px #1b315a26}
+body.yanbi .brand small{display:block;margin-top:3px;font-weight:550;color:var(--muted);font-size:11px;letter-spacing:.01em}
+body.yanbi .brand-owner{display:inline-flex;align-items:center;max-width:100%;margin-top:5px;padding:3px 9px;border:1px solid color-mix(in srgb,var(--accent) 24%,var(--line));border-radius:99px;background:color-mix(in srgb,var(--accent) 8%,transparent);color:var(--accent);font-size:10px;letter-spacing:.02em;font-weight:760}
+body.yanbi #connection{flex:0 0 auto;max-width:106px;padding:7px 9px;border:1px solid var(--line);border-radius:999px;text-align:center;font-size:10px;line-height:1.3;font-weight:760;background:var(--studio-glass);color:var(--muted)}
+body.yanbi #connection[data-state=CONNECTED]{color:#0c8b68;border-color:#37b89954;background:#27b78712}
+:root[data-theme=dark] body.yanbi #connection[data-state=CONNECTED]{color:#81e6bd}
+body.yanbi #connection[data-state=AUTH_REQUIRED],body.yanbi #connection[data-state=ACCESS_DENIED]{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 30%,transparent)}
+body.yanbi #refresh{display:grid;place-items:center;min-width:40px;width:40px;height:40px;padding:0;background:var(--studio-glass);border-radius:13px}
+body.yanbi #pages{height:calc(100dvh - var(--v11-header) - var(--v11-nav) - max(10px,var(--safe)));scroll-behavior:smooth;scrollbar-width:none}
+body.yanbi #pages section{padding:19px clamp(15px,4vw,30px) 36px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+body.yanbi #pages section>*{max-width:770px}
+body.yanbi h1{font-size:clamp(24px,5.8vw,36px);line-height:1.15;letter-spacing:-.045em;color:var(--fg);font-weight:840}
+body.yanbi h2{font-size:17px;line-height:1.3;color:var(--fg);letter-spacing:-.025em;font-weight:780}
+body.yanbi p{line-height:1.65;color:var(--muted)}
+body.yanbi .eyebrow{color:var(--accent);font-size:11px;letter-spacing:.14em;font-weight:800}
+body.yanbi article,body.yanbi .card,body.yanbi .metric,body.yanbi .file-category{
+  position:relative;min-width:0;padding:17px;
+  border-radius:22px;border:1px solid var(--studio-shine);outline:1px solid var(--line);
+  background:var(--studio-glass);box-shadow:var(--studio-shadow);
+  backdrop-filter:blur(18px) saturate(125%);-webkit-backdrop-filter:blur(18px) saturate(125%);
+  overflow-wrap:anywhere;
 }
-body.yanbi .brand img {
-  object-fit: cover;
-  border: 1px solid #ffffff44;
+body.yanbi .stack{gap:12px}
+body.yanbi .grid{gap:11px}
+body.yanbi .metric{min-height:94px;margin:0;padding:15px;justify-content:center;gap:4px}
+body.yanbi .metric strong{color:var(--fg);font-size:clamp(22px,5vw,30px)}
+body.yanbi .metric span{color:var(--muted);font-size:11px}
+body.yanbi #home .overview-heading{
+  position:relative;isolation:isolate;overflow:hidden;padding:24px 21px;
+  border-radius:26px;border:1px solid var(--studio-shine);
+  outline:1px solid var(--line);
+  background:linear-gradient(120deg,color-mix(in srgb,var(--studio-glass) 91%,#fff),color-mix(in srgb,var(--studio-glass) 76%,var(--studio-glow)));
+  box-shadow:var(--studio-shadow);
 }
-body.yanbi .login-mark {
-  display: block;
-  object-fit: cover;
-  border-radius: 17px;
-  border: 1px solid #ffffff40;
-  margin-bottom: 18px;
+body.yanbi #home .overview-heading::before{inset:-75% -10% -75% 25%;background:radial-gradient(ellipse at 64% 40%,color-mix(in srgb,var(--studio-glow) 66%,transparent),transparent 65%)}
+body.yanbi #home .overview-heading::after{content:"";position:absolute;inset:1px;border-radius:inherit;border-top:1px solid var(--studio-shine);pointer-events:none}
+body.yanbi #home .overview-heading h1{font-size:clamp(26px,6vw,38px);margin:0 0 5px}
+body.yanbi #home #updated{margin:0;color:var(--muted);font-size:12px}
+body.yanbi #quick-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:15px 0}
+body.yanbi #quick-actions button{width:100%;min-width:0;margin:0;justify-content:flex-start;text-align:left;padding:13px 14px;min-height:48px}
+body.yanbi #quick-actions button:first-child{background:color-mix(in srgb,var(--accent) 11%,var(--studio-glass));border-color:color-mix(in srgb,var(--accent) 26%,var(--line))}
+body.yanbi #account-quicklinks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+body.yanbi #account-quicklinks button{min-width:0;min-height:47px}
+body.yanbi button,body.yanbi .primary,body.yanbi .btn{
+  border-radius:14px;border:1px solid var(--line);background:var(--studio-glass);
+  color:var(--fg);font-size:13px;font-weight:730;min-height:43px;
+  box-shadow:inset 0 1px var(--studio-shine);
+  transition:transform .2s cubic-bezier(.18,.8,.3,1),box-shadow .2s ease,border-color .2s ease,background-color .2s ease;
+  touch-action:manipulation;
+}
+body.yanbi button.primary,body.yanbi .primary,body.yanbi .btn{
+  background:linear-gradient(130deg,var(--accent),color-mix(in srgb,var(--accent) 74%,var(--accent2)));
+  color:#fff;border:1px solid color-mix(in srgb,var(--accent) 75%,transparent);
+  box-shadow:0 8px 23px color-mix(in srgb,var(--accent) 24%,transparent),inset 0 1px #ffffff50;
+}
+:root[data-theme=dark] body.yanbi button.primary,:root[data-theme=dark] body.yanbi .primary{color:#0e1930}
+body.yanbi button:active,body.yanbi .btn:active{transform:translateY(1px) scale(.975)}
+body.yanbi button:focus-visible,body.yanbi a:focus-visible,body.yanbi input:focus-visible,body.yanbi select:focus-visible,body.yanbi textarea:focus-visible{outline:3px solid var(--studio-ring);outline-offset:3px}
+body.yanbi button.danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 32%,var(--line));background:color-mix(in srgb,var(--danger) 7%,var(--studio-glass))}
+body.yanbi label{font-size:13px;line-height:1.5;color:var(--fg);font-weight:670}
+body.yanbi input,body.yanbi select,body.yanbi textarea{
+  max-width:100%;font-size:15px;min-height:46px;padding:12px 14px;
+  border-radius:14px;background:var(--studio-input);border:1px solid var(--line);
+  color:var(--fg);box-shadow:inset 0 1px 4px #17223509;
+}
+body.yanbi input::placeholder,body.yanbi textarea::placeholder{color:var(--muted);opacity:.75}
+body.yanbi input:focus,body.yanbi select:focus,body.yanbi textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--studio-ring) 29%,transparent)}
+body.yanbi fieldset{border:1px solid var(--line);border-radius:18px;padding:13px}
+body.yanbi details{border-top:1px solid var(--line);padding-top:7px}
+body.yanbi summary{font-size:13px;font-weight:740}
+body.yanbi a{color:var(--accent);text-underline-offset:3px}
+body.yanbi #bottom,body.yanbi #bottom.bottom-nav{
+  bottom:calc(11px + var(--safe));height:70px;
+  width:min(calc(100% - 28px),470px);padding:6px;gap:4px;
+  border:1px solid var(--studio-shine);outline:1px solid var(--line);border-radius:23px;
+  background:var(--studio-glass);box-shadow:0 15px 40px #12243e2e;
+  backdrop-filter:blur(26px) saturate(165%);-webkit-backdrop-filter:blur(26px) saturate(165%);
+}
+body.yanbi #bottom button.bottom-nav-button{
+  height:56px;min-height:56px;min-width:0;padding:5px 1px;display:flex!important;
+  flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  border-radius:17px;background:transparent;box-shadow:none;border:1px solid transparent;
+}
+body.yanbi #bottom button.bottom-nav-button .bottom-icon{width:22px;height:22px;flex:0 0 22px;stroke-width:1.9;transition:transform .25s cubic-bezier(.2,.85,.3,1.25),color .2s ease}
+body.yanbi #bottom .nav-caption{display:block;max-width:100%;font-size:10px;line-height:1.15;letter-spacing:-.02em;color:var(--muted);font-weight:680;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.yanbi #bottom button.bottom-nav-button[aria-current=page]{background:color-mix(in srgb,var(--accent) 13%,var(--studio-glass));border-color:color-mix(in srgb,var(--accent) 23%,var(--line));box-shadow:inset 0 1px var(--studio-shine)}
+body.yanbi #bottom button.bottom-nav-button[aria-current=page] .bottom-icon,
+body.yanbi #bottom button.bottom-nav-button[aria-current=page] .nav-caption{color:var(--accent);font-weight:840}
+body.yanbi #bottom button.bottom-nav-button[aria-current=page] .bottom-icon{transform:translateY(-2px) scale(1.06)!important}
+body.yanbi #auth-gate{
+  position:relative;isolation:isolate;width:min(calc(100% - 30px),470px);max-width:470px;
+  min-height:auto;margin:clamp(40px,10vh,100px) auto 35px;padding:30px clamp(21px,6vw,34px);
+  display:flex;align-items:stretch;gap:14px;overflow:hidden;
+  border:1px solid var(--studio-shine);outline:1px solid var(--line);
+  border-radius:28px;background:var(--studio-glass);color:var(--fg);
+  box-shadow:0 30px 90px #11294a26;
+  backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);
+}
+body.yanbi #auth-gate::before{
+  content:"";position:absolute;z-index:-1;inset:-130px -90px auto 25%;
+  height:260px;transform:rotate(-18deg);
+  background:radial-gradient(circle,color-mix(in srgb,var(--studio-glow) 80%,transparent),transparent 67%);
+  pointer-events:none
+}
+body.yanbi #auth-gate .auth-icon{height:64px;width:64px;border-radius:20px;font-size:28px;background:color-mix(in srgb,var(--accent) 12%,var(--studio-glass));border:1px solid color-mix(in srgb,var(--accent) 24%,var(--line));box-shadow:inset 0 1px var(--studio-shine)}
+body.yanbi #auth-gate h1{font-size:clamp(25px,6vw,32px);margin:0;letter-spacing:-.045em}
+body.yanbi #auth-gate p{color:var(--muted);font-size:14px;line-height:1.65}
+body.yanbi #auth-gate .auth-hint{font-size:12px;color:var(--muted);padding-top:7px;border-top:1px solid var(--line)}
+body.yanbi #auth-gate .auth-login-link{display:flex;align-items:center;justify-content:center;min-height:52px;padding:13px 15px;border-radius:15px;text-decoration:none;font-weight:800;font-size:15px;line-height:1.35}
+body.yanbi #auth-gate #auth-retry{min-height:49px;font-size:14px}
+body.yanbi.auth-locked{overflow:auto;min-height:100dvh}
+body.yanbi.auth-locked #auth-gate{margin-top:clamp(24px,8vh,90px)}
+body.yanbi #startup-panel{
+  background:var(--studio-glass);color:var(--fg);border:1px solid var(--line);
+  box-shadow:var(--studio-shadow);backdrop-filter:blur(18px);border-radius:21px;
+}
+body.yanbi #startup-panel[hidden]{display:none!important}
+body.yanbi #error{border-radius:12px;margin:8px 16px;background:color-mix(in srgb,var(--danger) 7%,var(--panel));border:1px solid color-mix(in srgb,var(--danger) 20%,var(--line))}
+body.yanbi #music .music-hero{display:grid;gap:9px;padding:18px 20px;margin-bottom:13px;border-radius:21px;background:linear-gradient(125deg,color-mix(in srgb,var(--accent) 9%,var(--studio-glass)),var(--studio-glass));border:1px solid var(--line)}
+body.yanbi #music .music-hero strong{font-size:18px}
+body.yanbi #music .music-hero p{margin:0}
+body.yanbi #music .music-notice{margin:10px 0;padding:12px 14px;border-radius:13px;background:color-mix(in srgb,var(--accent) 8%,var(--studio-glass));font-size:12px;line-height:1.6}
+body.yanbi #music .music-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+body.yanbi #music .music-actions>*{min-width:0;min-height:47px;display:flex;align-items:center;justify-content:center;margin:0;padding:9px 10px;text-decoration:none;text-align:center;font-weight:760;border-radius:14px}
+body.yanbi #music .music-actions #music-playlist{border:1px solid var(--line);background:var(--studio-input)}
+body.yanbi #music .music-actions > [hidden]{display:none!important}
+body.yanbi #music #music-player iframe{display:block;width:100%;min-height:352px;max-width:100%;height:380px;border:0;border-radius:18px;margin-top:14px}
+body.yanbi #music-tracks{display:grid;gap:10px}
+body.yanbi #music-tracks .music-track{display:flex;gap:12px;align-items:center;padding:12px 15px;margin:0}
+body.yanbi #music-tracks .track-number{flex:0 0 26px;font-size:12px;font-weight:780;color:var(--muted);text-align:center}
+body.yanbi #music-tracks .track-info{flex:1;min-width:0}
+body.yanbi #music-tracks .track-info strong{display:block;color:var(--fg);font-size:13px;line-height:1.4}
+body.yanbi #music-tracks .track-info small{color:var(--muted);font-size:12px}
+body.yanbi #music-tracks .track-open{flex:0 0 auto;padding:8px 11px;min-height:36px;text-decoration:none;white-space:nowrap;border-radius:11px;background:color-mix(in srgb,var(--accent) 10%,var(--studio-glass));font-size:12px;font-weight:760}
+body.yanbi #sheet{background:var(--studio-glass);color:var(--fg);border:1px solid var(--studio-shine);box-shadow:0 20px 70px #02081750;backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px)}
+body.yanbi .toast{background:var(--fg);color:var(--bg);box-shadow:0 10px 30px #1c2b462b}
+body.yanbi #tasks .task-filters{background:color-mix(in srgb,var(--bg) 84%,transparent);backdrop-filter:blur(12px);border-radius:16px}
+body.yanbi #tasks #task-account-status{background:var(--studio-glass)}
+body.yanbi #task-list .card{background:var(--studio-glass)}
+body.yanbi #settings .owner-credit{padding:15px 17px;border:1px solid color-mix(in srgb,var(--accent) 27%,var(--line));border-radius:18px;background:color-mix(in srgb,var(--accent) 8%,var(--studio-glass));font-size:13px;line-height:1.6}
+body.yanbi #settings .owner-credit strong{color:var(--accent);font-size:16px}
+body.yanbi .login-card{
+  position:relative;isolation:isolate;width:min(100%,450px);max-width:450px;
+  padding:36px clamp(22px,5vw,38px);border-radius:29px;
+  background:var(--studio-glass);border:1px solid var(--studio-shine);
+  outline:1px solid var(--line);box-shadow:0 30px 90px #142d4c24;
+  backdrop-filter:blur(26px);-webkit-backdrop-filter:blur(26px)
+}
+body.yanbi .login-card::before{content:"GLAZE  /  OWNER · YANBI";display:block;margin:0 0 17px;color:var(--accent);font-size:11px;font-weight:800;letter-spacing:.12em}
+body.yanbi .login-card .login-mark{width:64px;height:64px;display:block;object-fit:cover;margin:0 0 19px;border-radius:19px;box-shadow:0 8px 22px #12284c24;border:1px solid var(--studio-shine)}
+body.yanbi .login-card h1{font-size:clamp(26px,6vw,32px);margin:0 0 8px;color:var(--fg);letter-spacing:-.045em}
+body.yanbi .login-card p.sub{color:var(--muted);margin:0 0 24px;font-size:14px}
+body.yanbi .login-card label{color:var(--fg);font-size:13px}
+body.yanbi .login-card input[type=password]{width:100%;min-height:51px;padding:14px 15px;background:var(--studio-input);color:var(--fg);border:1px solid var(--line);border-radius:14px;font-size:16px}
+body.yanbi .login-card .btn{display:block;width:100%;min-height:52px;border-radius:14px;background:linear-gradient(120deg,var(--accent),var(--accent2));color:#fff;font-size:15px}
+body.yanbi .login-card .quick-link{color:var(--accent);margin-top:22px;font-weight:730;text-decoration:none}
+body.yanbi .login-card .err{border-radius:13px;padding:12px 14px;color:var(--danger);background:color-mix(in srgb,var(--danger) 8%,var(--studio-glass));border:1px solid color-mix(in srgb,var(--danger) 26%,var(--line))}
+@media(hover:hover){
+  body.yanbi button:hover{border-color:color-mix(in srgb,var(--accent) 32%,var(--line));box-shadow:0 8px 24px color-mix(in srgb,var(--accent) 10%,transparent)}
+  body.yanbi article:hover,body.yanbi .card:hover{border-color:color-mix(in srgb,var(--accent) 18%,var(--studio-shine))}
+}
+@media(prefers-reduced-motion:no-preference){
+  body.yanbi::before{animation:yanbi-ambient 23s ease-in-out infinite alternate}
+  body.yanbi .overview-heading::before{animation:yanbi-shine 12s ease-in-out infinite alternate}
+  body.yanbi #pages section[aria-hidden=false]>.eyebrow,body.yanbi #pages section[aria-hidden=false]>h1{animation:yanbi-reveal .38s cubic-bezier(.2,.8,.25,1) both}
+  body.yanbi #auth-gate,body.yanbi .login-card{animation:yanbi-reveal .48s cubic-bezier(.2,.8,.25,1) both}
+  body.yanbi #music-tracks .music-track{animation:yanbi-reveal .3s ease-out both}
+}
+@keyframes yanbi-ambient{from{transform:translate3d(-2%,-1%,0) scale(1)}to{transform:translate3d(2%,2%,0) scale(1.07)}}
+@keyframes yanbi-shine{from{transform:translateX(-8%) scale(1)}to{transform:translateX(8%) scale(1.13)}}
+@keyframes yanbi-reveal{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:520px){
+ body.yanbi header{padding:11px 14px}
+ body.yanbi .brand img{width:40px;height:40px;border-radius:13px}
+ body.yanbi .brand{font-size:15px}
+ body.yanbi .brand small{font-size:10px}
+ body.yanbi .brand-owner{font-size:9px;padding:2px 7px}
+ body.yanbi #connection{max-width:104px;font-size:9px}
+ body.yanbi #pages section{padding:16px 15px 35px}
+ body.yanbi #auth-gate{margin-top:clamp(26px,7vh,70px)}
+ body.yanbi #home .overview-heading{padding:21px 17px}
+ body.yanbi #bottom{width:calc(100% - 24px)}
+ body.yanbi #music-tracks .track-open{font-size:11px;padding:9px}
+ body.yanbi #music .music-actions{grid-template-columns:minmax(0,1fr)}
+ body.yanbi #music .music-actions>*{min-height:46px}
+}
+@media(max-width:350px){
+ body.yanbi #bottom .nav-caption{font-size:9px}
+ body.yanbi #bottom,body.yanbi #bottom.bottom-nav{width:calc(100% - 12px)}
+ body.yanbi #quick-actions{gap:7px}
+ body.yanbi #music-tracks .track-open{font-size:10px}
+}
+@media(prefers-reduced-motion:reduce){
+ body.yanbi::before,body.yanbi *::before{animation:none!important}
+ body.yanbi #pages{scroll-behavior:auto}
+ body.yanbi button,body.yanbi .bottom-icon{transition:none!important}
 }
