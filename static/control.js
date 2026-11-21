@@ -553,43 +553,121 @@
  async function refresh(){
   if(terminalAuth)return;
   if(refreshing)return refreshing;
-  const controller=new AbortController();refreshController=controller;const options={signal:controller.signal};
+  const controller=new AbortController();
+  refreshController=controller;
+  const options={signal:controller.signal};
   const operation=(async()=>{
-   const viewer=await api('session',undefined,options);csrfToken=viewer.csrf_token||'';
+   // Authentication is independent of optional telemetry, storage and task endpoints.
+   const viewer=await api('session',undefined,options);
+   sessionValidated=true;
+   csrfToken=viewer.csrf_token||'';
+   hideAuthGate();
+   setConnection('AUTHENTICATED');
+   if(!legacyTelemetry)legacyTelemetry={running_tasks:0,ram_mb:'—',tasks:[]};
+   paintMetrics();
+   $('updated').textContent='Đã xác thực · đang cập nhật dữ liệu…';
+   const warnings=[];
+   const jobs=[];
    if(viewer.role==='admin'){
-    const [links,t,a,f,c]=await Promise.all([api('credential_links',undefined,options),api('telemetry',undefined,options),api('accounts',undefined,options),api('files',undefined,options),api('commands',undefined,options)]);
-    identities=links.links;renderCredentialLinks();
-    accounts=a.accounts;legacyTelemetry=t;renderLaunchAccounts();renderTaskAccounts();
-    $('storage').textContent='Kho: '+t.storage_id;
-    $('selected-files').textContent=`Nhây: ${f.selected_nhay||'—'} · Ngôn: ${f.selected_ngon||'—'}`;
-    $('file-list').replaceChildren(...['nhay','ngon'].map(target=>{
-      const title=target==='nhay'?'KHO NHÂY · từng dòng (.n)':'KHO NGÔN · nguyên đoạn (.g)';
-      const box=element('article',undefined,'file-category');
-      box.append(element('h2',title));
-      const subset=f.files.filter(file=>file.file_type===target);
-      if(!subset.length)box.append(element('p','Chưa có file thuộc loại này.'));
-      for(const file of subset){
-       const card=row(file.filename,(file.lines||0)+' dòng · '+(file.size_kb||0)+' KB');
-       if(file.filename===(target==='nhay'?f.selected_nhay:f.selected_ngon))
-        card.append(element('small','✓ Đang chọn'));
-       else card.append(button('Dùng cho '+(target==='nhay'?'Nhây':'Ngôn'),async()=>{
-        await api('select_file',{filename:file.filename,target});await refresh();
-       },'primary'));
-       box.append(card);
-      }
-      return box;
-    }));
-    $('zalo-commands').replaceChildren(...c.commands.filter(x=>x.platforms.includes('zalo')).map(x=>row(x.usage,x.description)));
-    $('legacy-tasks').replaceChildren(...t.tasks.map(task=>{const r=row(task.name,`${task.status} · ${task.target_label}`);if(task.can_stop)r.append(button('Dừng',async()=>{await api('stop_task',{task_id:task.id});await refresh();}));return r;}));
+    jobs.push({
+     name:'Liên kết tài khoản',load:()=>api('credential_links',undefined,options),
+     use:r=>{identities=Array.isArray(r.links)?r.links:[];renderCredentialLinks();}
+    });
+    jobs.push({
+     name:'Trạng thái xử lý',load:()=>api('telemetry',undefined,options),
+     use:r=>{
+      legacyTelemetry=r;
+      $('storage').textContent='Kho: '+(r.storage_id||'Chưa có dữ liệu');
+      $('legacy-tasks').replaceChildren(...(r.tasks||[]).map(task=>{
+       const card=row(task.name,(task.status||'')+' · '+(task.target_label||''));
+       if(task.can_stop)card.append(button('Dừng',async()=>{
+        await api('stop_task',{task_id:task.id});await refresh();
+       }));
+       return card;
+      }));
+     }
+    });
+    jobs.push({
+     name:'Tài khoản',load:()=>api('accounts',undefined,options),
+     use:r=>{
+      accounts=Array.isArray(r.accounts)?r.accounts:[];
+      renderLaunchAccounts();renderTaskAccounts();renderAccounts();
+     }
+    });
+    jobs.push({
+     name:'Kho tệp',load:()=>api('files',undefined,options),
+     use:r=>{
+      $('selected-files').textContent='Nhây: '+(r.selected_nhay||'—')+' · Ngôn: '+(r.selected_ngon||'—');
+      $('file-list').replaceChildren(...['nhay','ngon'].map(target=>{
+       const title=target==='nhay'?'KHO NHÂY · từng dòng (.n)':'KHO NGÔN · nguyên đoạn (.g)';
+       const box=element('article',undefined,'file-category');
+       box.append(element('h2',title));
+       const subset=(r.files||[]).filter(file=>file.file_type===target);
+       if(!subset.length)box.append(element('p','Chưa có file thuộc loại này.'));
+       for(const file of subset){
+        const card=row(file.filename,(file.lines||0)+' dòng · '+(file.size_kb||0)+' KB');
+        if(file.filename===(target==='nhay'?r.selected_nhay:r.selected_ngon))card.append(element('small','✓ Đang chọn'));
+        else card.append(button('Dùng cho '+(target==='nhay'?'Nhây':'Ngôn'),async()=>{
+         await api('select_file',{filename:file.filename,target});await refresh();
+        },'primary'));
+        box.append(card);
+       }
+       return box;
+      }));
+     }
+    });
+    jobs.push({
+     name:'Danh sách lệnh',load:()=>api('commands',undefined,options),
+     use:r=>{
+      $('zalo-commands').replaceChildren(...(r.commands||[]).filter(x=>(x.platforms||[]).includes('zalo')).map(x=>row(x.usage,x.description)));
+     }
+    });
    }else{
-    identities=[];renderCredentialLinks();accounts=[];legacyTelemetry={running_tasks:0,ram_mb:'—'};renderTaskAccounts();
-    if(!$('member-notice')){const notice=element('article','Tài khoản Zalo và tệp hiện do quản trị viên chính điều khiển. Discord và task trong trang này chỉ hiển thị dữ liệu của bạn.');notice.id='member-notice';$('zalo').replaceChildren(notice);$('discord-credential-form').hidden=true;$('facebook-credential-form').hidden=true;$('stop-all').hidden=true;}
+    identities=[];renderCredentialLinks();accounts=[];renderTaskAccounts();
+    if(!$('member-notice')){
+     const notice=element('article','Tài khoản Zalo và tệp hiện do quản trị viên chính điều khiển. Discord và task chỉ hiển thị dữ liệu của bạn.');
+     notice.id='member-notice';$('zalo').replaceChildren(notice);
+     $('discord-credential-form').hidden=true;$('facebook-credential-form').hidden=true;$('stop-all').hidden=true;
+    }
    }
-   await Promise.all([refreshControl(options),refreshRegistry(options)]);renderAccounts();paintMetrics();hideAuthGate();lastFullSync=Date.now();
-   $('updated').textContent='Đồng bộ: '+new Date().toLocaleTimeString();
-   $('error').hidden=true;if(streamConnected)setConnection('CONNECTED');
+   jobs.push({name:'Tổng quan',load:()=>refreshControl(options),use:()=>{}});
+   // Every independent service settles without blocking authenticated UI.
+   const results=await Promise.allSettled(jobs.map(job=>job.load()));
+   for(let i=0;i<jobs.length;i++){
+    const result=results[i];
+    if(result.status==='rejected'&&result.reason?.status===401)throw result.reason;
+    if(result.status==='fulfilled'){
+     try{jobs[i].use(result.value);}
+     catch(error){warnings.push(jobs[i].name);console.warn('GLAZE render issue:',jobs[i].name,error?.name||'Error');}
+    }else warnings.push(jobs[i].name);
+   }
+   try{await refreshRegistry(options);}
+   catch(error){
+    if(error?.status===401)throw error;
+    warnings.push('Tác vụ');
+   }
+   renderAccounts();paintMetrics();
+   lastFullSync=Date.now();
+   $('updated').textContent='Đã xác thực · cập nhật '+new Date().toLocaleTimeString();
+   if(warnings.length){
+    $('error').hidden=false;
+    $('error').textContent='Tạm chưa tải được: '+warnings.join(', ')+'. Các phần khác vẫn có thể sử dụng. Bấm làm mới để thử lại.';
+    setConnection('PARTIAL');
+   }else{
+    $('error').hidden=true;
+    $('error').textContent='';
+    setConnection('CONNECTED');
+   }
   })();
-  refreshing=operation.catch(error=>{if(error?.name!=='AbortError'){controller.abort();failed(error);}}).finally(()=>{if(refreshController===controller)refreshController=null;refreshing=null;});
+  refreshing=operation.catch(error=>{
+   if(error?.name!=='AbortError'){
+    controller.abort();
+    failed(error,sessionValidated?'PARTIAL':'DISCONNECTED');
+   }
+  }).finally(()=>{
+   if(refreshController===controller)refreshController=null;
+   refreshing=null;
+  });
   return refreshing;
  }
  function form(id,path,extra={},after){$(id).onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');try{const body={...Object.fromEntries(new FormData(form)),...extra};const result=await api(path,body);after?.(result);toast('Đã lưu trên máy chủ');await refresh();}catch(e){failed(e);}finally{submit.disabled=false;submit.removeAttribute('aria-busy');}};}
@@ -660,10 +738,10 @@
  $('stop-all-zalo').onclick=()=>confirmAction('Dừng tác vụ trên mọi tài khoản Zalo?',()=>api('quick_action',{action:'stop_all'}));
  $('refresh').onclick=refresh;
  function reconnectDelay(){const exponential=Math.min(STREAM_MAX_DELAY_MS,STREAM_BASE_DELAY_MS*2**Math.min(reconnectAttempt,6));reconnectAttempt=Math.min(reconnectAttempt+1,10);return Math.round(exponential*(1-STREAM_JITTER+Math.random()*STREAM_JITTER*2));}
- function scheduleReconnect(generation,delay){if(terminalAuth||document.hidden||navigator.onLine===false||generation!==streamGeneration)return;clearTimeout(reconnectTimer);const wait=delay===undefined?Math.max(reconnectDelay(),retryAfterDelay):delay;retryAfterDelay=0;setConnection('RECONNECTING');reconnectTimer=setTimeout(connect,wait);}
+ function scheduleReconnect(generation,delay){if(terminalAuth||document.hidden||navigator.onLine===false||generation!==streamGeneration)return;clearTimeout(reconnectTimer);const wait=delay===undefined?Math.max(reconnectDelay(),retryAfterDelay):delay;retryAfterDelay=0;if(!sessionValidated)setConnection('RECONNECTING');reconnectTimer=setTimeout(connect,wait);}
  async function connect(){
   if(terminalAuth||document.hidden||navigator.onLine===false)return;
-  clearTimeout(reconnectTimer);const generation=++streamGeneration;stream?.abort();stream=new AbortController();streamConnected=false;setConnection(reconnectAttempt?'RECONNECTING':'CONNECTING');
+  clearTimeout(reconnectTimer);const generation=++streamGeneration;stream?.abort();stream=new AbortController();streamConnected=false;if(!sessionValidated)setConnection(reconnectAttempt?'RECONNECTING':'CONNECTING');
   let received=false,retryError,handshakeTimedOut=false,handshakeTimer;
   try{
    const r=await fetch('/api/miniapp/events?cursor='+cursor,{headers:{'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId('sse')},signal:stream.signal,cache:'no-store'});
@@ -683,12 +761,12 @@
      if(line){const snapshot=JSON.parse(line.slice(6));renderControl(snapshot);received=true;streamConnected=true;reconnectAttempt=0;$('error').hidden=true;setConnection('CONNECTED');}
     }
    }
-   if(generation===streamGeneration){streamConnected=false;setConnection('DEGRADED');}
+   if(generation===streamGeneration){streamConnected=false;setConnection(sessionValidated?'PARTIAL':'DEGRADED');}
   }catch(e){if(e.name!=='AbortError'&&generation===streamGeneration){streamConnected=false;failed(e,'DEGRADED');}}
   finally{if(!terminalAuth&&!document.hidden&&navigator.onLine!==false&&generation===streamGeneration){if(!received)streamConnected=false;scheduleReconnect(generation);}}
  }
- function checkStreamHealth(){if(document.hidden||navigator.onLine===false||!stream||stream.signal.aborted||!lastStreamAt)return;if(Date.now()-lastStreamAt>STREAM_STALE_MS){streamConnected=false;setConnection('DEGRADED');stream.abort();}}
- document.addEventListener('visibilitychange',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();if(document.hidden){streamConnected=false;return;}reconnectAttempt=0;lastStreamAt=0;setConnection('CONNECTING');if(!terminalAuth)refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
+ function checkStreamHealth(){if(document.hidden||navigator.onLine===false||!stream||stream.signal.aborted||!lastStreamAt)return;if(Date.now()-lastStreamAt>STREAM_STALE_MS){streamConnected=false;setConnection(sessionValidated?'PARTIAL':'DEGRADED');stream.abort();}}
+ document.addEventListener('visibilitychange',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();if(document.hidden){streamConnected=false;return;}reconnectAttempt=0;lastStreamAt=0;setConnection(sessionValidated?'PARTIAL':'CONNECTING');if(!terminalAuth)refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
  window.addEventListener('offline',()=>{clearTimeout(reconnectTimer);streamGeneration++;stream?.abort();refreshController?.abort();streamConnected=false;setConnection('DISCONNECTED');});
  window.addEventListener('online',()=>{if(document.hidden)return;reconnectAttempt=0;setConnection('CONNECTING');refresh().finally(()=>scheduleReconnect(streamGeneration,100));});
  setInterval(()=>{if(!terminalAuth&&!document.hidden&&navigator.onLine!==false&&Date.now()-lastFullSync>=60000)refresh();},15000);
