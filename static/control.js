@@ -318,6 +318,33 @@
  initKineticSections();
  animationHooksReady=true;
  select('home');
+ // Small, noninteractive spark/flower burst at the selected tab; never touches QR or forms.
+ const tapShapes=['✿','✧','❀','✦','✿'];
+ function flowerTap(button){
+  if(!motionEnabled()||!button||document.body.classList.contains('auth-locked'))return;
+  const rect=button.getBoundingClientRect();
+  if(rect.width<=0||rect.height<=0)return;
+  const burst=element('span',undefined,'glaze-tap-garden');
+  burst.setAttribute('aria-hidden','true');
+  burst.style.setProperty('--tap-x',(rect.left+rect.width/2)+'px');
+  burst.style.setProperty('--tap-y',(rect.top+Math.min(17,rect.height/3))+'px');
+  for(let i=0;i<tapShapes.length;i++){
+   const petal=element('span',tapShapes[i],'glaze-tap-petal');
+   petal.style.setProperty('--tap-i',String(i));
+   petal.style.setProperty('--tap-dx',(i-2)*23+'px');
+   petal.style.setProperty('--tap-dy',(-19-Math.abs(i-2)*13)+'px');
+   petal.style.setProperty('--tap-rotate',((i-2)*65)+'deg');
+   burst.append(petal);
+  }
+  document.body.append(burst);
+  setTimeout(()=>burst.remove(),1300);
+ }
+ for(const group of [$('bottom'),$('more-menu')]){
+  group?.addEventListener('click',event=>{
+   const button=event.target.closest('button');
+   if(button&&group.contains(button))flowerTap(button);
+  });
+ }
  let sheetReturnFocus;
  function sheet(title,content,actions=[]){sheetReturnFocus=document.activeElement;$('sheet-title').textContent=title;$('sheet-content').replaceChildren(typeof content==='string'?element('p',content):content);$('sheet-actions').replaceChildren(...actions);$('sheet').showModal();$('sheet-close').focus();}
  function closeSheet(){if($('sheet').open)$('sheet').close();sheetReturnFocus?.focus?.();sheetReturnFocus=null;}
