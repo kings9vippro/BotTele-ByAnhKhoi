@@ -8,6 +8,10 @@
  let tg, active='home', data={}, accounts=[], identities=[], eventRows=[], cursor=0, stream, refreshing, refreshController, toastTimer, streamGeneration=0, legacyTelemetry, reconnectTimer, reconnectAttempt=0, lastStreamAt=0, streamConnected=false, requestSequence=0, terminalAuth=false, retryAfterDelay=0, csrfToken='';
  const names={home:'Tổng quan',accounts:'Tài khoản',discord:'Discord',zalo:'Zalo',tasks:'Task',activity:'Nhật ký',music:'Âm nhạc',settings:'Cài đặt'};
  const keys=Object.keys(names), pages=$('pages');
+ const oauthViews={
+  discord:{button:'discord-login',link:'oauth-link',status:'oauth-status',label:'Discord'},
+  facebook:{button:'facebook-login',link:'facebook-oauth-link',status:'facebook-oauth-status',label:'Facebook'}
+ };
  const element=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  function showAuthGate(state,reason){
   const card=$('auth-gate');if(!card)return;
@@ -482,9 +486,13 @@
     if(!$('member-notice')){const notice=element('article','Tài khoản Zalo và tệp hiện do quản trị viên chính điều khiển. Discord và task trong trang này chỉ hiển thị dữ liệu của bạn.');notice.id='member-notice';$('zalo').replaceChildren(notice);$('oauth-form').closest('article').hidden=true;$('stop-all').hidden=true;}
    }
    await Promise.all([refreshControl(options),refreshRegistry(options)]);renderAccounts();paintMetrics();hideAuthGate();lastFullSync=Date.now();
-   const discordProvider=p.providers.find(x=>x.id==='discord'),facebookProvider=p.providers.find(x=>x.id==='facebook');
-   $('oauth-status').textContent=discordProvider?.configured?'Discord OAuth đã cấu hình':'Cần cấu hình ứng dụng Discord';
-   $('facebook-oauth-status').textContent=facebookProvider?.configured?'Facebook Login đã cấu hình':'Cần cấu hình ứng dụng Facebook';
+   for(const [provider,view] of Object.entries(oauthViews)){
+    const config=p.providers.find(item=>item.id===provider);
+    const connected=identities.filter(item=>item.provider===provider).length;
+    $(view.status).textContent=config?.configured
+     ? (connected?connected+' tài khoản đã kết nối':'Sẵn sàng kết nối '+view.label)
+     : 'Cần cấu hình ứng dụng '+view.label;
+   }
    $('updated').textContent='Đồng bộ: '+new Date().toLocaleTimeString();
    $('error').hidden=true;if(streamConnected)setConnection('CONNECTED');
   })();
@@ -495,8 +503,33 @@
  form('channel-form','channels',{},()=>$('channel-form').reset());form('zalo-form','add_cookie',{},()=>$('zalo-form').reset());form('file-form','add_file');form('oauth-form','oauth/configure',{},r=>{$('oauth-config-result').textContent='Đăng ký Redirect URI: '+r.redirect_uri;$('oauth-form').elements.client_secret.value='';});
  $('upload-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');if(b.disabled)return;b.disabled=true;try{await uploadFile(e.currentTarget);toast('Đã tải tệp lên');await refresh();}catch(error){failed(error);}finally{b.disabled=false;}};
  $('send-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;try{await api('notifications',{channels:[...$('channel-options').querySelectorAll(':checked')].map(x=>x.value),content:e.currentTarget.elements.content.value});toast('Đã đưa vào hàng chờ');await refreshControl();}catch(e){failed(e);}finally{b.disabled=false;}};
- $('discord-login').onclick=async()=>{try{const r=await api('oauth/start',{provider:'discord'});$('oauth-link').href=r.url;$('oauth-link').hidden=false;if(tg?.openLink)tg.openLink(r.url);}catch(e){failed(e);}};
- $('facebook-login').onclick=async()=>{try{const r=await api('oauth/start',{provider:'facebook'});$('facebook-oauth-link').href=r.url;$('facebook-oauth-link').hidden=false;if(tg?.openLink)tg.openLink(r.url);else location.assign(r.url);}catch(e){failed(e);}};
+ for(const [provider,view] of Object.entries(oauthViews)){
+  const trigger=$(view.button),link=$(view.link),status=$(view.status);
+  trigger.onclick=async()=>{
+   trigger.disabled=true;
+   trigger.setAttribute('aria-busy','true');
+   link.hidden=true;
+   link.removeAttribute('href');
+   status.textContent='Đang tạo phiên kết nối '+view.label+'…';
+   try{
+    const result=await api('oauth/start',{provider});
+    if(tg?.initData&&tg.openLink){
+     link.href=result.url;
+     link.hidden=false;
+     status.textContent='Hoàn tất trên '+view.label+', rồi quay lại GLAZE.';
+     tg.openLink(result.url);
+    }else{
+     location.assign(result.url);
+    }
+   }catch(error){
+    if(error.status===401||error.status===403)failed(error);
+    status.textContent=error.message;
+   }finally{
+    trigger.disabled=false;
+    trigger.removeAttribute('aria-busy');
+   }
+  };
+ }
  function renderQrReceipt(status){
   let holder=$('qr-receipt');
   if(!holder){holder=element('div',undefined,'qr-receipt');holder.id='qr-receipt';$('qr-status').after(holder);}
@@ -615,7 +648,10 @@
      initTelegram();
    }
    await refresh();
-   if(!terminalAuth)scheduleReconnect(streamGeneration,100);
+   if(!terminalAuth){
+    if(location.hash==='#accounts')go('accounts');
+    scheduleReconnect(streamGeneration,100);
+   }
  }
  bootstrap();
 })();

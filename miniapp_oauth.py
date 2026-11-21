@@ -280,7 +280,7 @@ def register_oauth_routes(app, db, owner_id):
         body = render_template_string("""<!doctype html><html lang="vi"><meta charset="utf-8">
         <meta name="viewport" content="width=device-width,initial-scale=1"><title>Kết nối GLAZE</title>
         <body style="background:#101a24;color:#edf6ff;font:16px/1.7 system-ui;padding:12vh 8vw;max-width:600px;margin:auto">
-        <h1>Kết nối GLAZE</h1><p>{{ message }}</p><p>Bạn có thể đóng trang này và trở lại Mini App → Tài khoản → Đồng bộ.</p></body></html>""", message=message)
+        <h1>Kết nối GLAZE</h1><p>{{ message }}</p><p>Nếu mở từ Telegram, quay lại Mini App để đồng bộ.</p><a href="/miniapp#accounts" style="color:#8ce7d7">Mở tài khoản GLAZE</a></body></html>""", message=message)
         return Response(body, status=status, mimetype="text/html", headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
     @app.get("/api/miniapp/oauth/providers")
