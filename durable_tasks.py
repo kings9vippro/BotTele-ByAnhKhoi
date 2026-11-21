@@ -61,14 +61,29 @@ class TaskQueue:
         CREATE TABLE IF NOT EXISTS notification_events (
           seq INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, task TEXT NOT NULL,
           status TEXT NOT NULL, at REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS notification_owner_status ON notification_tasks(owner,status);
+        CREATE INDEX IF NOT EXISTS notification_channel_status ON notification_tasks(channel,status,due);
+        CREATE INDEX IF NOT EXISTS notification_event_owner ON notification_events(owner,seq);
+        CREATE INDEX IF NOT EXISTS notification_terminal_history ON notification_tasks(updated DESC,id DESC)
+          WHERE status IN ('COMPLETED','CANCELLED','FAILED','UNKNOWN');
         CREATE TABLE IF NOT EXISTS notification_limits(name TEXT PRIMARY KEY, until REAL NOT NULL);
         ''')
             # Only safe before worker startup; enforce one application worker.
             if recover_inflight:
                 c.execute("UPDATE notification_tasks SET status='UNKNOWN', error='Restart during request; reconcile before retry', updated=? WHERE status IN ('RUNNING','CANCELLING')", (time.time(),))
+            if recover_inflight:
+                self._prune_history(c)
             c.commit()
         finally:
             c.close()
+
+    def _prune_history(self, c):
+        c.execute("""DELETE FROM notification_tasks WHERE id IN (
+            SELECT id FROM notification_tasks
+            WHERE status IN ('COMPLETED','CANCELLED','FAILED','UNKNOWN')
+            ORDER BY updated DESC,id DESC LIMIT -1 OFFSET 2000
+        )""")
+        c.execute('DELETE FROM notification_limits WHERE until<=?', (time.time(),))
 
     def _event(self, c, row, status):
         c.execute('INSERT INTO notification_events(owner,task,status,at) VALUES(?,?,?,?)', (row['owner'], row['id'], status, time.time()))
@@ -95,7 +110,6 @@ class TaskQueue:
                 c.execute('INSERT INTO notification_tasks(id,owner,channel,payload,status,created,updated) VALUES(?,?,?,?,?,?,?)', (task_id, str(owner), str(channel), json.dumps({'content': content}), 'QUEUED', now, now))
                 self._event(c, {'owner': str(owner), 'id': task_id}, 'QUEUED')
                 ids.append(task_id)
-            c.execute("DELETE FROM notification_tasks WHERE id IN (SELECT id FROM notification_tasks WHERE status IN ('COMPLETED','CANCELLED') ORDER BY created DESC LIMIT -1 OFFSET 2000)")
             c.commit()
         finally:
             c.rollback()
@@ -144,6 +158,8 @@ class TaskQueue:
                 now = time.time()
                 c.execute('UPDATE notification_tasks SET status=?,updated=?,completed=? WHERE id=?', (status,now,now if status=='CANCELLED' else None,row['id']))
                 self._event(c,row,status)
+            if rows:
+                self._prune_history(c)
             c.commit()
             return len(rows)
         finally:
@@ -172,6 +188,8 @@ class TaskQueue:
             now = time.time()
             c.execute('UPDATE notification_tasks SET status=?, updated=?, completed=?, error=\'\' WHERE id=?', (status, now, now if status=='CANCELLED' else None, task_id))
             self._event(c, row, status)
+            if status == 'CANCELLED':
+                self._prune_history(c)
             c.commit()
         finally:
             c.rollback()
@@ -261,6 +279,8 @@ class TaskQueue:
                 # An accepted request remains COMPLETED even if stop raced it.
                 c.execute('UPDATE notification_tasks SET status=?,error=?,due=?,updated=?,completed=?,latency=? WHERE id=?', (final_status,error,due,time.time(),time.time() if final_status != 'RETRYING' else None,time.monotonic()-started,row['id']))
                 self._event(c, row, final_status)
+                if final_status != 'RETRYING':
+                    self._prune_history(c)
                 c.commit()
                 break
             except sqlite3.Error:

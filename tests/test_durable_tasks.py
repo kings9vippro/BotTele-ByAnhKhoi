@@ -22,6 +22,24 @@ class DurableTaskTests(unittest.TestCase):
         c.execute('PRAGMA journal_mode=WAL')
         return c
 
+    def test_retention_keeps_recent_failures_and_preserves_active_tasks(self):
+        active = self.queue.submit("a", "c", "pending")
+        with self.db() as connection:
+            connection.executemany(
+                "INSERT INTO notification_tasks(id,owner,channel,payload,status,created,updated) "
+                "VALUES (?, 'a', 'c', '{}', 'FAILED', 0, ?)",
+                [(f"old-{i}", i) for i in range(2001)],
+            )
+        restored = TaskQueue(self.db, self.queue.sender)
+        self.addCleanup(restored.close)
+        with self.db() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM notification_tasks WHERE status='FAILED'"
+            ).fetchone()[0], 2000)
+        self.assertIsNone(restored.owner_of_task("old-0"))
+        self.assertEqual(restored.owner_of_task("old-2000"), "a")
+        self.assertEqual(restored.owner_of_task(active), "a")
+
     def test_pause_resume_cancel_and_owner_isolation(self):
         task=self.queue.submit('a','c','hello')
         with self.assertRaises(ValueError): self.queue.control('b',task,'stop')

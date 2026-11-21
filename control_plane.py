@@ -10,7 +10,7 @@ import time
 
 import requests
 from cryptography.fernet import Fernet
-from flask import Response, jsonify, request, stream_with_context
+from flask import Response, g, has_request_context, jsonify, request, stream_with_context
 from durable_tasks import TaskQueue, RetryAfter, UncertainDelivery
 
 COMMANDS = {
@@ -159,7 +159,13 @@ def register(app, db, owner):
 
     app.extensions['control_snapshot'] = snapshot
 
+    def is_web_admin(principal):
+        return (has_request_context() and getattr(g, 'miniapp_auth_mode', None) == 'web_session'
+                and str(principal) == getattr(g, 'miniapp_owner', None))
+
     def is_root(principal):
+        if is_web_admin(principal):
+            return True
         return bool(os.environ.get('TELEGRAM_ADMIN_ID')) and str(principal) == str(os.environ['TELEGRAM_ADMIN_ID'])
 
     def controlled_owner(principal, task_id):
@@ -204,11 +210,17 @@ def register(app, db, owner):
         principal = str(owner())
         account_id = str(request.args.get('account_id') or '').strip()
         if account_id:
-            from get_ck_im_zalo import get_user_visible_accounts
-            allowed = {str(a['id']) for a in get_user_visible_accounts(
-                principal, enabled_only=False, platform='zalo', strict=True)}
-            if not account_id.isdigit() or account_id not in allowed or principal != str(os.environ.get('TELEGRAM_ADMIN_ID') or ''):
-                return jsonify(ok=False, error='Tài khoản Zalo không được cấp quyền.'), 403
+            denied = jsonify(ok=False, error='Tài khoản Zalo không được cấp quyền.')
+            if not re.fullmatch(r'[0-9]{1,19}', account_id) or not is_root(principal):
+                return denied, 403
+            if is_web_admin(principal) and principal != os.environ.get('TELEGRAM_ADMIN_ID'):
+                import app as runtime
+                accounts = runtime.get_all_accounts_from_ram(platform='zalo')
+            else:
+                from get_ck_im_zalo import get_user_visible_accounts
+                accounts = get_user_visible_accounts(principal, enabled_only=False, platform='zalo', strict=True)
+            if not any(str(account['id']) == account_id for account in accounts):
+                return denied, 403
         return jsonify(ok=True, owner=principal, account_id=account_id or None,
                        tasks=unified_tasks(principal, account_id=account_id if account_id else None))
 
@@ -312,8 +324,9 @@ def register(app, db, owner):
             c.close()
         return jsonify(ok=True)
 
-    # Gunicorn runs 16 request threads; reserve half for commands and mutations.
-    streams = threading.BoundedSemaphore(8)
+    # Keep at least half the request threads available for short requests.
+    request_threads = max(4, min(32, int(os.environ.get('GUNICORN_THREADS', '16'))))
+    streams = threading.BoundedSemaphore(min(8, request_threads // 2))
     app.extensions['miniapp_sse_streams'] = streams
     @app.get('/api/miniapp/events')
     def events():

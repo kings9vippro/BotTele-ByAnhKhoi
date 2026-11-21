@@ -1,5 +1,7 @@
 """Shared storage configuration. Author: Dev Anh Khôi. Version: 1.3.0."""
+import errno
 import os
+import shutil
 import sqlite3
 import tempfile
 import threading
@@ -11,6 +13,17 @@ DATA_DIR = os.path.abspath(os.environ.get("APP_DATA_DIR") or BASE_DIR)
 DATABASE_PATH = os.path.abspath(os.environ.get("DATABASE_PATH") or os.path.join(DATA_DIR, "database.db"))
 UPLOAD_PATH = os.path.join(DATA_DIR, "uploads")
 FILE_WRITE_LOCK = threading.RLock()
+
+
+def ensure_telegram_acl_schema(conn):
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS tg_authorized_users (
+            uid TEXT PRIMARY KEY,
+            name TEXT,
+            role TEXT DEFAULT 'VIP',
+            added_at INTEGER
+        )"""
+    )
 
 
 def storage_identity(connection):
@@ -74,6 +87,9 @@ def save_text_file(connection_factory, folder, filename, content, file_type):
         raise ValueError("Không ghi đè liên kết tệp")
     line_count = len(content.splitlines())
     with FILE_WRITE_LOCK:
+        # Keep space for SQLite/WAL and atomic file replacement on shared disks.
+        if shutil.disk_usage(folder).free < len(content) + 32 * 1024 * 1024:
+            raise OSError(errno.ENOSPC, "Không đủ dung lượng dự phòng để lưu tệp")
         previous = None
         previous_ready = False
         temporary = None

@@ -29,6 +29,7 @@ except ImportError:
     sys.modules["zalo_login"] = _zl_mod
 
 import os
+import errno
 import gc
 import re
 import ssl
@@ -55,7 +56,7 @@ from functools import wraps
 from urllib.parse import urlparse, unquote
 
 import requests
-from app_storage import DATABASE_PATH, UPLOAD_PATH, FILE_WRITE_LOCK, connect_database, normalize_file_index, save_text_file, storage_identity
+from app_storage import ensure_telegram_acl_schema, DATABASE_PATH, UPLOAD_PATH, FILE_WRITE_LOCK, connect_database, normalize_file_index, save_text_file, storage_identity
 from miniapp_oauth import (
     TelegramInitDataError,
     init_oauth_tables,
@@ -592,6 +593,7 @@ def init_db():
     cur = conn.cursor()
     init_oauth_tables(conn)
     init_official_tables(conn)
+    ensure_telegram_acl_schema(conn)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
@@ -16611,6 +16613,10 @@ def api_upload_proxies_file():
 @app.errorhandler(Exception)
 def handle_unexpected_error(error):
     from werkzeug.exceptions import HTTPException
+    if isinstance(error, OSError) and error.errno in (errno.ENOSPC, errno.EDQUOT):
+        if request.path.startswith(("/api/", "/task/", "/integrations/")):
+            return jsonify(ok=False, code="storage_full", error="Kho lưu trữ thiếu dung lượng dự phòng."), 507
+        return Response("Kho lưu trữ thiếu dung lượng dự phòng.", status=507, mimetype="text/plain")
     if isinstance(error, HTTPException):
         if request.path.startswith(("/api/", "/task/", "/integrations/")):
             return jsonify({"ok": False, "error": error.description}), error.code

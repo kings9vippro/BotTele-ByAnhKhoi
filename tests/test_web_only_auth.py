@@ -26,6 +26,23 @@ class WebOnlyAuthTests(unittest.TestCase):
         self.assertEqual(response.json["auth_mode"], "web_session")
         self.assertTrue(response.json["csrf_token"])
 
+    def test_web_session_filters_tasks_by_zalo_account_without_telegram(self):
+        with self.client.session_transaction() as browser_session:
+            browser_session["logged_in"] = True
+        accounts = [{"id": 7}, {"id": 8}]
+        tasks = [
+            {"id": "task-7", "status": "running", "account_ids": [7]},
+            {"id": "task-8", "status": "running", "account_ids": [8]},
+        ]
+        with patch.dict(os.environ, {"TELEGRAM_ADMIN_ID": "", "ADMIN_PRINCIPAL_ID": "web-owner"}), \
+                patch.object(app, "get_all_accounts_from_ram", return_value=accounts), \
+                patch.object(app, "task_snapshots", return_value=tasks):
+            response = self.client.get("/api/miniapp/task_registry?account_id=7")
+            denied = self.client.get("/api/miniapp/task_registry?account_id=9")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([task["id"] for task in response.json["tasks"]], ["legacy:task-7"])
+        self.assertEqual(denied.status_code, 403)
+
     def test_production_web_session_requires_csrf_for_mutation(self):
         with patch.dict(os.environ, {"REQUIRE_WEB_CSRF": "1"}):
             with self.client.session_transaction() as browser_session:

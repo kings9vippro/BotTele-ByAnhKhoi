@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from urllib.parse import urlencode
 import requests
-from app_storage import DATABASE_PATH, UPLOAD_PATH, connect_database, storage_identity, account_receipt
+from app_storage import ensure_telegram_acl_schema, DATABASE_PATH, UPLOAD_PATH, connect_database, storage_identity, account_receipt
 from requests.adapters import HTTPAdapter
 
 try:
@@ -336,14 +336,7 @@ def _ensure_auth_tables(conn):
             added_at INTEGER
         )"""
     )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS tg_authorized_users (
-            uid TEXT PRIMARY KEY,
-            name TEXT,
-            role TEXT DEFAULT 'VIP',
-            added_at INTEGER
-        )"""
-    )
+    ensure_telegram_acl_schema(conn)
     # Luôn đảm bảo Root Admin 8827605973 có mặt trong bảng phân quyền
     conn.execute(
         "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('tg_owner_id', ?)",
