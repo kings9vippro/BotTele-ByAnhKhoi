@@ -901,7 +901,7 @@ def _miniapp_task_registry(owner):
     """
     principal = str(owner or "")
     admin = principal == admin_principal_id()
-    accounts = refresh_accounts_ram_cache(strict=True) if admin else []
+    accounts = get_all_accounts_from_ram() if admin else []
     return unified_task_snapshots(
         ACTIVE_TASKS,
         TASKS_RAM_STORE,
@@ -936,6 +936,7 @@ app.extensions["task_registry_snapshot"] = _miniapp_task_registry
 app.extensions["task_registry_control"] = _miniapp_task_control
 
 _LAST_ACCOUNTS_SYNC_TS = 0.0
+_ACCOUNTS_CACHE_TTL = 2.0
 
 def refresh_accounts_ram_cache(strict=False):
     """Refresh the snapshot without modifying account data on a read.
@@ -976,7 +977,7 @@ def get_account_from_ram_by_id(acc_id):
 
 
 def get_account_from_ram(acc_id):
-    if time.time() - _LAST_ACCOUNTS_SYNC_TS > 0.25:
+    if time.time() - _LAST_ACCOUNTS_SYNC_TS > _ACCOUNTS_CACHE_TTL:
         refresh_accounts_ram_cache()
     with ACCOUNTS_RAM_LOCK:
         acc = ACCOUNTS_RAM_CACHE.get(int(acc_id) if str(acc_id).isdigit() else acc_id)
@@ -988,7 +989,7 @@ def get_account_from_ram(acc_id):
         return dict(acc) if acc is not None else None
 
 def get_all_accounts_from_ram(platform=None, enabled_only=False):
-    if time.time() - _LAST_ACCOUNTS_SYNC_TS > 0.25 or not ACCOUNTS_RAM_CACHE:
+    if time.time() - _LAST_ACCOUNTS_SYNC_TS > _ACCOUNTS_CACHE_TTL or not ACCOUNTS_RAM_CACHE:
         refresh_accounts_ram_cache()
     with ACCOUNTS_RAM_LOCK:
         items = list(ACCOUNTS_RAM_CACHE.values())
@@ -15717,6 +15718,74 @@ def api_miniapp_qr_status(session_id):
     response = jsonify(payload)
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@app.post("/api/miniapp/export_zalo_session")
+def api_miniapp_export_zalo_session():
+    """Return an importable text receipt only to the authenticated root."""
+    if miniapp_request_owner() != admin_principal_id():
+        return jsonify(ok=False, error="Không có quyền tải phiên Zalo"), 403
+    data = request.get_json(silent=True) or {}
+    try:
+        account_id = int(data.get("account_id"))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="ID tài khoản không hợp lệ"), 400
+    connection = db()
+    try:
+        row = connection.execute(
+            "SELECT imei, cookies, zpw_enk, user_agent FROM accounts "
+            "WHERE id=? AND platform='zalo'", (account_id,)
+        ).fetchone()
+    finally:
+        connection.close()
+    if row is None:
+        return jsonify(ok=False, error="Tài khoản Zalo không tồn tại"), 404
+    cookies = normalize_zalo_cookies(row["cookies"])
+    imei = str(row["imei"] or "").strip()
+    if not imei or not cookies:
+        return jsonify(ok=False, error="Phiên chưa có đủ Cookie và IMEI"), 409
+    payload = {"imei": imei, "cookies": cookies}
+    for source, key in (("zpw_enk", "zpw_enk"), ("user_agent", "user_agent")):
+        if row[source]:
+            payload[key] = row[source]
+    return jsonify(ok=True, filename=f"zalo-acc-{account_id}.txt",
+                   text=json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+@app.post("/api/miniapp/delete_finished_task")
+def api_miniapp_delete_finished_task():
+    if miniapp_request_owner() != admin_principal_id():
+        return jsonify(ok=False, error="Không có quyền xoá tác vụ"), 403
+    reference = str((request.get_json(silent=True) or {}).get("task_ref") or "")
+    if not reference.startswith("legacy:"):
+        return jsonify(ok=False, error="ID tác vụ không hợp lệ"), 400
+    task_id = reference.removeprefix("legacy:")
+    if not task_id or len(task_id) > 128:
+        return jsonify(ok=False, error="ID tác vụ không hợp lệ"), 400
+    with TASKS_RAM_LOCK:
+        active = ACTIVE_TASKS.get(task_id)
+        worker = active.get("thread") if active else None
+        if worker is not None and worker.is_alive():
+            return jsonify(ok=False, error="Tác vụ vẫn đang chạy"), 409
+        saved = TASKS_RAM_STORE.get(task_id)
+        if saved and saved.get("status") in ("running", "stopping"):
+            return jsonify(ok=False, error="Hãy dừng tác vụ trước"), 409
+        connection = db()
+        try:
+            persisted = connection.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if persisted and persisted["status"] in ("running", "stopping"):
+                return jsonify(ok=False, error="Tác vụ đang được đồng bộ, hãy thử lại"), 409
+            deleted = connection.execute(
+                "DELETE FROM tasks WHERE id=? AND status NOT IN ('running','stopping')",
+                (task_id,),
+            ).rowcount
+            connection.commit()
+        finally:
+            connection.close()
+        if saved or deleted:
+            TASKS_RAM_STORE.pop(task_id, None)
+            ACTIVE_TASKS.pop(task_id, None)
+    return jsonify(ok=True, deleted=bool(saved or deleted))
 
 
 @app.get("/api/miniapp/commands")

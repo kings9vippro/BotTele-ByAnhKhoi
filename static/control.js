@@ -137,6 +137,13 @@
  $('sheet-handle').onpointerdown=e=>{dragY=e.clientY;e.target.setPointerCapture(e.pointerId);};$('sheet-handle').onpointermove=e=>{if(dragY!==undefined)$('sheet').style.transform=`translateY(${Math.max(0,e.clientY-dragY)}px)`;};$('sheet-handle').onpointerup=e=>{if(e.clientY-dragY>90)closeSheet();dragY=undefined;$('sheet').style.transform='';};$('sheet-handle').onpointercancel=()=>{dragY=undefined;$('sheet').style.transform='';};
  function confirmAction(title,fn){sheet(title,'Thao tác này áp dụng trên máy chủ.',[button('Xác nhận',async()=>{await fn();$('sheet').close();await refresh();},'danger')]);}
  function row(title,detail){const r=element('article',undefined,'card');r.append(element('strong',title),element('p',detail));return r;}
+ async function downloadZaloSession(accountId){
+  const receipt=await api('export_zalo_session',{account_id:accountId});
+  const uri=URL.createObjectURL(new Blob([receipt.text],{type:'text/plain;charset=utf-8'}));
+  const link=document.createElement('a');link.href=uri;link.download=receipt.filename;
+  document.body.append(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(uri),1000);
+ }
  function renderAccounts(){
   const target=$('account-list'), q=$('account-search').value.trim().toLowerCase();
   const live=accounts.filter(a=>a.enabled&&a.listener_health?.code==='running'&&a.listener_health?.session_hint!=='relogin_required').length;
@@ -173,6 +180,7 @@
     go('tasks');$('task-account-filter').value=String(a.id);
     $('task-account-filter').dispatchEvent(new Event('change'));
    },'primary'));
+   actions.append(button('Tải Cookie + IMEI',()=>downloadZaloSession(a.id)));
    actions.append(button(a.chat_cmd_enabled?'Tắt lệnh':'Bật lệnh',async()=>{await api('toggle_acc_cmd',{acc_id:a.id});await refresh();}));
    actions.append(button('Xóa',()=>confirmAction('Xóa ACC-'+a.id+' · '+a.name,()=>api('delete_acc',{acc_id:a.id})),'danger'));
    card.append(actions);target.append(card);
@@ -335,7 +343,7 @@
    toast(launched.message||'Đã tạo task');$('task-account-filter').value=String(body.account_id);await refreshRegistry();await refresh();go('tasks');
   }catch(error){failed(error);toast(error.message);}finally{submit.disabled=false;}
  };
- let tasksSignature='',registryGeneration=0,registryTasks=[],registryState='loading',taskAccountInitialized=false;
+ let tasksSignature='',registryGeneration=0,registryTasks=[],registryState='loading',taskAccountInitialized=false,taskPage=1;
  function renderTaskAccounts(){
   const target=$('task-account-filter'),before=target.value,available=new Set(['discord']);
   target.replaceChildren(element('option','Thông báo Discord'),element('option','Task chưa xác định cookie'));
@@ -350,6 +358,7 @@
   taskAccountInitialized=true;
  }
  $('task-account-filter').onchange=()=>{
+  taskPage=1;
   registryGeneration++;registryPending=null;registryFetchedAt=0;registryNextRetryAt=0;registryErrorCount=0;
   registryTasks=[];registryState='loading';renderTasks();
   refreshRegistry().catch(failed);
@@ -385,7 +394,7 @@
  function renderTasks(){
   const f=$('task-filter').value,target=$('task-list'),acc=$('task-account-filter').value;
   const query=$('task-search').value.trim().toLocaleLowerCase('vi');
-  const signature=JSON.stringify([f,acc,query,registryTasks,registryState]);
+  const signature=JSON.stringify([f,acc,query,taskPage,registryTasks,registryState]);
   const scope=acc==='discord'?'Chỉ hiển thị tác vụ thông báo Discord.':acc==='unassigned'?
     'Task cũ chưa lưu ID cookie.':
     'Cookie Zalo #'+acc+' · '+(accounts.find(a=>String(a.id)===acc)?.name||'')+' · Tác vụ đa cookie không thể dừng riêng.';
@@ -407,11 +416,14 @@
    target.append(element('p',notice));
    if(registryState==='unavailable')target.append(button('Thử tải lại',()=>refreshRegistry()));
   }
+  let visible=0;
   for(const task of registryTasks){
    const searchable=[task.id,task.task_type,task.target,...(task.account_names||[])].join(' ').toLocaleLowerCase('vi');
    if(query&&!searchable.includes(query))continue;
    if(f==='active'&&!['QUEUED','RUNNING','RETRYING','PAUSED','CANCELLING'].includes(task.status)||
      !['all','active'].includes(f)&&task.status!==f)continue;
+   visible++;
+   if(visible>(taskPage*25))continue;
    const timestamp=task.started||task.created;
    const timeText=timestamp?new Date(timestamp*1000).toLocaleString():'Chưa bắt đầu';
    const label=task.platform==='discord'?'Discord':'Zalo';
@@ -438,15 +450,26 @@
    }
    const details=()=>sheet('Chi tiết tác vụ',JSON.stringify(task,null,2));
    const info=button('Chi tiết',details);info.dataset.taskAction=task.id+':detail';actions.append(info);
+   if(['STOPPED','INTERRUPTED','COMPLETED','CANCELLED','FAILED','UNKNOWN'].includes(task.status)){
+    actions.append(button('Xóa',()=>confirmAction('Xóa tác vụ đã kết thúc?',async()=>{
+     if(task.execution_source==='durable_notifications')
+      await api('delete_finished_notification',{id:task.source_id});
+     else await api('delete_finished_task',{task_ref:task.id});
+    }),'danger'));
+   }
    card.append(actions);target.append(card);
   }
+  if(visible>taskPage*25)target.append(button('Xem thêm '+Math.min(25,visible-taskPage*25)+' tác vụ',()=>{
+   taskPage++;renderTasks();
+  }));
   if(registryState==='ready'&&!target.children.length)
    target.append(element('p','Không có tác vụ trong bộ lọc này.'));
   if(focused)for(const b of target.querySelectorAll('button[data-task-action]'))
    if(b.dataset.taskAction===focused){b.focus({preventScroll:true});break;}
  }
- $('task-filter').onchange=renderTasks;
- $('task-search').oninput=renderTasks;
+ $('task-filter').onchange=()=>{taskPage=1;renderTasks();};
+ $('task-filter').append(new Option('Đã dừng','STOPPED'));
+ $('task-search').oninput=()=>{taskPage=1;renderTasks();};
  function paintMetrics(){if(!legacyTelemetry)return;const t=legacyTelemetry,discord=identities.filter(x=>x.provider==='discord').length,facebook=identities.filter(x=>x.provider==='facebook').length;const values=[['Tài khoản',accounts.length+identities.length],['Discord',discord],['Facebook',facebook],['Zalo',accounts.length],['Đang chạy',(data.counts?.RUNNING||0)+t.running_tasks],['Đang chờ',(data.counts?.QUEUED||0)+(data.counts?.RETRYING||0)],['Hoàn tất',data.counts?.COMPLETED||0],['Thất bại',data.counts?.FAILED||0],['Worker',data.workers||0],['Kênh',data.channels?.length||0],['Thông lượng',data.completed_last_minute===undefined?'—':data.completed_last_minute+'/phút'],['API',data.api_latency_seconds==null?'Chưa đo':data.api_latency_seconds.toFixed(2)+'s'],['RAM',t.ram_mb+' MB']];$('metrics').replaceChildren(...values.map(([label,value])=>{const r=element('div',undefined,'metric');r.append(element('span',label),element('strong',value));return r;}));$('metrics').setAttribute('aria-busy','false');}
  let channelSignature='';function renderControl(next){data=next;cursor=next.cursor||cursor;paintMetrics();if(next.reset)eventRows=[];for(const e of next.events||[])if(!eventRows.some(r=>r.seq===e.seq))eventRows.push(e);eventRows=eventRows.slice(-200);renderTasks();$('health').textContent=`${next.workers} worker · ${next.channels.length} kênh · API trung bình ${next.api_latency_seconds===null?'Chưa đo':next.api_latency_seconds.toFixed(3)+'s'}`;$('event-list').replaceChildren(...eventRows.slice().reverse().map(e=>row(e.status,`${e.task} · ${new Date(e.at*1000).toLocaleTimeString()}`)));$('commands').replaceChildren(...next.commands.map(c=>{const r=element('div',undefined,'row');r.append(element('strong','/'+c.name),element('small',c.description));return r;}));const signature=JSON.stringify(next.channels);if(signature!==channelSignature){channelSignature=signature;const chosen=new Set([...$('channel-options').querySelectorAll(':checked')].map(x=>x.value));$('channels').replaceChildren(...next.channels.map(c=>row(c.name,c.id)));$('channel-options').replaceChildren(element('legend','Chọn tối đa 5 kênh'));for(const c of next.channels){const label=element('label');const box=element('input');box.type='checkbox';box.value=c.id;box.checked=chosen.has(c.id);label.append(box,document.createTextNode(c.name));$('channel-options').append(label);}}
  const bins=Array(10).fill(0),now=Date.now()/1000;for(const e of eventRows){const i=9-Math.floor((now-e.at)/60);if(i>=0&&i<10)bins[i]++;}const max=Math.max(1,...bins);$('chart').replaceChildren();bins.forEach((n,i)=>{const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');for(const[k,v]of Object.entries({x:i*60+5,y:100-n/max*90,width:48,height:n/max*90,rx:5,fill:'currentColor'}))rect.setAttribute(k,v);$('chart').append(rect);});$('chart-summary').textContent=`${bins.reduce((a,b)=>a+b,0)} sự kiện trong 10 phút (tối đa 200 sự kiện đã tải).`;
@@ -505,6 +528,7 @@
  }
  function form(id,path,extra={},after){$(id).onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');try{const body={...Object.fromEntries(new FormData(form)),...extra};const result=await api(path,body);after?.(result);toast('Đã lưu trên máy chủ');await refresh();}catch(e){failed(e);}finally{submit.disabled=false;submit.removeAttribute('aria-busy');}};}
  form('channel-form','channels',{},()=>$('channel-form').reset());form('zalo-form','add_cookie',{},()=>$('zalo-form').reset());form('file-form','add_file');form('oauth-form','oauth/configure',{},r=>{$('oauth-config-result').textContent='Đăng ký Redirect URI: '+r.redirect_uri;$('oauth-form').elements.client_secret.value='';});
+ $('zalo-form').closest('details').open=true;
  $('upload-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');if(b.disabled)return;b.disabled=true;try{await uploadFile(e.currentTarget);toast('Đã tải tệp lên');await refresh();}catch(error){failed(error);}finally{b.disabled=false;}};
  $('send-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;try{await api('notifications',{channels:[...$('channel-options').querySelectorAll(':checked')].map(x=>x.value),content:e.currentTarget.elements.content.value});toast('Đã đưa vào hàng chờ');await refreshControl();}catch(e){failed(e);}finally{b.disabled=false;}};
  for(const [provider,view] of Object.entries(oauthViews)){
@@ -546,19 +570,12 @@
    'UID: '+(status.uid||'Chưa nhận diện'),
   ];
   holder.append(element('pre',fields.join('\\n')));
-  holder.append(button('Tải biên nhận thiết bị .txt',()=>{
-   const receipt=['GLAZE · Biên nhận thiết bị đăng nhập Zalo',...fields,
-     'Mã ACC chỉ tham chiếu phiên đã lưu ở backend, không phải cookie rút gọn.',
-     'Không bao gồm cookie hoặc khóa đăng nhập.'].join('\\n');
-   const blob=new Blob([receipt],{type:'text/plain;charset=utf-8'});
-   const uri=URL.createObjectURL(blob),link=document.createElement('a');
-   link.href=uri;link.download=(status.account_handle||'zalo-acc')+'-device.txt';
-   document.body.append(link);link.click();link.remove();
-   setTimeout(()=>URL.revokeObjectURL(uri),1000);
-  },'primary'));
+  if(!status.account_id){holder.append(element('p','Chưa tìm thấy phiên đã lưu. Hãy kiểm tra tài khoản trước khi tải.'));return;}
+  holder.append(button('Tải Cookie + IMEI .txt',()=>downloadZaloSession(status.account_id),'primary'));
  }
  $('qr').onclick=async()=>{
   const trigger=$('qr'),image=$('qr-image');
+  let receiptRetries=0;
   trigger.disabled=true;
   image.hidden=true;
   image.removeAttribute('src');
@@ -575,6 +592,10 @@
     try{
      const status=await api('qr_status/'+encodeURIComponent(result.session_id));
      $('qr-status').textContent=status.message||status.status;
+     if(status.status==='success'&&!status.account_id&&receiptRetries++<5){
+      setTimeout(poll,1000);
+      return;
+     }
      if(['success','expired','failed','cancelled','error','declined'].includes(status.status)){
       finish();
       if(status.status==='success')renderQrReceipt(status);

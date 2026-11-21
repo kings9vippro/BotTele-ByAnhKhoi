@@ -224,6 +224,17 @@ def register(app, db, owner):
         return jsonify(ok=True, owner=principal, account_id=account_id or None,
                        tasks=unified_tasks(principal, account_id=account_id if account_id else None))
 
+    @app.post('/api/miniapp/delete_finished_notification')
+    def delete_finished_notification():
+        task_id = str((request.get_json(silent=True) or {}).get('id') or '')
+        if not re.fullmatch(r'[0-9a-f]{32}', task_id):
+            return jsonify(ok=False, error='ID tác vụ không hợp lệ'), 400
+        try:
+            queue.delete_finished(controlled_owner(str(owner()), task_id), task_id)
+        except ValueError as error:
+            return jsonify(ok=False, error=str(error)), 409
+        return jsonify(ok=True)
+
     @app.get('/api/miniapp/control')
     def control_snapshot():
         return jsonify(snapshot(owner(), max(0, request.args.get('cursor',0,type=int) or 0)))

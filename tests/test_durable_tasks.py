@@ -50,6 +50,16 @@ class DurableTaskTests(unittest.TestCase):
         self.assertFalse(self.queue.run_one())
         self.assertEqual(self.sent,[])
 
+    def test_delete_finished_requires_owner_and_terminal_state(self):
+        task = self.queue.submit('alice', 'channel', 'hello')
+        with self.assertRaises(ValueError):
+            self.queue.delete_finished('alice', task)
+        self.queue.control('alice', task, 'stop')
+        with self.assertRaises(ValueError):
+            self.queue.delete_finished('bob', task)
+        self.queue.delete_finished('alice', task)
+        self.assertEqual(self.queue.list('alice'), [])
+
     def test_five_independent_channels_really_execute_concurrently(self):
         barrier=threading.Barrier(5,timeout=3)
         done=threading.Event()

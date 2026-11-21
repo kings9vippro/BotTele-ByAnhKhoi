@@ -212,6 +212,28 @@ header{padding:13px 15px;}
 .task-filters label { min-width:0; }
 #tasks #stop-all[hidden] { display:none; }
 #task-list .card { overflow-wrap:anywhere; }
+#task-list { gap:7px; }
+#task-list .card {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:start;
+  gap:2px 10px;
+  padding:11px 13px;
+  border-radius:13px;
+  background:color-mix(in srgb,var(--panel) 91%,transparent);
+}
+#task-list .card>strong { grid-column:1; font-size:13px; }
+#task-list .card>p { grid-column:2; grid-row:1; margin:0; color:var(--accent); font-size:11px; text-align:right; }
+#task-list .card>small { grid-column:1/-1; color:var(--muted); font-size:11px; }
+#task-list .card>.actions { grid-column:1/-1; margin-top:5px; }
+#task-list .card>.actions button { min-height:32px; }
+#tasks .task-filters { position:sticky; top:-18px; z-index:2; padding:8px 0; background:var(--bg); }
+#zalo #zalo-form textarea { min-height:78px; }
+@media (prefers-reduced-motion:no-preference) {
+  #task-list .card { animation:task-appear .16s ease-out both; }
+  #task-list .card:hover { border-color:color-mix(in srgb,var(--accent) 52%,var(--line)); }
+}
+@keyframes task-appear { from { opacity:.6; transform:translateY(3px); } }
 @media (prefers-reduced-motion:no-preference) {
   .task-filters input,.task-filters select,.actions button {
     transition:background-color .16s ease,border-color .16s ease;

@@ -46,6 +46,33 @@ class ManagementTests(unittest.TestCase):
     def test_unknown_api_route_keeps_404(self):
         self.assertEqual(self.client.get('/api/miniapp/does-not-exist').status_code, 404)
 
+    def test_zalo_session_export_round_trips_through_import_parser(self):
+        from get_ck_im_zalo import parse_imei_and_cookie_from_text
+        conn = app.db()
+        account_id = conn.execute(
+            "INSERT INTO accounts(name,platform,imei,cookies) VALUES(?,?,?,?)",
+            ('Fixture', 'zalo', '1234567890abcdef', json.dumps({'zpsid': 'fixture-session-cookie-value', 'unused': 'EXPIRED'})),
+        ).lastrowid
+        conn.commit()
+        result = self.client.post('/api/miniapp/export_zalo_session', json={'account_id': account_id})
+        self.assertEqual(result.status_code, 200)
+        imei, cookies, _ = parse_imei_and_cookie_from_text(result.json['text'])
+        self.assertEqual(imei, '1234567890abcdef')
+        self.assertEqual(cookies['zpsid'], 'fixture-session-cookie-value')
+        self.assertNotIn('unused', cookies)
+
+    def test_finished_legacy_task_can_be_deleted(self):
+        conn = app.db()
+        conn.execute("INSERT INTO tasks(id,status) VALUES('finished-fixture','stopped')")
+        conn.execute("INSERT INTO tasks(id,status) VALUES('running-fixture','running')")
+        conn.commit()
+        active = self.client.post('/api/miniapp/delete_finished_task', json={'task_ref': 'legacy:running-fixture'})
+        self.assertEqual(active.status_code, 409)
+        response = self.client.post('/api/miniapp/delete_finished_task', json={'task_ref': 'legacy:finished-fixture'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json['deleted'])
+        self.assertIsNone(conn.execute("SELECT id FROM tasks WHERE id='finished-fixture'").fetchone())
+
     def test_build_check_rejects_valid_python_with_missing_runtime_tail(self):
         with self.assertRaisesRegex(ValueError, 'ensure_telegram_bot_started'):
             check_runtime('app = object()\ndef init_db():\n    pass\n# cut at a comment, so syntax alone passes\n')

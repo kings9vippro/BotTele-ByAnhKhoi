@@ -148,6 +148,23 @@ class TaskQueue:
             c.rollback()
             c.close()
 
+    def delete_finished(self, owner, task_id):
+        c = self.db()
+        try:
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute('SELECT status FROM notification_tasks WHERE id=? AND owner=?',
+                            (str(task_id), str(owner))).fetchone()
+            if row is None:
+                raise ValueError('Không tìm thấy tác vụ thuộc tài khoản này')
+            if row['status'] in ('QUEUED', 'RUNNING', 'RETRYING', 'PAUSED', 'CANCELLING'):
+                raise ValueError('Hãy dừng tác vụ trước khi xoá')
+            c.execute('DELETE FROM notification_tasks WHERE id=? AND owner=?',
+                      (str(task_id), str(owner)))
+            c.commit()
+        finally:
+            c.rollback()
+            c.close()
+
     def stop_all(self, owner):
         c = self.db()
         try:
