@@ -8937,7 +8937,7 @@ class ZaloQRLoginManager:
         return None
 
     @classmethod
-    def start_qr_session(cls, auto_save=True, vn_region="VN", custom_pc_name="", vn_proxy="", wait_for_qr_seconds=9.0):
+    def start_qr_session(cls, auto_save=True, vn_region="VN", custom_pc_name="", vn_proxy=""):
         now_t = time.time()
         with cls.LOCK:
             if (now_t - cls._LAST_START_TS < 1.2) and cls._LAST_START_SESSION_ID in cls.SESSIONS:
@@ -9032,30 +9032,11 @@ class ZaloQRLoginManager:
         th.start()
 
         t0 = time.time()
-        # API callers can return immediately and poll; legacy synchronous callers keep the old behavior.
-        start_wait = max(0.0, min(float(wait_for_qr_seconds), 9.0))
-        while time.time() - t0 < start_wait:
+        while time.time() - t0 < 9.0:
             if st["qr_base64"] or st["status"] in ("error", "expired"):
                 break
             time.sleep(0.04)
         return cls.get_session_status(session_id)
-
-    @classmethod
-    def cancel_qr_session(cls, session_id):
-        """Stop an active QR worker without affecting a saved/confirmed login."""
-        with cls.LOCK:
-            st = cls.SESSIONS.get(session_id)
-            if not st:
-                return False
-            if st.get("status") not in ("generating", "waiting_scan", "scanned"):
-                return False
-            st["status"] = "cancelled"
-            st["message"] = "Đã hủy phiên QR. Bạn có thể tạo mã mới."
-            stop_ev = st.get("stop_ev")
-            if hasattr(stop_ev, "set"):
-                stop_ev.set()
-        cls._persist_qr_state_to_db(st, async_write=False)
-        return True
 
     @classmethod
     def get_qr_png_bytes(cls, session_id):
@@ -15721,12 +15702,6 @@ def route_zenvyre_miniapp():
 def api_miniapp_qr_status(session_id):
     status = ZaloQRLoginManager.get_session_status(session_id)
     payload = {key: status.get(key) for key in ("ok", "status", "message", "qr_base64", "remaining_sec")}
-    # Mobile clients load the actual QR image through a protected binary endpoint.
-    # Legacy callers still receive qr_base64 unless they request compact polling.
-    if status.get("ok") and status.get("qr_image_url"):
-        payload["qr_image_url"] = "/api/miniapp/qr_image/" + str(session_id) + ".png"
-    if request.args.get("compact") == "1":
-        payload.pop("qr_base64", None)
     if status.get("ok") and status.get("status") == "success":
         imei = str(status.get("imei") or "")
         account_row = None
@@ -15749,28 +15724,6 @@ def api_miniapp_qr_status(session_id):
     response = jsonify(payload)
     response.headers["Cache-Control"] = "no-store"
     return response
-
-
-@app.get("/api/miniapp/qr_image/<session_id>.png")
-def api_miniapp_qr_image(session_id):
-    """Authenticated QR preview, no browser-visible cookies or credentials."""
-    if not re.fullmatch(r"[0-9a-f-]{36}", session_id):
-        return Response(status=404)
-    png_bytes = ZaloQRLoginManager.get_qr_png_bytes(session_id)
-    if not png_bytes:
-        return Response(status=404)
-    return Response(png_bytes, mimetype="image/png",
-                    headers={"Cache-Control": "no-store, max-age=0"})
-
-
-@app.post("/api/miniapp/cancel_qr")
-def api_miniapp_cancel_qr():
-    data = request.get_json(silent=True) or {}
-    session_id = str(data.get("session_id") or "")
-    if not re.fullmatch(r"[0-9a-f-]{36}", session_id):
-        return jsonify(ok=False, error="ID phiên QR không hợp lệ"), 400
-    cancelled = ZaloQRLoginManager.cancel_qr_session(session_id)
-    return jsonify(ok=True, cancelled=cancelled)
 
 
 @app.post("/api/miniapp/export_zalo_session")
@@ -16002,8 +15955,8 @@ def api_miniapp_add_cookie():
 @app.route("/api/miniapp/start_qr", methods=["POST"])
 def api_miniapp_start_qr():
     try:
-        status = ZaloQRLoginManager.start_qr_session(wait_for_qr_seconds=0.0)
-        return jsonify({key: status.get(key) for key in ("ok", "session_id", "status", "message", "remaining_sec")})
+        status = ZaloQRLoginManager.start_qr_session()
+        return jsonify({key: status.get(key) for key in ("ok", "session_id", "status", "message")})
     except Exception:
         return jsonify({"ok": False, "error": public_error_message("Không thể khởi tạo phiên QR.")})
 
