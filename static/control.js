@@ -405,9 +405,7 @@
   for(const a of identities){
    if(!(''+a.name+' '+a.uid).toLowerCase().includes(q))continue;
    if(++matched>accountPage*30)continue;
-   const provider=a.platform==='facebook'?'Facebook':'Discord';
-   const card=row(a.name||provider,provider+' · ID '+a.uid+' · Phiên đã kiểm tra');
-   card.append(button('Gỡ kết nối',()=>confirmAction('Gỡ tài khoản này?',()=>api('credential_links',{id:a.id},{method:'DELETE'})),'danger'));target.append(card);
+   target.append(credentialCard(a));
   }
   if(!matched)target.append(element('p','Chưa có tài khoản phù hợp.'));
   else if(matched>accountPage*30)target.append(button('Xem thêm tài khoản · '+(matched-accountPage*30)+' còn lại',()=>{accountPage++;renderAccounts();}));
@@ -623,6 +621,11 @@
     'Cập nhật '+age+'s trước');
   $('stop-all').hidden=acc!=='discord';
   $('stop-all-zalo').hidden=acc==='discord'||!accounts.length;
+  const activeCount=registryTasks.filter(task=>['QUEUED','RUNNING','RETRYING','PAUSED','CANCELLING'].includes(task.status)).length;
+  const errorCount=registryTasks.filter(task=>['FAILED','UNKNOWN','INTERRUPTED'].includes(task.status)).length;
+  $('task-summary').replaceChildren(...[['Đang xử lý',activeCount],['Cần xem',errorCount],['Tổng task',registryTasks.length]].map(([label,value])=>{
+   const metric=element('div',undefined,'task-summary-item');metric.append(element('strong',value),element('span',label));return metric;
+  }));
 
   if(signature===tasksSignature)return;
   const focused=document.activeElement?.dataset?.taskAction;
@@ -646,14 +649,16 @@
    const timestamp=task.started||task.created;
    const timeText=timestamp?new Date(timestamp*1000).toLocaleString():'Chưa bắt đầu';
    const label=task.platform==='discord'?'Discord':'Zalo';
-   const card=row(label+' · '+(task.task_type||'Tác vụ'),task.status+' · '+timeText);
-   if(task.shared_execution)card.append(element('small','Tác vụ nhiều cookie · dừng sẽ ảnh hưởng các cookie khác.'));
-   card.append(element('small','ID '+task.id+' · Chủ '+task.owner+' · '+(task.target||'Không có đích')));
-   if(task.account_names?.length)card.append(element('small','Tài khoản: '+task.account_names.join(', ')));
-   card.append(element('small',task.persistence==='process_local'?
-     'Chỉ tồn tại trong tiến trình · có thể mất khi khởi động lại':
-     'Lưu trong SQLite · độ bền phụ thuộc ổ đĩa máy chủ'));
-   if(task.error)card.append(element('p',task.error));
+   const statusNames={QUEUED:'Đang chờ',RUNNING:'Đang chạy',RETRYING:'Đang thử lại',PAUSED:'Tạm dừng',CANCELLING:'Đang dừng',STOPPED:'Đã dừng',INTERRUPTED:'Gián đoạn',COMPLETED:'Hoàn tất',CANCELLED:'Đã hủy',FAILED:'Thất bại',UNKNOWN:'Chưa rõ'};
+   const card=element('article',undefined,'card task-card');
+   const head=element('div',undefined,'task-card-head');
+   const badge=element('span',statusNames[task.status]||task.status,'task-state');badge.dataset.state=task.status;
+   head.append(element('strong',label+' · '+(task.task_type||'Tác vụ')),badge);
+   card.append(head,element('p',task.target||'Chưa có đích','task-target'));
+   if(task.account_names?.length)card.append(element('small',task.account_names.join(', '),'task-account-names'));
+   card.append(element('small',timeText,'task-time'));
+   if(task.shared_execution)card.append(element('small','Tác vụ nhiều tài khoản; dừng sẽ ảnh hưởng tất cả.','task-warning'));
+   if(task.error)card.append(element('p',task.error,'task-error'));
    const actions=element('div',undefined,'actions');
    for(const action of task.actions||[]){
     const labels={stop:'Dừng',pause:'Tạm dừng',resume:'Tiếp tục',retry:'Thử lại'};
@@ -667,8 +672,6 @@
     });
     b.dataset.taskAction=task.id+':'+action;actions.append(b);
    }
-   const details=()=>sheet('Chi tiết tác vụ',JSON.stringify(task,null,2));
-   const info=button('Chi tiết',details);info.dataset.taskAction=task.id+':detail';actions.append(info);
    if(['STOPPED','INTERRUPTED','COMPLETED','CANCELLED','FAILED','UNKNOWN'].includes(task.status)){
     actions.append(button('Xóa',()=>confirmAction('Xóa tác vụ đã kết thúc?',async()=>{
      if(task.execution_source==='durable_notifications')
@@ -676,7 +679,10 @@
      else await api('delete_finished_task',{task_ref:task.id});
     }),'danger'));
    }
-   card.append(actions);target.append(card);
+   const technical=element('details',undefined,'task-technical');
+   technical.append(element('summary','Thông tin task'),element('small','ID '+task.id+' · Chủ '+task.owner),
+    element('small',task.persistence==='process_local'?'Lưu trong tiến trình':'Lưu trong SQLite'));
+   card.append(actions,technical);target.append(card);
   }
   if(visible>taskPage*25)target.append(button('Xem thêm '+Math.min(25,visible-taskPage*25)+' tác vụ',()=>{
    taskPage++;renderTasks();
@@ -690,7 +696,35 @@
  $('task-filter').append(new Option('Đã dừng','STOPPED'));
  $('task-search').oninput=()=>{taskPage=1;renderTasks();};
  function paintMetrics(){if(!legacyTelemetry)return;const t=legacyTelemetry,discord=identities.filter(x=>x.platform==='discord').length,facebook=identities.filter(x=>x.platform==='facebook').length;const values=[['Tài khoản',accounts.length+identities.length],['Discord',discord],['Facebook',facebook],['Zalo',accounts.length],['Đang chạy',(data.counts?.RUNNING||0)+t.running_tasks],['Đang chờ',(data.counts?.QUEUED||0)+(data.counts?.RETRYING||0)],['Hoàn tất',data.counts?.COMPLETED||0],['Thất bại',data.counts?.FAILED||0],['Worker',data.workers||0],['Kênh',data.channels?.length||0],['Thông lượng',data.completed_last_minute===undefined?'—':data.completed_last_minute+'/phút'],['API',data.api_latency_seconds==null?'Chưa đo':data.api_latency_seconds.toFixed(2)+'s'],['RAM',t.ram_mb+' MB']];$('metrics').replaceChildren(...values.map(([label,value])=>{const r=element('div',undefined,'metric');r.append(element('span',label),element('strong',value));return r;}));$('metrics').setAttribute('aria-busy','false');}
- function renderCredentialLinks(){for(const platform of ['discord','facebook']){const target=$(platform+'-links');if(!target)continue;const linked=identities.filter(item=>item.platform===platform);target.replaceChildren(...(linked.length?linked.map(item=>{const card=row(item.name,'ID '+item.uid+' · kiểm tra lúc '+new Date(item.updated*1000).toLocaleString());card.append(button('Gỡ kết nối',()=>confirmAction('Gỡ tài khoản này?',async()=>{await api('credential_links',{id:item.id},{method:'DELETE'});}), 'danger'));return card;}):[element('p','Chưa có tài khoản đã kiểm tra.')]))}}
+ async function refreshCredentialLinks(){
+  identities=(await api('credential_links')).links;
+  renderCredentialLinks();renderAccounts();paintMetrics();
+ }
+ function credentialCard(item){
+  const provider=item.platform==='facebook'?'Facebook':'Discord';
+  const labels={verified:'Phiên đã kiểm tra',invalid:'Phiên hết hạn',unknown:'Chưa xác nhận'};
+  const state=labels[item.status]||labels.unknown;
+  const card=row(item.name||provider,provider+' · ID '+item.uid);
+  card.classList.add('credential-card');
+  const badge=element('span',state,'credential-state');badge.dataset.state=item.status||'unknown';
+  card.append(badge,element('small','Kiểm tra '+(item.checked_at?new Date(item.checked_at*1000).toLocaleString():'chưa có')+(item.kind==='bot'?' · Bot':'')));
+  if(item.last_error)card.append(element('small',item.last_error,'credential-error'));
+  const actions=element('div',undefined,'actions');
+  actions.append(button('Kiểm tra lại',async()=>{
+   const result=await api('credential_links/check',{id:item.id},{timeout:15000});
+   await refreshCredentialLinks();
+   toast(result.result.status==='verified'?'Phiên còn hoạt động':result.result.error);
+  }));
+  actions.append(button('Gỡ',()=>confirmAction('Gỡ tài khoản này?',()=>api('credential_links',{id:item.id},{method:'DELETE'})),'danger'));
+  card.append(actions);return card;
+ }
+ function renderCredentialLinks(){
+  for(const platform of ['discord','facebook']){
+   const target=$(platform+'-links');if(!target)continue;
+   const linked=identities.filter(item=>item.platform===platform);
+   target.replaceChildren(...(linked.length?linked.map(credentialCard):[element('p','Chưa có tài khoản đã kiểm tra.')]))
+  }
+ }
  let channelSignature='';function renderControl(next){data=next;cursor=next.cursor||cursor;paintMetrics();if(next.reset)eventRows=[];for(const e of next.events||[])if(!eventRows.some(r=>r.seq===e.seq))eventRows.push(e);eventRows=eventRows.slice(-200);renderTasks();$('health').textContent=`${next.workers} worker · ${next.channels.length} kênh · API trung bình ${next.api_latency_seconds===null?'Chưa đo':next.api_latency_seconds.toFixed(3)+'s'}`;$('event-list').replaceChildren(...eventRows.slice().reverse().map(e=>row(e.status,`${e.task} · ${new Date(e.at*1000).toLocaleTimeString()}`)));$('commands').replaceChildren(...next.commands.map(c=>{const r=element('div',undefined,'row');r.append(element('strong','/'+c.name),element('small',c.description));return r;}));const signature=JSON.stringify(next.channels);if(signature!==channelSignature){channelSignature=signature;const chosen=new Set([...$('channel-options').querySelectorAll(':checked')].map(x=>x.value));$('channels').replaceChildren(...next.channels.map(c=>row(c.name,c.id)));$('channel-options').replaceChildren(element('legend','Chọn tối đa 5 kênh'));for(const c of next.channels){const label=element('label');const box=element('input');box.type='checkbox';box.value=c.id;box.checked=chosen.has(c.id);label.append(box,document.createTextNode(c.name));$('channel-options').append(label);}}
  const bins=Array(10).fill(0),now=Date.now()/1000;for(const e of eventRows){const i=9-Math.floor((now-e.at)/60);if(i>=0&&i<10)bins[i]++;}const max=Math.max(1,...bins);$('chart').replaceChildren();bins.forEach((n,i)=>{const rect=document.createElementNS('http://www.w3.org/2000/svg','rect');for(const[k,v]of Object.entries({x:i*60+5,y:100-n/max*90,width:48,height:n/max*90,rx:5,fill:'currentColor'}))rect.setAttribute(k,v);$('chart').append(rect);});$('chart-summary').textContent=`${bins.reduce((a,b)=>a+b,0)} sự kiện trong 10 phút (tối đa 200 sự kiện đã tải).`;
  }

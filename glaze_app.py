@@ -11021,14 +11021,14 @@ def single_acc_multi_box_dispatcher(acc_dict, targets, blocks, runtime_opts, sto
     proxy_counter = _AccCounterProxy()
     box_threads = []
     total_boxes = max(1, len(my_targets))
-    cur_d_cfg = float(runtime_opts.get("delay", 0.0) or 0.0)
     stagger_base = 0.0
 
     # Tối ưu Đa Acc Siêu Mượt Không Lag: Mỗi Acc phân bổ đúng 1 luồng độc lập cho mỗi Box mục tiêu
     # (Loại bỏ việc nhân 3 luồng trùng lặp trên cùng 1 Box gây nghẽn GIL & làm lag khi treo nhiều Acc cùng lúc!)
     expanded_targets = list(my_targets)
 
-    max_shards_per_acc = (200 if len(expanded_targets) > 200 else len(expanded_targets)) if cur_d_cfg <= 0.0 else (96 if len(expanded_targets) > 96 else len(expanded_targets))
+    # One shard loops over several boxes. Cap OS threads as the selection grows.
+    max_shards_per_acc = min(len(expanded_targets), max(1, int(runtime_opts.get("_max_shards_per_acc", 4))))
     rotated_targets = list(expanded_targets)
     if len(rotated_targets) > 1 and acc_idx > 0:
         rot_offset = (acc_idx * 3) % len(rotated_targets)
@@ -11059,20 +11059,16 @@ def single_acc_multi_box_dispatcher(acc_dict, targets, blocks, runtime_opts, sto
 
 def task_supervisor(tid, targets, blocks, runtime_opts, multi_acc, stop_ev, specific_acc_id=None, account_ids=None):
     all_enabled = get_all_accounts_from_ram(enabled_only=True)
-    if account_ids and isinstance(account_ids, (list, tuple, set)):
+    if account_ids is not None and isinstance(account_ids, (list, tuple, set)):
         id_set = {int(x) for x in account_ids if str(x).isdigit()}
         accs = [a for a in all_enabled if int(a["id"]) in id_set]
-        if not accs:
-            accs = all_enabled
     elif specific_acc_id and not multi_acc:
         acc_single = get_account_from_ram(specific_acc_id)
         accs = [acc_single] if acc_single else []
     elif specific_acc_id and multi_acc:
         acc_single = get_account_from_ram(specific_acc_id)
-        plat_Filter = (acc_single.get("platform") or "zalo") if acc_single else None
-        accs = get_all_accounts_from_ram(platform=plat_Filter, enabled_only=True)
-        if not accs and acc_single:
-            accs = [acc_single]
+        plat_filter = (acc_single.get("platform") or "zalo") if acc_single else None
+        accs = get_all_accounts_from_ram(platform=plat_filter, enabled_only=True) if plat_filter else []
     else:
         accs = all_enabled
 
@@ -11080,12 +11076,17 @@ def task_supervisor(tid, targets, blocks, runtime_opts, multi_acc, stop_ev, spec
         with TASKS_RAM_LOCK:
             if tid in TASKS_RAM_STORE:
                 TASKS_RAM_STORE[tid]["status"] = "stopped"
+                TASKS_RAM_STORE[tid]["error"] = "Tài khoản đã chọn không còn hoạt động"
+                TASKS_RAM_STORE[tid]["dirty"] = True
         ACTIVE_TASKS.pop(tid, None)
         return
 
     # Hỗ trợ tới 100+ tài khoản chạy đồng thời song song & đăng ký Bộ Điều Phối Luồng Sóng Đều (WaveFairnessEngine)
     selected_accs = accs[:120] if multi_acc else [accs[0]]
     runtime_opts["_wave_key"] = tid
+    # A large multi-account task shares a fixed shard budget across accounts.
+    # Every account still gets at least one rotating worker for its boxes.
+    runtime_opts["_max_shards_per_acc"] = max(1, min(4, 32 // len(selected_accs)))
     WaveFairnessEngine.register_accounts_for_wave(tid, [a["id"] for a in selected_accs])
     acc_names_list = [f"{a.get('name') or 'Acc'} (#{a['id']})" for a in selected_accs]
     with TASKS_RAM_LOCK:
@@ -15901,7 +15902,7 @@ def api_miniapp_credential_links():
     """Link a verified Discord token or Facebook cookie without exposing it."""
     if miniapp_request_owner() != admin_principal_id():
         return jsonify(ok=False, error="Chỉ quản trị viên được quản lý phiên tài khoản"), 403
-    from credential_links import delete, list_links, save
+    from credential_links import CredentialRejected, CredentialUnavailable, delete, list_links, save
     connection = db()
     try:
         if request.method == "GET":
@@ -15916,10 +15917,35 @@ def api_miniapp_credential_links():
         platform = str(body.get("platform") or "").strip().lower()
         raw = str(body.get("credential") or "")
         try:
-            link = save(connection, miniapp_request_owner(), platform, raw, SECRET_KEY)
-        except ValueError as error:
+            link = save(connection, miniapp_request_owner(), platform, raw, SECRET_KEY,
+                        kind=str(body.get("kind") or "user"))
+        except CredentialUnavailable as error:
+            return jsonify(ok=False, error=str(error)), 503
+        except CredentialRejected as error:
             return jsonify(ok=False, error=str(error)), 400
         return jsonify(ok=True, link=link)
+    finally:
+        connection.close()
+
+
+@app.post("/api/miniapp/credential_links/check")
+def api_miniapp_credential_links_check():
+    if miniapp_request_owner() != admin_principal_id():
+        return jsonify(ok=False, error="Chỉ quản trị viên được kiểm tra phiên tài khoản"), 403
+    try:
+        link_id = int((request.get_json(silent=True) or {}).get("id"))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="ID kết nối không hợp lệ"), 400
+    from credential_links import CredentialRejected, CredentialUnavailable, recheck
+    connection = db()
+    try:
+        try:
+            result = recheck(connection, miniapp_request_owner(), link_id, SECRET_KEY)
+        except CredentialRejected as error:
+            return jsonify(ok=False, error=str(error)), 404
+        except CredentialUnavailable as error:
+            return jsonify(ok=False, error=str(error)), 503
+        return jsonify(ok=True, result=result)
     finally:
         connection.close()
 

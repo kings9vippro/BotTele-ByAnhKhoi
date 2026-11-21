@@ -73,6 +73,27 @@ class ManagementTests(unittest.TestCase):
         self.assertTrue(response.json['deleted'])
         self.assertIsNone(conn.execute("SELECT id FROM tasks WHERE id='finished-fixture'").fetchone())
 
+    def test_disabled_selected_account_never_falls_back_to_another_account(self):
+        saved = {'fixture-task': {'id': 'fixture-task', 'status': 'running', 'meta': {'account_ids': [2]}}}
+        active = {'fixture-task': {'stop': threading.Event()}}
+        with patch.object(app, 'TASKS_RAM_STORE', saved), patch.object(app, 'ACTIVE_TASKS', active), \
+                patch.object(app, 'get_all_accounts_from_ram', return_value=[{'id': 1, 'platform': 'zalo'}]), \
+                patch.object(app, 'single_acc_multi_box_dispatcher') as dispatch:
+            app.task_supervisor('fixture-task', [], [], {}, False, threading.Event(), account_ids=[2])
+        dispatch.assert_not_called()
+        self.assertEqual(saved['fixture-task']['status'], 'stopped')
+        self.assertIn('Tài khoản đã chọn', saved['fixture-task']['error'])
+
+    def test_missing_multi_account_anchor_does_not_start_unrelated_accounts(self):
+        saved = {'fixture-task': {'id': 'fixture-task', 'status': 'running'}}
+        with patch.object(app, 'TASKS_RAM_STORE', saved), patch.object(app, 'ACTIVE_TASKS', {}), \
+                patch.object(app, 'get_all_accounts_from_ram', return_value=[{'id': 1, 'platform': 'zalo'}]), \
+                patch.object(app, 'get_account_from_ram', return_value=None), \
+                patch.object(app, 'single_acc_multi_box_dispatcher') as dispatch:
+            app.task_supervisor('fixture-task', [], [], {}, True, threading.Event(), specific_acc_id=2)
+        dispatch.assert_not_called()
+        self.assertEqual(saved['fixture-task']['status'], 'stopped')
+
     def test_discord_token_link_is_verified_encrypted_and_removable(self):
         profile = Mock(status_code=200)
         profile.json.return_value = {'id': '123456789', 'username': 'Fixture'}
@@ -106,6 +127,62 @@ class ManagementTests(unittest.TestCase):
         self.assertEqual(result.json['link']['name'], 'Fixture Profile')
         row = app.db().execute('SELECT encrypted FROM credential_links').fetchone()
         self.assertNotIn('fixture-session-value', row['encrypted'])
+
+    def test_facebook_cookie_formats_and_redirect_does_not_leak_cookie(self):
+        from credential_links import CredentialRejected, normalize_facebook_cookie, verify_facebook
+        uid, normalized = normalize_facebook_cookie(json.dumps([
+            {'name': 'c_user', 'value': '123456789'}, {'name': 'xs', 'value': 'fixture-session'},
+        ]))
+        self.assertEqual(uid, '123456789')
+        self.assertIn('xs=fixture-session', normalized)
+        redirect = Mock(status_code=302, headers={'Location': 'https://outside.example/collect'},
+                        url='https://mbasic.facebook.com/profile.php')
+        with patch('credential_links.requests.get', return_value=redirect) as get:
+            with self.assertRaises(CredentialRejected):
+                verify_facebook(normalized)
+        self.assertEqual(get.call_count, 1)
+        self.assertFalse(get.call_args.kwargs['allow_redirects'])
+
+    def test_discord_bot_link_recheck_marks_provider_failure_without_losing_secret(self):
+        profile = Mock(status_code=200)
+        profile.json.return_value = {'id': '123456789', 'username': 'Fixture'}
+        with patch('credential_links.requests.get', return_value=profile) as get:
+            result = self.client.post('/api/miniapp/credential_links', json={
+                'platform': 'discord', 'kind': 'bot', 'credential': 'fixture-bot-token',
+            })
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(get.call_args.kwargs['headers']['Authorization'], 'Bot fixture-bot-token')
+        link = self.client.get('/api/miniapp/credential_links').json['links'][0]
+        self.assertEqual(link['kind'], 'bot')
+        unavailable = Mock(status_code=429)
+        with patch('credential_links.requests.get', return_value=unavailable):
+            checked = self.client.post('/api/miniapp/credential_links/check', json={'id': link['id']})
+        self.assertEqual(checked.json['result']['status'], 'unknown')
+        rejected = Mock(status_code=401)
+        with patch('credential_links.requests.get', return_value=rejected):
+            checked = self.client.post('/api/miniapp/credential_links/check', json={'id': link['id']})
+        self.assertEqual(checked.json['result']['status'], 'invalid')
+        self.assertNotIn('fixture-bot-token', checked.text)
+        stored = app.db().execute('SELECT encrypted,status FROM credential_links').fetchone()
+        self.assertEqual(stored['status'], 'invalid')
+        self.assertNotIn('fixture-bot-token', stored['encrypted'])
+
+    def test_existing_credential_vault_gains_health_columns_without_losing_links(self):
+        import sqlite3
+        from credential_links import ensure_schema, list_links
+        connection = sqlite3.connect(':memory:')
+        connection.row_factory = sqlite3.Row
+        self.addCleanup(connection.close)
+        connection.execute('''CREATE TABLE credential_links (
+            id INTEGER PRIMARY KEY, owner TEXT NOT NULL, platform TEXT NOT NULL,
+            uid TEXT NOT NULL, name TEXT NOT NULL, encrypted TEXT NOT NULL,
+            updated REAL NOT NULL, UNIQUE(owner,platform,uid))''')
+        connection.execute("INSERT INTO credential_links VALUES(1,'root','discord','123','Old account','ciphertext',1)")
+        ensure_schema(connection)
+        row = list_links(connection, 'root')[0]
+        self.assertEqual(row['name'], 'Old account')
+        self.assertEqual(row['status'], 'unknown')
+        self.assertNotIn('encrypted', row)
 
     def test_build_check_rejects_valid_python_with_missing_runtime_tail(self):
         with self.assertRaisesRegex(ValueError, 'ensure_telegram_bot_started'):

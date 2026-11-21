@@ -47,6 +47,12 @@ const crypto=require('crypto'),assert=require('assert/strict');
  const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('https://telegram.org/**',r=>r.abort());
+ const linkedAt=Date.now()/1000;
+ await page.route('**/api/miniapp/credential_links',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,links:[
+  {id:8,platform:'discord',uid:'1234',name:'Discord fixture',status:'verified',kind:'bot',updated:linkedAt,checked_at:linkedAt,last_error:''},
+  {id:9,platform:'facebook',uid:'5678',name:'Facebook fixture',status:'invalid',kind:'cookie',updated:linkedAt,checked_at:linkedAt,last_error:'Phiên hết hạn'}
+ ]})}));
+ await page.route('**/api/miniapp/credential_links/check',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,result:{id:8,status:'verified',name:'Discord fixture'}})}));
  await page.goto('http://127.0.0.1:5873/miniapp#tgWebAppData='+encodeURIComponent(auth),{waitUntil:'domcontentloaded'});
  assert.equal(await page.locator('html').getAttribute('data-theme'),'dark','new Mini App should default to the Yanbi Aurora dark theme');
  await page.waitForFunction(()=>document.querySelector('#metrics').getAttribute('aria-busy')==='false');
@@ -68,6 +74,10 @@ const crypto=require('crypto'),assert=require('assert/strict');
  };
  await viaMore('discord');
  await page.waitForFunction(()=>document.querySelector('#discord').getAttribute('aria-hidden')==='false');
+ assert.equal(await page.locator('#discord-links .credential-state').innerText(),'Phiên đã kiểm tra');
+ await page.locator('#discord-links').getByRole('button',{name:'Kiểm tra lại'}).click();
+ await page.locator('#bottom button[aria-label="Tài khoản"]').click();
+ assert.equal(await page.locator('#facebook-links .credential-state').innerText(),'Phiên hết hạn');
  assert.equal(await page.locator('#music').count(),0);
  assert.equal(await page.locator('#home-open-music').count(),0);
  await viaMore('zalo');
@@ -223,6 +233,8 @@ const crypto=require('crypto'),assert=require('assert/strict');
  assert.equal(launchBody.account_id,'2');
  assert.deepEqual(launchBody.box_ids,['box-two','box-three']);
  assert.equal(await page.locator('#task-account-filter').inputValue(),'2');
+ await page.locator('#task-list .task-card-head').getByText('Zalo · treo_ngon').waitFor();
+ await page.locator('#task-list .task-technical summary').click();
  await page.getByText('ID legacy:task2', {exact:false}).waitFor();
  assert.doesNotMatch(await page.locator('#task-list').innerText(),/legacy:otheracc/);
  assert.equal(await page.locator('#stop-all').isVisible(),false);
@@ -230,6 +242,7 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await page.locator('#task-search').fill('nonexistent');
  assert.match(await page.locator('#task-list').innerText(),/Không có tác vụ/);
  await page.locator('#task-search').fill('box-two');
+ await page.locator('#task-list .task-technical summary').click();
  assert.match(await page.locator('#task-list').innerText(),/legacy:task2/);
 
  await page.screenshot({path:'/tmp/glaze-v4.png'});
