@@ -53,8 +53,9 @@ class YanbiStudioTests(unittest.TestCase):
     def test_effects_and_mobile_accessibility(self):
         for marker in ("prefers-reduced-motion:reduce", "focus-visible",
                        "max-width:520px", "aurora-enter", "aurora-drift",
-                       "backdrop-filter", "scroll-snap-type:x mandatory", "scroll-reveal", "IntersectionObserver"):
+                       "backdrop-filter", "scroll-snap-type:x mandatory", "scroll-reveal"):
             self.assertIn(marker, self.css)
+        self.assertIn("IntersectionObserver", self.js)
 
     def test_unauthenticated_user_sees_no_navigation_or_private_pages(self):
         self.assertIn("body.yanbi.auth-locked #pages", self.css)
