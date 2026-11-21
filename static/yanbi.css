@@ -503,3 +503,190 @@ body.yanbi #connection[data-state=PARTIAL]{color:var(--fg)}
   body.yanbi .scroll-reveal{opacity:1!important;transform:none!important}
   body.yanbi #more-menu{animation:none!important}
 }
+
+
+/* GLAZE KINETIC GARDEN · purely decorative, never intercepts taps or QR pixels. */
+body.yanbi #pages section{
+  position:relative;
+  isolation:isolate;
+}
+body.yanbi #pages .glaze-flower-field{
+  position:absolute;
+  left:0;top:0;right:0;height:1100px;
+  width:100%;max-width:none!important;
+  z-index:-1;pointer-events:none;
+  overflow:hidden;
+  user-select:none;-webkit-user-select:none;
+  contain:layout style paint;
+}
+body.yanbi #pages .glaze-flower{
+  position:absolute;
+  left:var(--glaze-x);top:var(--glaze-y);
+  font-family:Georgia,"Times New Roman",serif;
+  font-size:var(--glaze-petal-size);
+  line-height:1;
+  color:color-mix(in srgb,var(--accent) 55%,var(--accent2));
+  text-shadow:0 0 20px color-mix(in srgb,var(--accent) 28%,transparent);
+  opacity:.46;
+  transform:translate3d(0,0,0);
+  will-change:transform,opacity;
+}
+:root[data-theme=light] body.yanbi #pages .glaze-flower{
+  color:color-mix(in srgb,var(--accent) 56%,var(--accent2));
+  text-shadow:0 0 24px color-mix(in srgb,var(--accent) 12%,transparent);
+  opacity:.32;
+}
+/* Keep the exact accessible text of every page title; animate one grapheme at a time. */
+body.yanbi #pages .glaze-kinetic-title{
+  overflow:visible;
+  white-space:normal;
+  text-wrap:balance;
+}
+body.yanbi #pages .glaze-kinetic-word{
+  display:inline-block;
+  white-space:nowrap;
+  vertical-align:baseline;
+}
+body.yanbi #pages .glaze-kinetic-letter,
+body.yanbi #home .overview-heading h1 .glaze-kinetic-letter{
+  display:inline-block;
+  vertical-align:baseline;
+  transform-origin:50% 90%;
+  background:none!important;
+  -webkit-background-clip:initial!important;
+  background-clip:initial!important;
+  color:var(--fg)!important;
+  -webkit-text-fill-color:var(--fg)!important;
+  opacity:1;
+}
+body.yanbi #home .overview-heading h1 .glaze-kinetic-letter.glaze-kinetic-accent{
+  background:linear-gradient(115deg,var(--accent),var(--accent2))!important;
+  -webkit-background-clip:text!important;
+  background-clip:text!important;
+  color:transparent!important;
+  -webkit-text-fill-color:transparent!important;
+}
+body.yanbi #pages .glaze-kinetic-letter{
+  will-change:transform,opacity;
+}
+body.yanbi #settings .motion-note{
+  margin:5px 0 13px;
+  padding:10px 12px;
+  border-left:2px solid var(--accent2);
+  border-radius:0 12px 12px 0;
+  background:color-mix(in srgb,var(--accent2) 7%,var(--ui-glass));
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.55;
+}
+body.yanbi .qr-help{
+  max-width:380px;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.55;
+  margin:7px 0 14px;
+}
+/* Render QR exactly as received: a stable, solid white quiet zone for scanning. */
+body.yanbi #qr-image{
+  width:min(260px,100%);
+  max-width:100%;
+  height:auto;
+  aspect-ratio:1/1;
+  object-fit:contain;
+  background:#fff;
+  padding:12px;
+  border-radius:16px;
+  box-shadow:0 14px 34px #06091a40;
+  filter:none;
+}
+body.yanbi #qr-image[hidden]{display:none!important}
+/* A luminous tab accent, without introducing additional tabs or buttons. */
+body.yanbi #bottom button.bottom-nav-button[aria-current=page]{
+  border-color:color-mix(in srgb,var(--accent) 48%,var(--line));
+  box-shadow:0 7px 22px color-mix(in srgb,var(--accent) 18%,transparent),inset 0 1px var(--ui-highlight);
+}
+body.yanbi #bottom button.bottom-nav-button .nav-caption{
+  transition:letter-spacing .25s ease,opacity .25s ease;
+}
+body.yanbi #bottom button.bottom-nav-button[aria-current=page] .nav-caption{
+  letter-spacing:.025em;
+}
+/* Clear interaction surfaces even over the decorated background. */
+body.yanbi #pages section article,
+body.yanbi #pages section .card{
+  box-shadow:var(--ui-shadow),inset 0 1px var(--ui-highlight);
+}
+body.yanbi #pages section article:focus-within,
+body.yanbi #pages section .card:focus-within{
+  border-color:color-mix(in srgb,var(--accent2) 45%,var(--line));
+}
+/* Explicit off preserves full readability and no animated transform. */
+:root[data-motion=off] body.yanbi *,
+:root[data-motion=off] body.yanbi *::before,
+:root[data-motion=off] body.yanbi *::after{
+  animation:none!important;
+  transition:none!important;
+}
+:root[data-motion=off] body.yanbi .scroll-reveal{
+  opacity:1!important;transform:none!important;
+}
+/* Active page animation resets on tabs AND finger swipes. */
+:root[data-motion=on] body.yanbi #pages .glaze-kinetic-play .glaze-kinetic-letter{
+  animation:glaze-character-pop .68s cubic-bezier(.17,.74,.22,1.17) both!important;
+  animation-delay:calc(var(--glaze-char-index) * 26ms)!important;
+}
+:root[data-motion=on] body.yanbi #pages .glaze-flower-play .glaze-flower{
+  animation:glaze-petal-float 7s ease-in-out infinite both!important;
+  animation-delay:calc(var(--glaze-petal-index) * .15s)!important;
+}
+:root[data-motion=on] body.yanbi .overview-heading{
+  background-size:170% 170%;
+  animation:glaze-gradient-orbit 11s ease-in-out infinite alternate!important;
+}
+:root[data-motion=on] body.yanbi #bottom button.bottom-nav-button[aria-current=page]::after{
+  animation:glaze-active-glow 2.6s ease-in-out infinite alternate!important;
+}
+:root[data-motion=on] body.yanbi #more-menu:not([hidden]){
+  animation:glaze-menu-rise .3s cubic-bezier(.17,.8,.25,1) both!important;
+}
+:root[data-motion=on] body.yanbi .scroll-reveal{
+  opacity:0!important;
+  transform:translate3d(0,17px,0) scale(.985)!important;
+  transition:transform .55s cubic-bezier(.2,.82,.25,1),opacity .5s ease-out!important;
+  animation:none!important;
+}
+:root[data-motion=on] body.yanbi .scroll-reveal.is-visible{
+  opacity:1!important;
+  transform:translate3d(0,0,0) scale(1)!important;
+}
+@keyframes glaze-character-pop{
+  0%{opacity:0;transform:translate3d(0,29px,0) rotate(-13deg) scale(.65);filter:blur(3px)}
+  58%{opacity:1;transform:translate3d(0,-6px,0) rotate(3deg) scale(1.08);filter:blur(0)}
+  78%{transform:translate3d(0,2px,0) rotate(-1deg) scale(.985)}
+  100%{opacity:1;transform:translate3d(0,0,0) rotate(0) scale(1);filter:blur(0)}
+}
+@keyframes glaze-petal-float{
+  0%{opacity:0;transform:translate3d(0,22px,0) rotate(-22deg) scale(.55)}
+  18%{opacity:.52;transform:translate3d(-7px,-9px,0) rotate(10deg) scale(1)}
+  48%{opacity:.72;transform:translate3d(9px,-24px,0) rotate(-6deg) scale(1.16)}
+  78%{opacity:.5;transform:translate3d(-5px,-46px,0) rotate(20deg) scale(.96)}
+  100%{opacity:0;transform:translate3d(7px,-61px,0) rotate(33deg) scale(.7)}
+}
+@keyframes glaze-gradient-orbit{
+  from{background-position:0% 32%}
+  to{background-position:100% 78%}
+}
+/* The user's OS Reduced Motion remains the default unless they explicitly turn motion on. */
+@media(prefers-reduced-motion:reduce){
+  :root:not([data-motion=on]) body.yanbi #pages .glaze-flower,
+  :root:not([data-motion=on]) body.yanbi #pages .glaze-kinetic-letter{
+    animation:none!important;
+    transition:none!important;
+    transform:none!important;
+    opacity:1!important;
+  }
+}
+@media(max-width:520px){
+  body.yanbi #pages .glaze-flower{font-size:clamp(15px,4vw,var(--glaze-petal-size))}
+  body.yanbi #pages .glaze-kinetic-title{letter-spacing:-.04em}
+}
