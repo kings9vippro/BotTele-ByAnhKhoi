@@ -71,6 +71,7 @@
   input.addEventListener('change',apply);apply();
  }
  const primaryNav=new Set(['home','accounts','tasks']);
+ let requestedPage=null;
  const moreMenu=$('more-menu');
  function closeMore(){
   if(!moreMenu)return;
@@ -106,6 +107,7 @@
  }
  function go(name){
   if(!keys.includes(name))return;
+  requestedPage=name;
   select(name);
   pages.scrollTo({left:keys.indexOf(name)*pages.clientWidth,behavior:reduced.matches?'auto':'smooth'});
   tg?.HapticFeedback?.selectionChanged();
@@ -158,11 +160,23 @@
   if(scrollFrame)return;
   scrollFrame=requestAnimationFrame(()=>{
    scrollFrame=null;
+   if(requestedPage){
+    const target=keys.indexOf(requestedPage)*pages.clientWidth;
+    if(Math.abs(pages.scrollLeft-target)>3)return;
+    requestedPage=null;
+   }
    const next=keys[Math.round(pages.scrollLeft/pages.clientWidth)]||'home';
    if(next!==active)select(next);
   });
  };
+ pages.addEventListener('pointerdown',()=>{requestedPage=null;},{passive:true});
+ pages.addEventListener('scrollend',()=>{
+  requestedPage=null;
+  const next=keys[Math.round(pages.scrollLeft/pages.clientWidth)]||'home';
+  if(next!==active)select(next);
+ });
  window.addEventListener('resize',()=>{
+  requestedPage=null;
   pages.scrollTo({left:keys.indexOf(active)*pages.clientWidth,behavior:'instant'});
  });
  let revealFrame=0;
