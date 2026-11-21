@@ -55,12 +55,57 @@ const crypto=require('crypto'),assert=require('assert/strict');
  assert.equal(await page.locator('#home-open-music').count(),0);
  await viaMore('zalo');
  await page.waitForFunction(()=>document.querySelector('#zalo').getAttribute('aria-hidden')==='false');
+ // Restore-and-protect the previously working QR contract (provider is mocked).
+ const qrId='123e4567-e89b-12d3-a456-426614174000';
+ const qrImage='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLQzQAAAABJRU5ErkJggg==';
+ let qrStatusCalls=0;
+ await page.route('**/api/miniapp/start_qr',r=>r.fulfill({status:200,contentType:'application/json',
+  body:JSON.stringify({ok:true,session_id:qrId,status:'waiting_scan'})}));
+ await page.route(url=>url.pathname==='/api/miniapp/qr_status/'+qrId,r=>{
+  qrStatusCalls++;
+  return r.fulfill({status:200,contentType:'application/json',
+   body:JSON.stringify({ok:true,status:qrStatusCalls===1?'waiting_scan':'expired',
+    message:qrStatusCalls===1?'Đã tạo QR':'Mã QR hết hạn',
+    qr_base64:qrStatusCalls===1?'data:image/png;base64,'+qrImage:''})});
+ });
+ await page.locator('#qr').click();
+ await page.waitForFunction(()=>{const el=document.querySelector('#qr-image');return !el.hidden&&el.naturalWidth>0;});
+ await page.waitForFunction(()=>document.querySelector('#qr').disabled===false,{timeout:8000});
+ assert.equal(await page.locator('#qr-image').isVisible(),false);
+ assert.equal(qrStatusCalls>=2,true);
+ await page.unroute('**/api/miniapp/start_qr');
+ await page.unroute(url=>url.pathname==='/api/miniapp/qr_status/'+qrId);
  await viaMore('settings');
  await page.waitForFunction(()=>document.querySelector('#settings').getAttribute('aria-hidden')==='false');
  await page.waitForTimeout(350);
  assert.equal(await page.locator('#oauth-form').count(),0);
  assert.equal(await page.locator('#facebook-credential-form').count(),1);
  assert.equal(await page.locator('#discord-credential-form').count(),1);
+ await page.locator('#motion').selectOption('on');
+ assert.equal(await page.locator('html').getAttribute('data-motion'),'on');
+ await page.locator('#bottom button[aria-label="Tài khoản"]').click();
+ await page.waitForFunction(()=>document.querySelector('#accounts').getAttribute('aria-hidden')==='false');
+ const animated=await page.locator('#accounts').evaluate(section=>{
+  const title=section.querySelector('.glaze-kinetic-title');
+  const flower=section.querySelector('.glaze-flower');
+  const character=section.querySelector('.glaze-kinetic-letter');
+  return {letters:title?.querySelectorAll('.glaze-kinetic-letter').length||0,
+   flowers:section.querySelectorAll('.glaze-flower').length,
+   titleAnimation:character?getComputedStyle(character).animationName:'',
+   flowerAnimation:flower?getComputedStyle(flower).animationName:'',
+   headingLabel:title?.getAttribute('aria-label')||'',
+   pointerEvents:flower?getComputedStyle(flower.parentElement).pointerEvents:''};
+ });
+ assert(animated.letters>=5,'headings must be built from animated letters');
+ assert.equal(animated.flowers,7,'seven decorative flowers should exist on each page');
+ assert.match(animated.titleAnimation,/glaze-character-pop/);
+ assert.match(animated.flowerAnimation,/glaze-petal-float/);
+ assert.equal(animated.pointerEvents,'none');
+ assert.match(animated.headingLabel,/Kết nối/);
+ await viaMore('settings');
+ await page.locator('#motion').selectOption('off');
+ assert.equal(await page.locator('html').getAttribute('data-motion'),'off');
+ await page.locator('#motion').selectOption('on');
  await page.locator('#theme').selectOption('light');
  assert.equal(await page.locator('html').getAttribute('data-theme'),'light');
  await page.locator('#text-size').selectOption('large');
