@@ -37,7 +37,7 @@ class CompactV11Tests(unittest.TestCase):
         # Retry may be invoked from a web-cookie session without Telegram data.
         # A server 401 must still restore the locked authentication gate.
         self.assertIn("if(error?.status===401)",js)
-        self.assertIn("showAuthGate(state",js)
+        self.assertIn("showAuthGate(\'AUTH_REQUIRED\'",js)
         self.assertIn("document.body.classList.add('auth-locked')",js)
 
     def test_account_scoped_registry_does_not_read_unrelated_discord_tasks(self):
