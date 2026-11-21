@@ -690,3 +690,186 @@ body.yanbi #pages section .card:focus-within{
   body.yanbi #pages .glaze-flower{font-size:clamp(15px,4vw,var(--glaze-petal-size))}
   body.yanbi #pages .glaze-kinetic-title{letter-spacing:-.04em}
 }
+
+
+/* GLAZE 2.6 · login/recovery animations and playful, accessible tap feedback. */
+body.yanbi .login-card{
+  z-index:1;
+  overflow:visible;
+}
+body.yanbi .login-card h1{
+  display:block;
+  font-size:clamp(26px,6.5vw,36px);
+  line-height:1.19;
+  letter-spacing:-.045em;
+  margin:0 0 13px;
+  color:var(--fg);
+}
+body.yanbi .login-title-word{
+  display:inline-block;
+  white-space:nowrap;
+}
+body.yanbi .login-title-word .login-letter{
+  display:inline-block;
+  color:var(--fg);
+  transform-origin:50% 85%;
+}
+body.yanbi .login-title-word:last-child .login-letter{
+  color:var(--accent);
+  text-shadow:0 3px 19px color-mix(in srgb,var(--accent) 26%,transparent);
+}
+body.yanbi .login-security-note{
+  margin:-8px 0 19px!important;
+  padding:10px 13px;
+  border-left:2px solid var(--accent);
+  background:color-mix(in srgb,var(--accent) 7%,var(--ui-glass));
+  border-radius:0 12px 12px 0;
+  color:var(--muted);
+  font-size:12px!important;
+  line-height:1.55;
+}
+body.yanbi .login-motion-toggle{
+  display:block;
+  width:100%;
+  min-height:43px;
+  margin:10px 0 0;
+  padding:9px 13px;
+  background:color-mix(in srgb,var(--accent) 7%,var(--ui-glass));
+  color:var(--muted);
+  border:1px solid var(--line);
+  border-radius:13px;
+  font-size:12px;
+  font-weight:720;
+}
+body.yanbi .login-motion-toggle:focus-visible{
+  outline:2px solid var(--accent);
+  outline-offset:3px;
+}
+body.yanbi .login-flora{
+  position:fixed;
+  inset:0;
+  z-index:0;
+  pointer-events:none;
+  overflow:hidden;
+  contain:layout style;
+}
+body.yanbi .login-flora span{
+  position:absolute;
+  display:block;
+  font-size:clamp(22px,6vw,42px);
+  color:color-mix(in srgb,var(--accent) 58%,var(--accent2));
+  opacity:.36;
+  filter:drop-shadow(0 0 18px color-mix(in srgb,var(--accent2) 20%,transparent));
+  transform-origin:center;
+  user-select:none;
+}
+body.yanbi .login-flora span:nth-child(1){left:7%;top:15%}
+body.yanbi .login-flora span:nth-child(2){right:8%;top:23%}
+body.yanbi .login-flora span:nth-child(3){left:16%;bottom:12%}
+body.yanbi .login-flora span:nth-child(4){right:15%;bottom:13%}
+body.yanbi .login-flora span:nth-child(5){left:50%;top:5%}
+body.yanbi .login-card::after{
+  content:"";position:absolute;inset:-1px;
+  z-index:-1;border-radius:inherit;
+  background:linear-gradient(125deg,transparent 7%,color-mix(in srgb,var(--accent) 24%,transparent) 35%,transparent 54%,color-mix(in srgb,var(--accent2) 19%,transparent) 82%,transparent);
+  pointer-events:none;
+  opacity:.65;
+  background-size:240% 200%;
+}
+body.yanbi .login-card .btn{
+  position:relative;
+  isolation:isolate;
+  overflow:hidden;
+}
+body.yanbi .login-card .btn::after{
+  content:"";position:absolute;z-index:-1;
+  width:42%;height:340%;top:-120%;left:-48%;
+  transform:rotate(22deg);
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.32),transparent);
+  pointer-events:none;
+}
+body.yanbi #auth-gate h1{
+  text-wrap:balance;
+}
+body.yanbi #auth-gate::after{
+  content:"✿  ✧  ❀";
+  position:absolute;
+  top:18px;right:19px;
+  color:color-mix(in srgb,var(--accent2) 53%,transparent);
+  opacity:.56;
+  letter-spacing:.32em;
+  font-size:17px;
+  pointer-events:none;
+}
+body.yanbi .glaze-tap-garden{
+  position:fixed;z-index:60;left:var(--tap-x);top:var(--tap-y);
+  pointer-events:none;contain:layout style;
+}
+body.yanbi .glaze-tap-petal{
+  position:absolute;
+  font-size:19px;
+  line-height:1;
+  color:var(--accent2);
+  text-shadow:0 0 15px color-mix(in srgb,var(--accent) 60%,transparent);
+  opacity:0;
+  transform:translate(-50%,-50%);
+}
+:root[data-motion=on] body.yanbi .glaze-tap-petal{
+  animation:glaze-tap-flower .85s cubic-bezier(.12,.75,.28,1) both;
+  animation-delay:calc(var(--tap-i) * 55ms);
+}
+:root[data-motion=on] body.yanbi .login-title-word .login-letter{
+  animation:glaze-login-letter .64s cubic-bezier(.16,.78,.2,1.22) both;
+  animation-delay:calc(120ms + var(--letter) * 42ms);
+}
+:root[data-motion=on] body.yanbi .login-flora span{
+  animation:glaze-login-flower 7s ease-in-out infinite alternate both;
+}
+:root[data-motion=on] body.yanbi .login-flora span:nth-child(2){animation-delay:-2.5s}
+:root[data-motion=on] body.yanbi .login-flora span:nth-child(3){animation-delay:-4s}
+:root[data-motion=on] body.yanbi .login-flora span:nth-child(4){animation-delay:-1.2s}
+:root[data-motion=on] body.yanbi .login-flora span:nth-child(5){animation-delay:-5.5s}
+:root[data-motion=on] body.yanbi .login-card::after{
+  animation:glaze-login-outline 9s ease-in-out infinite alternate;
+}
+:root[data-motion=on] body.yanbi .login-card .btn::after{
+  animation:glaze-login-button-sheen 3.8s ease-in-out infinite;
+}
+:root[data-motion=on] body.yanbi #auth-gate h1{
+  animation:glaze-login-letter .75s cubic-bezier(.16,.78,.2,1.22) both;
+}
+:root[data-motion=off] body.yanbi .login-title-word .login-letter,
+:root[data-motion=off] body.yanbi .login-flora span,
+:root[data-motion=off] body.yanbi .login-card::after,
+:root[data-motion=off] body.yanbi .login-card .btn::after{
+  animation:none!important;
+}
+@keyframes glaze-login-letter{
+  0%{opacity:0;transform:translate3d(0,24px,0) rotate(-12deg) scale(.7);filter:blur(2px)}
+  65%{opacity:1;transform:translate3d(0,-4px,0) rotate(2deg) scale(1.07);filter:blur(0)}
+  100%{opacity:1;transform:none;filter:blur(0)}
+}
+@keyframes glaze-login-flower{
+  0%{transform:translate3d(-12px,14px,0) rotate(-22deg) scale(.84);opacity:.16}
+  100%{transform:translate3d(15px,-19px,0) rotate(22deg) scale(1.22);opacity:.6}
+}
+@keyframes glaze-login-outline{
+  from{background-position:0% 30%}
+  to{background-position:100% 70%}
+}
+@keyframes glaze-login-button-sheen{
+  0%,29%{left:-48%;opacity:0}
+  42%{opacity:1}
+  64%,100%{left:115%;opacity:0}
+}
+@keyframes glaze-tap-flower{
+  0%{opacity:.9;transform:translate(-50%,-50%) scale(.4) rotate(0)}
+  75%{opacity:.68}
+  100%{opacity:0;transform:translate(calc(-50% + var(--tap-dx)),calc(-50% + var(--tap-dy))) scale(1.15) rotate(var(--tap-rotate))}
+}
+@media(max-width:520px){
+  body.yanbi .login-flora span:nth-child(5){display:none}
+  body.yanbi .login-flora span{opacity:.25}
+  body.yanbi .login-card{padding:clamp(23px,5vw,32px)}
+  body.yanbi .login-card h1{font-size:clamp(25px,6.3vw,32px)}
+}
