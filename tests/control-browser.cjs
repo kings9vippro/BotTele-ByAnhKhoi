@@ -55,12 +55,55 @@ const crypto=require('crypto'),assert=require('assert/strict');
  assert.equal(await page.locator('#home-open-music').count(),0);
  await viaMore('zalo');
  await page.waitForFunction(()=>document.querySelector('#zalo').getAttribute('aria-hidden')==='false');
+ // Synthetic provider responses exercise the actual browser flow without external credentials.
+ const qrId='123e4567-e89b-12d3-a456-426614174000';
+ const fakePng=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLQzQAAAABJRU5ErkJggg==','base64');
+ let qrPolls=0,qrCancelled=false;
+ await page.route('**/api/miniapp/start_qr',r=>r.fulfill({
+  status:200,contentType:'application/json',
+  body:JSON.stringify({ok:true,session_id:qrId,status:'generating',remaining_sec:100})
+ }));
+ await page.route(url=>url.pathname==='/api/miniapp/qr_status/'+qrId, r=>{
+  qrPolls++;
+  const ready=qrPolls>1;
+  return r.fulfill({status:200,contentType:'application/json',
+   body:JSON.stringify({ok:true,status:ready?'waiting_scan':'generating',
+    message:ready?'Quét mã QR để đăng nhập':'Đang yêu cầu mã Zalo',
+    remaining_sec:ready?87:99,qr_image_url:ready?'/api/miniapp/qr_image/'+qrId+'.png':''})});
+ });
+ await page.route('**/api/miniapp/qr_image/*.png',r=>{
+  assert.match(r.request().headers()['x-telegram-init-data']||'',/auth_date=/,'QR image must carry the Telegram session header');
+  return r.fulfill({status:200,contentType:'image/png',body:fakePng});
+ });
+ await page.route('**/api/miniapp/cancel_qr',r=>{qrCancelled=true;return r.fulfill({
+  status:200,contentType:'application/json',body:JSON.stringify({ok:true,cancelled:true})
+ });});
+ await page.locator('#qr').click();
+ await page.waitForFunction(()=>document.querySelector('#qr-image').naturalWidth>0&&document.querySelector('#qr-image').hidden===false,{timeout:10000});
+ assert.match(await page.locator('#qr-status').innerText(),/Quét mã QR/);
+ assert.equal(await page.locator('#qr-cancel').isVisible(),true);
+ await page.locator('#qr-cancel').click();
+ assert.equal(qrCancelled,true);
+ assert.equal(await page.locator('#qr-cancel').isVisible(),false);
+ assert.equal(await page.locator('#qr').isEnabled(),true);
+ assert.equal(await page.locator('#qr-image').isVisible(),false);
+ await page.unroute('**/api/miniapp/start_qr');
+ await page.unroute('**/api/miniapp/qr_image/*.png');
+ await page.unroute('**/api/miniapp/cancel_qr');
+ await page.unroute(url=>url.pathname==='/api/miniapp/qr_status/'+qrId);
  await viaMore('settings');
  await page.waitForFunction(()=>document.querySelector('#settings').getAttribute('aria-hidden')==='false');
  await page.waitForTimeout(350);
  assert.equal(await page.locator('#oauth-form').count(),0);
  assert.equal(await page.locator('#facebook-credential-form').count(),1);
  assert.equal(await page.locator('#discord-credential-form').count(),1);
+ await page.locator('#motion').selectOption('on');
+ assert.equal(await page.locator('html').getAttribute('data-motion'),'on');
+ assert.match(await page.locator('.brand-wordmark').evaluate(el=>getComputedStyle(el).animationName),/glaze-logo-flow/);
+ await page.locator('#motion').selectOption('off');
+ assert.equal(await page.locator('html').getAttribute('data-motion'),'off');
+ assert.equal(await page.locator('.brand-wordmark').evaluate(el=>getComputedStyle(el).animationName),'none');
+ await page.locator('#motion').selectOption('on');
  await page.locator('#theme').selectOption('light');
  assert.equal(await page.locator('html').getAttribute('data-theme'),'light');
  await page.locator('#text-size').selectOption('large');

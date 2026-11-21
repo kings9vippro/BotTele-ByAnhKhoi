@@ -46,6 +46,48 @@ class MiniAppTests(unittest.TestCase):
         self.assertEqual(result.json["qr_base64"], "image")
         self.assertNotIn("cookies", result.json)
 
+    def test_qr_start_returns_without_blocking_on_external_provider(self):
+        with patch.object(app.ZaloQRLoginManager, "start_qr_session",
+                          return_value={"ok": True, "session_id": "123e4567-e89b-12d3-a456-426614174000",
+                                        "status": "generating"}) as worker:
+            response = self.client.post("/api/miniapp/start_qr")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["status"], "generating")
+        worker.assert_called_once_with(wait_for_qr_seconds=0.0)
+
+    def test_qr_image_requires_auth_and_compact_poll_excludes_base64(self):
+        session_id = "123e4567-e89b-12d3-a456-426614174000"
+        fake = {"ok": True, "session_id": session_id, "status": "waiting_scan",
+                "message": "Mã QR đã sẵn sàng", "qr_base64": "test-image",
+                "qr_image_url": "/api/zalo/qr_image/" + session_id + ".png",
+                "remaining_sec": 71, "cookies": {"secret": "must-not-leak"}}
+        with patch.object(app.ZaloQRLoginManager, "get_session_status", return_value=fake):
+            compact = self.client.get("/api/miniapp/qr_status/" + session_id + "?compact=1")
+        self.assertEqual(compact.status_code, 200)
+        self.assertEqual(compact.json["qr_image_url"], "/api/miniapp/qr_image/" + session_id + ".png")
+        self.assertNotIn("qr_base64", compact.json)
+        self.assertNotIn("cookies", compact.json)
+        with patch.object(app.ZaloQRLoginManager, "get_qr_png_bytes", return_value=b"example-png-bytes"):
+            allowed = self.client.get("/api/miniapp/qr_image/" + session_id + ".png")
+            outsider = app.app.test_client().get("/api/miniapp/qr_image/" + session_id + ".png")
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.data, b"example-png-bytes")
+        self.assertEqual(allowed.mimetype, "image/png")
+        self.assertEqual(outsider.status_code, 401)
+
+    def test_qr_cancel_sets_worker_stop_event(self):
+        session_id = "123e4567-e89b-12d3-a456-426614174000"
+        state = {"session_id": session_id, "status": "waiting_scan",
+                 "message": "Ready", "stop_ev": threading.Event()}
+        with patch.object(app.ZaloQRLoginManager, "SESSIONS", {session_id: state}), \
+             patch.object(app.ZaloQRLoginManager, "_persist_qr_state_to_db"):
+            response = self.client.post("/api/miniapp/cancel_qr",
+                                        json={"session_id": session_id})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["cancelled"])
+        self.assertEqual(state["status"], "cancelled")
+        self.assertTrue(state["stop_ev"].is_set())
+
     def test_qr_does_not_report_success_when_account_save_fails(self):
         from zalo_login import ZaloPCSessionKeeper
         state = {"auto_save": True, "status": "confirmed"}
