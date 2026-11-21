@@ -14,6 +14,7 @@ jobs:
       TELEGRAM_ADMIN_ID: '123'
       ADMIN_PRINCIPAL_ID: '123'
       SECRET_KEY: ci-browser-only-session-secret
+      ADMIN_PASS: ci-browser-only-password
       PORT: '5873'
       BIND_HOST: '127.0.0.1'
     steps:
