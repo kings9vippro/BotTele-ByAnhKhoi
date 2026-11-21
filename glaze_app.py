@@ -175,6 +175,7 @@ SECRET_KEY = os.environ.get("SECRET_KEY") or secrets.token_urlsafe(32)
 ACCESS_KEY = os.environ.get("WEB_KEY", "").strip()
 DEFAULT_ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 DEFAULT_ADMIN_PASS = os.environ.get("ADMIN_PASS", "")
+ADMIN_PASSWORD_HASH_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin_password.hash")
 
 def admin_principal_id():
     """Stable web owner with a dynamic Telegram fallback for tests/migrations."""
@@ -16635,6 +16636,12 @@ def login():
         if pw and (pw == ACCESS_KEY or pw == DEFAULT_ADMIN_PASS):
             is_valid = True
         elif pw:
+            try:
+                with open(ADMIN_PASSWORD_HASH_PATH, encoding="ascii") as stored:
+                    is_valid = verify_password_secure(stored.read().strip(), pw)
+            except OSError:
+                pass
+        if pw and not is_valid:
             try:
                 conn = db()
                 row = conn.execute("SELECT password FROM users WHERE username=?", (DEFAULT_ADMIN_USER,)).fetchone()

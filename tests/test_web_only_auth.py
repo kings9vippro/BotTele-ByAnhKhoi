@@ -58,6 +58,24 @@ class WebOnlyAuthTests(unittest.TestCase):
             )
             self.assertNotEqual(accepted_by_boundary.status_code, 403)
 
+    def test_repository_password_hash_authenticates_without_render_password(self):
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            password = "local fixture password"
+            hashed = app.hash_password_secure(password)
+            path = Path(directory) / "admin_password.hash"
+            path.write_text(hashed + "\n", encoding="ascii")
+            with patch.object(app, "ADMIN_PASSWORD_HASH_PATH", str(path)), \
+                    patch.object(app, "ACCESS_KEY", ""), \
+                    patch.object(app, "DEFAULT_ADMIN_PASS", ""):
+                denied = self.client.post("/login", data={"password": "wrong"})
+                accepted = self.client.post("/login", data={"password": password})
+        self.assertEqual(denied.status_code, 200)
+        self.assertEqual(accepted.status_code, 302)
+        with self.client.session_transaction() as browser_session:
+            self.assertTrue(browser_session.get("logged_in"))
+
     def test_empty_password_never_authenticates_seeded_legacy_admin(self):
         with patch.object(app, "ACCESS_KEY", ""), patch.object(app, "DEFAULT_ADMIN_PASS", ""):
             response = self.client.post("/login", data={"password": ""})
