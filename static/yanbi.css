@@ -283,6 +283,8 @@ body.yanbi #auth-gate a.auth-login-link{
 }
 body.yanbi #auth-gate #auth-retry{min-height:49px}
 body.yanbi.auth-locked{overflow:auto;min-height:100dvh}
+/* Security contract: legacy hide rule must outrank the visible Aurora tab/dock !important rules. */
+body.yanbi.auth-locked #pages,body.yanbi.auth-locked #tabs,body.yanbi.auth-locked #bottom,body.yanbi.auth-locked #error{display:none!important}
 body.yanbi.auth-locked #auth-gate{margin-top:clamp(22px,7vh,70px)}
 body.yanbi #auth-gate[hidden],body.yanbi #startup-panel[hidden]{display:none!important}
 body.yanbi #startup-panel{border:1px solid var(--line);background:var(--ui-glass);border-radius:18px;box-shadow:var(--ui-shadow);color:var(--fg);backdrop-filter:blur(18px)}
