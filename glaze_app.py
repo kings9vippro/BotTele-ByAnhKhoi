@@ -8976,7 +8976,7 @@ class ZaloQRLoginManager:
             f"{session_id}_{qr_nonce}", region_code=reg_code, custom_pc_name=custom_pc_name
         )
         reg_lbl = pc_dev.get("region_label", "TP. Hồ Chí Minh, Việt Nam")
-        vn_ip_val = pc_dev.get("vn_ip", "14.161.92.108")
+        vn_ip_val = ""  # Device preset IP is not verified outbound network information.
 
         # Tuyệt đối KHÔNG tự động gán Proxy từ ProxyPoolEngine vào phiên QR Zalo (tránh lệch IP làm hỏng phiên QR)
         eff_proxy = str(vn_proxy or "").strip()
@@ -8990,7 +8990,7 @@ class ZaloQRLoginManager:
             "region_label": reg_lbl,
             "vn_region": str(vn_region or "VN").upper(),
             "vn_location": pc_dev.get("vn_location", reg_lbl),
-            "vn_isp": pc_dev.get("vn_isp", "Viettel / VNPT / Singtel Fiber"),
+            "vn_isp": "",  # Set only after the provider route has been measured.
             "vn_ip": vn_ip_val,
             "country": pc_dev.get("country", "SG" if "SG" in str(reg_code).upper() else "VN"),
             "tz": pc_dev.get("tz", "Asia/Ho_Chi_Minh"),
@@ -8998,9 +8998,9 @@ class ZaloQRLoginManager:
             "device_model": pc_dev.get("device_model", pc_dev.get("pc_name", "MacBook Pro M3 Max")),
             "proxy_vn": eff_proxy,
             "vn_proxy": eff_proxy,
-            "route_mode": "checking",
-            "real_country_code": pc_dev.get("country", "VN"),
-            "is_vn_or_sg": True,
+            "route_mode": "unverified",
+            "real_country_code": "",
+            "is_vn_or_sg": False,
             "status": "generating",
             "step_num": 1,
             "message": f"Đang cấp phát máy tính {pc_dev['pc_name']} & định tuyến cổng QR Việt Nam / Singapore...",
