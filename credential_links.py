@@ -59,14 +59,17 @@ def _cipher(secret_key):
 
 def _discord_authorization(token, kind):
     raw = str(token or "").strip()
-    selected = str(kind or "user").strip().lower()
+    selected = str(kind or "bot").strip().lower()
     if raw.lower().startswith("authorization:"):
         raw = raw.partition(":")[2].strip()
-    if raw.startswith("Bot "):
+    if raw.lower().startswith("bot "):
         raw, selected = raw[4:].strip(), "bot"
-    if selected not in ("user", "bot") or not raw or len(raw) > 500 or any(char.isspace() for char in raw):
-        raise CredentialRejected("Token Discord không hợp lệ")
-    return ("Bot " if selected == "bot" else "") + raw, selected
+    elif raw.lower().startswith("bearer "):
+        raw, selected = raw[7:].strip(), "oauth2"
+    if selected not in ("user", "bot", "oauth2") or not raw or len(raw) > 500 or any(char.isspace() for char in raw):
+        raise CredentialRejected("Token Discord không hợp lệ. Hãy chọn Bot hoặc OAuth2.")
+    prefix = "Bot " if selected == "bot" else "Bearer " if selected == "oauth2" else ""
+    return prefix + raw, selected
 
 
 def verify_discord(token, *, kind="user", http=requests):
@@ -79,10 +82,12 @@ def verify_discord(token, *, kind="user", http=requests):
         )
     except requests.RequestException as error:
         raise CredentialUnavailable("Không kết nối được Discord để kiểm tra token") from error
-    if response.status_code in (401, 403):
-        raise CredentialRejected("Discord không chấp nhận token này")
+    if response.status_code == 401:
+        raise CredentialRejected("Discord trả về HTTP 401: token không hợp lệ hoặc đã hết hạn")
+    if response.status_code == 403:
+        raise CredentialRejected("Discord trả về HTTP 403: token không có quyền truy cập")
     if response.status_code == 429 or response.status_code >= 500:
-        raise CredentialUnavailable("Discord tạm thời chưa thể kiểm tra token")
+        raise CredentialUnavailable(f"Discord đang giới hạn hoặc gặp lỗi máy chủ (HTTP {response.status_code})")
     if response.status_code != 200:
         raise CredentialRejected("Discord không chấp nhận token này")
     try:
@@ -94,6 +99,8 @@ def verify_discord(token, *, kind="user", http=requests):
     uid = str(profile.get("id") or "")
     if not uid.isdigit():
         raise CredentialUnavailable("Discord không trả về ID tài khoản")
+    if kind == "bot" and not profile.get("bot"):
+        raise CredentialRejected("Token xác minh được nhưng không thuộc tài khoản Bot")
     name = str(profile.get("global_name") or profile.get("username") or "Discord")[:100]
     return uid, name, authorization, kind
 
