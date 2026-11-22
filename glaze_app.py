@@ -16042,6 +16042,37 @@ def api_miniapp_add_cookie():
         return jsonify({"ok": False, "error": public_error_message("Không thể nạp tài khoản Zalo.")})
 
 
+@app.get("/api/miniapp/provider_health/<provider>")
+def api_miniapp_provider_health(provider):
+    """Read-only connectivity check from this web server, never from the user's browser."""
+    targets = {
+        "discord": "https://discord.com/api/v10/gateway",
+        "zalo": "https://id.zalo.me/account?continue=https%3A%2F%2Fchat.zalo.me%2F",
+    }
+    if provider not in targets:
+        return jsonify(ok=False, code="unsupported_provider", error="Nền tảng không được hỗ trợ"), 404
+    try:
+        response = requests.get(
+            targets[provider], timeout=(3, 5), allow_redirects=False,
+            headers={"Accept": "application/json" if provider == "discord" else "text/html"},
+        )
+        try:
+            status = response.status_code
+        finally:
+            response.close()
+        reachable = 200 <= status < 400
+        return jsonify(ok=True, provider=provider, reachable=reachable,
+                       http_status=status, checked_at=int(time.time()),
+                       message=("Máy chủ kết nối được tới " + provider) if reachable
+                       else (provider + " trả về HTTP " + str(status)))
+    except requests.RequestException as error:
+        # Do not expose proxy URLs, upstream headers or any credentials.
+        return jsonify(ok=True, provider=provider, reachable=False, http_status=None,
+                       code="provider_transport_unavailable", checked_at=int(time.time()),
+                       message="Không kết nối được tới " + provider
+                       + " từ máy chủ (" + type(error).__name__ + ")")
+
+
 @app.route("/api/miniapp/start_qr", methods=["POST"])
 def api_miniapp_start_qr():
     try:
