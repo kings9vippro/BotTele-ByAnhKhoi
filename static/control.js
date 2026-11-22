@@ -930,7 +930,7 @@
      :(error?.message||'Lỗi máy chủ');
     inlineFeedback(feedbackId,'Không kết nối được: '+message);
    }
-   if(!isLink||error?.status===401)failed(error);
+   if(!isLink||extra.platform!=='discord'||error?.status===401)failed(error);
   }finally{submit.disabled=false;submit.removeAttribute('aria-busy');}
  };}
  form('channel-form','channels',{},()=>$('channel-form').reset());form('zalo-form','add_cookie',{},()=>$('zalo-form').reset());form('file-form','add_file');
