@@ -900,7 +900,27 @@
   });
   return refreshing;
  }
- function form(id,path,extra={},after,onSaved){$(id).onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');try{const body={...Object.fromEntries(new FormData(form)),...extra};const result=await api(path,body,{timeout:path==='credential_links'?25000:REQUEST_TIMEOUT_MS});after?.(result);toast('Đã lưu trên máy chủ');if(onSaved)onSaved(result);else await refresh();}catch(e){failed(e);}finally{submit.disabled=false;submit.removeAttribute('aria-busy');}};}
+ function inlineFeedback(id,message){
+  const target=$(id);if(!target)return;
+  target.hidden=false;target.textContent=message;
+ }
+ function form(id,path,extra={},after,onSaved){$(id).onsubmit=async e=>{
+  e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');
+  if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');
+  const isLink=path==='credential_links',feedbackId=extra.platform+'-link-feedback';
+  if(isLink)inlineFeedback(feedbackId,'Đang kiểm tra token trên máy chủ...');
+  try{
+   const body={...Object.fromEntries(new FormData(form)),...extra};
+   const result=await api(path,body,{timeout:isLink?25000:REQUEST_TIMEOUT_MS});
+   after?.(result);
+   if(isLink)inlineFeedback(feedbackId,'Đã xác minh và lưu: '+(result.link?.name||'tài khoản'));
+   toast('Đã lưu trên máy chủ');
+   if(onSaved)onSaved(result);else await refresh();
+  }catch(error){
+   if(isLink)inlineFeedback(feedbackId,'Không kết nối được: '+(error?.message||'Lỗi máy chủ'));
+   failed(error);
+  }finally{submit.disabled=false;submit.removeAttribute('aria-busy');}
+ };}
  form('channel-form','channels',{},()=>$('channel-form').reset());form('zalo-form','add_cookie',{},()=>$('zalo-form').reset());form('file-form','add_file');
  for(const platform of ['discord','facebook'])form(platform+'-credential-form','credential_links',{platform},()=>$(platform+'-credential-form').reset(),result=>{
   if(!result.link?.id)return;
@@ -920,6 +940,23 @@
    fields.content.value='';
   }catch(error){failed(error);}finally{submit.disabled=false;}
  };
+ for(const provider of ['discord','zalo']){
+  const testButton=$(provider+'-connectivity');
+  if(!testButton)continue;
+  testButton.onclick=async()=>{
+   if(testButton.disabled)return;testButton.disabled=true;
+   const feedbackId=provider+'-network-status';
+   inlineFeedback(feedbackId,'Đang kiểm tra kết nối từ máy chủ...');
+   try{
+    const status=await api('provider_health/'+provider,undefined,{timeout:12000});
+    inlineFeedback(feedbackId,status.message+(status.http_status?' (HTTP '+status.http_status+')':'')
+     +(status.reachable?' · đường truyền hoạt động':' · chưa thể kết nối'));
+   }catch(error){
+    inlineFeedback(feedbackId,'Không kiểm tra được đường truyền: '+(error?.message||'Lỗi API'));
+    failed(error);
+   }finally{testButton.disabled=false;}
+  };
+ }
  $('zalo-form').closest('details').open=true;
  $('upload-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');if(b.disabled)return;b.disabled=true;try{await uploadFile(e.currentTarget);toast('Đã tải tệp lên');await refresh();}catch(error){failed(error);}finally{b.disabled=false;}};
  $('send-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;try{await api('notifications',{channels:[...$('channel-options').querySelectorAll(':checked')].map(x=>x.value),content:e.currentTarget.elements.content.value});toast('Đã đưa vào hàng chờ');await refreshControl();}catch(e){failed(e);}finally{b.disabled=false;}};
@@ -984,11 +1021,11 @@
       setTimeout(poll,2500*transientFailures);
       return;
      }
-     finish();failed(error);
+     finish();$('qr-status').textContent='Lỗi kiểm tra QR: '+(error?.message||'Mất kết nối');failed(error);
     }
    };
    await poll();
-  }catch(error){finish();failed(error);}
+  }catch(error){finish();$('qr-status').textContent='Không tạo được QR: '+(error?.message||'Mất kết nối');failed(error);}
  };
  $('stop-all').onclick=()=>confirmAction('Dừng thông báo Discord của tôi?',()=>api('notifications/stop_all',{}));
  $('stop-all-zalo').onclick=()=>confirmAction('Dừng tác vụ trên mọi tài khoản Zalo?',()=>api('quick_action',{action:'stop_all'}));
