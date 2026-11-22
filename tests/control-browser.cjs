@@ -57,7 +57,7 @@ const baseUrl=process.env.WEB_TEST_BASE_URL||'http://127.0.0.1:5873';
   if(r.request().method()==='POST'){
    savedCredential=r.request().postDataJSON();
    return r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,link:{
-    id:10,platform:'discord',uid:'9999',name:'New fixture',status:'verified',kind:'user',
+    id:10,platform:'discord',uid:'9999',name:'New fixture',status:'verified',kind:'bot',
     updated:linkedAt,checked_at:linkedAt,last_error:''}})});
   }
   return r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,links:[
