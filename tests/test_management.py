@@ -110,16 +110,16 @@ class ManagementTests(unittest.TestCase):
 
     def test_discord_token_link_is_verified_encrypted_and_removable(self):
         profile = Mock(status_code=200)
-        profile.json.return_value = {'id': '123456789', 'username': 'Fixture'}
+        profile.json.return_value = {'id': '123456789', 'username': 'Fixture', 'bot': True}
         with patch('credential_links.requests.get', return_value=profile) as get:
             result = self.client.post('/api/miniapp/credential_links', json={
-                'platform': 'discord', 'credential': 'fixture-discord-token',
+                'platform': 'discord', 'kind': 'bot', 'credential': 'fixture-discord-token',
             })
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json['link']['uid'], '123456789')
         self.assertIsInstance(result.json['link']['id'], int)
         self.assertNotIn('encrypted', result.json['link'])
-        self.assertEqual(get.call_args.kwargs['headers']['Authorization'], 'fixture-discord-token')
+        self.assertEqual(get.call_args.kwargs['headers']['Authorization'], 'Bot fixture-discord-token')
         row = app.db().execute('SELECT encrypted FROM credential_links').fetchone()
         self.assertNotIn('fixture-discord-token', row['encrypted'])
         listing = self.client.get('/api/miniapp/credential_links').json['links']
@@ -161,7 +161,7 @@ class ManagementTests(unittest.TestCase):
 
     def test_discord_bot_link_recheck_marks_provider_failure_without_losing_secret(self):
         profile = Mock(status_code=200)
-        profile.json.return_value = {'id': '123456789', 'username': 'Fixture'}
+        profile.json.return_value = {'id': '123456789', 'username': 'Fixture', 'bot': True}
         with patch('credential_links.requests.get', return_value=profile) as get:
             result = self.client.post('/api/miniapp/credential_links', json={
                 'platform': 'discord', 'kind': 'bot', 'credential': 'fixture-bot-token',
@@ -185,7 +185,7 @@ class ManagementTests(unittest.TestCase):
 
     def test_linked_discord_account_sends_and_reports_permission_failure(self):
         profile = Mock(status_code=200)
-        profile.json.return_value = {'id': '123456789', 'username': 'Fixture'}
+        profile.json.return_value = {'id': '123456789', 'username': 'Fixture', 'bot': True}
         with patch('credential_links.requests.get', return_value=profile):
             self.client.post('/api/miniapp/credential_links', json={
                 'platform': 'discord', 'kind': 'bot', 'credential': 'fixture-bot-token',
