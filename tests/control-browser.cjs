@@ -52,10 +52,19 @@ const baseUrl=process.env.WEB_TEST_BASE_URL||'http://127.0.0.1:5873';
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('https://telegram.org/**',r=>r.abort());
  const linkedAt=Date.now()/1000;
- await page.route('**/api/miniapp/credential_links',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,links:[
+ let savedCredential;
+ await page.route('**/api/miniapp/credential_links',r=>{
+  if(r.request().method()==='POST'){
+   savedCredential=r.request().postDataJSON();
+   return r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,link:{
+    id:10,platform:'discord',uid:'9999',name:'New fixture',status:'verified',kind:'user',
+    updated:linkedAt,checked_at:linkedAt,last_error:''}})});
+  }
+  return r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,links:[
   {id:8,platform:'discord',uid:'1234',name:'Discord fixture',status:'verified',kind:'bot',updated:linkedAt,checked_at:linkedAt,last_error:''},
   {id:9,platform:'facebook',uid:'5678',name:'Facebook fixture',status:'invalid',kind:'cookie',updated:linkedAt,checked_at:linkedAt,last_error:'Phiên hết hạn'}
- ]})}));
+ ]})});
+ });
  await page.route('**/api/miniapp/credential_links/check',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,result:{id:8,status:'verified',name:'Discord fixture'}})}));
  await page.goto(baseUrl+'/miniapp#tgWebAppData='+encodeURIComponent(auth),{waitUntil:'domcontentloaded'});
  assert.equal(await page.locator('html').getAttribute('data-theme'),'dark','new Mini App should default to the Yanbi Aurora dark theme');
@@ -92,6 +101,11 @@ const baseUrl=process.env.WEB_TEST_BASE_URL||'http://127.0.0.1:5873';
  await page.locator('#discord-send-form button[type=submit]').click();
  await page.waitForFunction(()=>document.querySelector('#toasts').textContent.includes('987654321098765432'));
  assert.deepEqual(sentDiscord,{id:8,channel_id:'123456789012345678',content:'Browser fixture'});
+ await page.locator('#discord-credential-form [name=credential]').fill('fixture-token');
+ await page.locator('#discord-credential-form button').click();
+ await page.locator('#discord-links').getByText('New fixture',{exact:true}).waitFor();
+ assert.equal(savedCredential.credential,'fixture-token');
+ assert.equal(await page.locator('#discord-send-account option[value="10"]').count(),1);
  await page.locator('#bottom button[aria-label="Tài khoản"]').click();
  assert.equal(await page.locator('#facebook-links .credential-state').innerText(),'Phiên hết hạn');
  assert.equal(await page.locator('#music').count(),0);
@@ -106,16 +120,18 @@ const baseUrl=process.env.WEB_TEST_BASE_URL||'http://127.0.0.1:5873';
   body:JSON.stringify({ok:true,session_id:qrId,status:'waiting_scan'})}));
  await page.route(url=>url.pathname==='/api/miniapp/qr_status/'+qrId,r=>{
   qrStatusCalls++;
+  if(qrStatusCalls===1)return r.fulfill({status:503,contentType:'application/json',
+   body:JSON.stringify({ok:false,error:'Tạm gián đoạn'})});
   return r.fulfill({status:200,contentType:'application/json',
-   body:JSON.stringify({ok:true,status:qrStatusCalls===1?'waiting_scan':'expired',
-    message:qrStatusCalls===1?'Đã tạo QR':'Mã QR hết hạn',
-    qr_base64:qrStatusCalls===1?'data:image/png;base64,'+qrImage:''})});
+   body:JSON.stringify({ok:true,status:qrStatusCalls===2?'waiting_scan':'expired',
+    message:qrStatusCalls===2?'Đã tạo QR':'Mã QR hết hạn',
+    qr_base64:qrStatusCalls===2?'data:image/png;base64,'+qrImage:''})});
  });
  await page.locator('#qr').click();
  await page.waitForFunction(()=>{const el=document.querySelector('#qr-image');return !el.hidden&&el.naturalWidth>0;});
  await page.waitForFunction(()=>document.querySelector('#qr').disabled===false,{timeout:8000});
  assert.equal(await page.locator('#qr-image').isVisible(),false);
- assert.equal(qrStatusCalls>=2,true);
+ assert.equal(qrStatusCalls>=3,true);
  await page.unroute('**/api/miniapp/start_qr');
  await page.unroute(url=>url.pathname==='/api/miniapp/qr_status/'+qrId);
  await viaMore('settings');

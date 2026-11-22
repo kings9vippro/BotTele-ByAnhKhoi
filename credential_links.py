@@ -204,7 +204,12 @@ def save(connection, owner, platform, secret, secret_key, *, kind="user", http=r
                        "WHERE owner=? AND platform=? AND uid=?",
                        (now, credential_kind, str(owner), platform, uid))
     connection.commit()
-    return {"platform": platform, "uid": uid, "name": name, "status": "verified", "kind": credential_kind}
+    # Return the same public row as GET so the UI can update immediately.
+    return dict(connection.execute(
+        "SELECT id,platform,uid,name,updated,checked_at,status,kind,last_error "
+        "FROM credential_links WHERE owner=? AND platform=? AND uid=?",
+        (str(owner), platform, uid),
+    ).fetchone())
 
 
 def list_links(connection, owner):

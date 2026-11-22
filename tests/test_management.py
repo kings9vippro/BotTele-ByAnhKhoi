@@ -117,6 +117,8 @@ class ManagementTests(unittest.TestCase):
             })
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json['link']['uid'], '123456789')
+        self.assertIsInstance(result.json['link']['id'], int)
+        self.assertNotIn('encrypted', result.json['link'])
         self.assertEqual(get.call_args.kwargs['headers']['Authorization'], 'fixture-discord-token')
         row = app.db().execute('SELECT encrypted FROM credential_links').fetchone()
         self.assertNotIn('fixture-discord-token', row['encrypted'])

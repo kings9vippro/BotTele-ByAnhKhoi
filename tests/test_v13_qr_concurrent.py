@@ -12,6 +12,24 @@ import app
 
 
 class ConcurrentQRTests(unittest.TestCase):
+    def test_start_returns_while_provider_is_still_generating(self):
+        manager = app.ZaloQRLoginManager
+        device = {"pc_name": "Synthetic Computer", "imei": "synthetic-device-id",
+                  "ua": "Synthetic User Agent"}
+        with (
+            patch.object(manager, "SESSIONS", {}),
+            patch.object(manager, "_LAST_START_TS", 0.0),
+            patch.object(manager, "_LAST_START_SESSION_ID", ""),
+            patch.object(manager, "_persist_qr_state_to_db"),
+            patch.object(app.ZaloWebIDGenerator, "create_random_pc_device", return_value=device),
+            patch.object(app.threading, "Thread"),
+        ):
+            started = time.monotonic()
+            status = manager.start_qr_session()
+            self.assertLess(time.monotonic() - started, 1.0)
+            self.assertEqual(status["status"], "generating")
+            self.assertTrue(status["session_id"])
+
     def test_starting_second_qr_does_not_cancel_first_pending_session(self):
         manager = app.ZaloQRLoginManager
         first_stop = threading.Event()

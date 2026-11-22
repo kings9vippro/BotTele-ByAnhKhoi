@@ -9030,12 +9030,8 @@ class ZaloQRLoginManager:
 
         th = threading.Thread(target=cls._qr_worker, args=(session_id,), daemon=True)
         th.start()
-
-        t0 = time.time()
-        while time.time() - t0 < 9.0:
-            if st["qr_base64"] or st["status"] in ("error", "expired"):
-                break
-            time.sleep(0.04)
+        # The Mini App already polls qr_status. Waiting here for the remote QR
+        # provider ties up a Gunicorn request thread for up to nine seconds.
         return cls.get_session_status(session_id)
 
     @classmethod

@@ -880,9 +880,14 @@
   });
   return refreshing;
  }
- function form(id,path,extra={},after){$(id).onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');try{const body={...Object.fromEntries(new FormData(form)),...extra};const result=await api(path,body);after?.(result);toast('Đã lưu trên máy chủ');await refresh();}catch(e){failed(e);}finally{submit.disabled=false;submit.removeAttribute('aria-busy');}};}
+ function form(id,path,extra={},after,onSaved){$(id).onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');try{const body={...Object.fromEntries(new FormData(form)),...extra};const result=await api(path,body,{timeout:path==='credential_links'?25000:REQUEST_TIMEOUT_MS});after?.(result);toast('Đã lưu trên máy chủ');if(onSaved)onSaved(result);else await refresh();}catch(e){failed(e);}finally{submit.disabled=false;submit.removeAttribute('aria-busy');}};}
  form('channel-form','channels',{},()=>$('channel-form').reset());form('zalo-form','add_cookie',{},()=>$('zalo-form').reset());form('file-form','add_file');
- for(const platform of ['discord','facebook'])form(platform+'-credential-form','credential_links',{platform},()=>$(platform+'-credential-form').reset());
+ for(const platform of ['discord','facebook'])form(platform+'-credential-form','credential_links',{platform},()=>$(platform+'-credential-form').reset(),result=>{
+  if(!result.link?.id)return;
+  identities=[result.link,...identities.filter(item=>item.id!==result.link.id&&
+   !(item.platform===result.link.platform&&item.uid===result.link.uid))];
+  renderCredentialLinks();renderAccounts();paintMetrics();
+ });
  if($('discord-send-form'))$('discord-send-form').onsubmit=async e=>{
   e.preventDefault();const submit=e.currentTarget.querySelector('button[type=submit]');
   if(submit.disabled)return;submit.disabled=true;
@@ -918,7 +923,7 @@
  }
  $('qr').onclick=async()=>{
   const trigger=$('qr'),image=$('qr-image');
-  let receiptRetries=0;
+  let receiptRetries=0,transientFailures=0;
   trigger.disabled=true;
   image.hidden=true;
   image.removeAttribute('src');
@@ -934,6 +939,7 @@
    const poll=async()=>{
     try{
      const status=await api('qr_status/'+encodeURIComponent(result.session_id));
+     transientFailures=0;
      $('qr-status').textContent=status.message||status.status;
      if(status.status==='success'&&!status.account_id&&receiptRetries++<5){
       setTimeout(poll,1000);
@@ -951,7 +957,15 @@
       image.hidden=false;
      }
      setTimeout(poll,document.hidden?8000:2000);
-    }catch(error){finish();failed(error);}
+    }catch(error){
+     if((error?.code==='timeout'||!error?.status||error.status>=500)&&transientFailures<2){
+      transientFailures++;
+      $('qr-status').textContent='Kết nối chậm; đang kiểm tra lại phiên QR…';
+      setTimeout(poll,2500*transientFailures);
+      return;
+     }
+     finish();failed(error);
+    }
    };
    await poll();
   }catch(error){finish();failed(error);}
