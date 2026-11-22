@@ -73,7 +73,11 @@
  async function api(path,body,options={}){const h={'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId()};if(body!==undefined){h['Content-Type']='application/json';if(csrfToken)h['X-CSRF-Token']=csrfToken;}const request=requestSignal(options.signal,options.timeout||REQUEST_TIMEOUT_MS);try{const r=await fetch('/api/miniapp/'+path,{method:options.method||(body===undefined?'GET':'POST'),headers:h,body:body===undefined?undefined:JSON.stringify(body),signal:request.signal,cache:'no-store'});let d;try{d=await r.json();}catch{throw Object.assign(new Error('API trả về dữ liệu không phải JSON hợp lệ.'),{status:r.status,code:'invalid_json'});}
   if(!r.ok||d.ok===false)throw Object.assign(new Error(d.error||d.message||'Yêu cầu thất bại'),{status:r.status,code:d.code||'http_error',retryAfterMs:retryAfterMs(r)});
   return d;
- }catch(e){if(e?.name==='AbortError'&&request.isTimeout())throw Object.assign(new Error('Yêu cầu vượt quá thời gian chờ.'),{code:'timeout'});throw e;}
+ }catch(e){if(e?.name==='AbortError'&&request.isTimeout()){
+  const safePath=String(path).split('?')[0].replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi,':id');
+  throw Object.assign(new Error('API '+safePath+' vượt quá thời gian chờ.'),
+   {code:'timeout',endpoint:safePath});
+ }throw e;}
  finally{request.cleanup();}}
  function dashboardFailureLabel(error){
   if(error?.code==='timeout')return 'quá thời gian chờ';
