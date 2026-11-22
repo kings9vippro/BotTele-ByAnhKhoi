@@ -44,9 +44,11 @@ class YanbiStudioTests(unittest.TestCase):
         self.assertIn("setConnection('PARTIAL')", self.js)
         self.assertIn("csrfToken=viewer.csrf_token", self.js)
 
-    def test_remove_oversized_diamond_and_logo_tiles(self):
+    def test_remove_oversized_tiles_and_keep_compact_portrait(self):
         self.assertNotIn('class="auth-icon"', self.html)
-        self.assertNotIn('<div class="brand"><img', self.html)
+        self.assertIn('class="brand-avatar"', self.html)
+        self.assertIn('width="38" height="38"', self.html)
+        self.assertIn('flex:0 0 38px', self.css)
         self.assertIn('.login-card .login-mark{display:none!important}', self.css)
         self.assertIn("auth-led", self.html)
 
