@@ -58,7 +58,7 @@ body.yanbi::after {
   background:linear-gradient(95deg,transparent 0%,rgba(255,255,255,.014) 50%,transparent 100%);
   background-size:260px 100%;opacity:.6;
 }
-/* Header: no image tile or decorative square. */
+/* The requested portrait remains small so controls keep room on mobile. */
 body.yanbi header {
   position:relative;z-index:12;display:flex;align-items:center;gap:11px;
   height:var(--v11-header);min-height:var(--v11-header);padding:11px clamp(15px,3vw,28px);
@@ -72,6 +72,8 @@ body.yanbi header::after {
   opacity:.78;pointer-events:none
 }
 body.yanbi .brand{display:flex;align-items:center;min-width:0;flex:1;gap:12px;letter-spacing:0;line-height:1.1}
+body.yanbi .brand-avatar{display:block;flex:0 0 38px;width:38px;height:38px;object-fit:cover;border-radius:12px;border:1px solid var(--line)}
+@media(max-width:600px){body.yanbi .brand-owner{display:none}}
 body.yanbi .brand-identity{display:grid;min-width:0;gap:5px}
 body.yanbi .brand-wordmark{display:block;width:max-content;font-size:24px;font-weight:900;letter-spacing:-.075em;line-height:1;background:linear-gradient(105deg,var(--fg) 12%,var(--accent) 72%,var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
 body.yanbi .brand-meta{font-size:10px;font-weight:550;letter-spacing:.035em;color:var(--muted);white-space:nowrap}
@@ -872,4 +874,40 @@ body.yanbi .glaze-tap-petal{
   body.yanbi .login-flora span{opacity:.25}
   body.yanbi .login-card{padding:clamp(23px,5vw,32px)}
   body.yanbi .login-card h1{font-size:clamp(25px,6.3vw,32px)}
+}
+
+/* Task console: one clear surface, with controls that appear only when useful. */
+body.yanbi #tasks .glaze-flower-field,
+:root[data-motion=off] body.yanbi #pages .glaze-flower-field{display:none!important}
+body.yanbi #tasks #task-account-status{
+  margin:9px 0 12px;padding:9px 12px;border-radius:10px;
+  background:rgba(88,217,255,.08);border:1px solid rgba(88,217,255,.18);
+  color:var(--muted);font-size:12px;line-height:1.45;
+}
+body.yanbi #tasks #task-summary[hidden],
+body.yanbi #tasks .task-filters[hidden]{display:none!important}
+body.yanbi #tasks #task-summary{margin:8px 0 14px}
+body.yanbi #tasks #task-list .task-card{
+  background:var(--ui-solid);border-radius:16px;
+  box-shadow:none;padding:15px;margin-bottom:8px;
+  opacity:1!important;transform:none!important;
+}
+body.yanbi #tasks #task-list .task-card-head strong{font-size:14px}
+body.yanbi #tasks #task-list .task-target{font-size:13px;line-height:1.4}
+body.yanbi #tasks .task-filters{background:var(--ui-solid);box-shadow:none;border-radius:14px}
+body.yanbi #tasks #task-quick-actions{gap:8px}
+body.yanbi #tasks #task-quick-actions button{min-height:40px;border-radius:12px}
+body.yanbi #sheet .sheet-status{
+  margin:10px 0 0;padding:10px 12px;border-radius:10px;
+  background:rgba(88,217,255,.10);color:var(--fg);font-size:13px;
+}
+/* Requested portrait is a subdued canvas; all controls retain an opaque surface. */
+:root[data-theme=dark] body.yanbi,
+body.yanbi{
+  background:linear-gradient(rgba(9,11,23,.80),rgba(9,11,23,.87)),
+    url('/static/yanbi-background.webp') center / cover fixed,var(--bg);
+}
+:root[data-theme=light] body.yanbi{
+  background:linear-gradient(rgba(242,242,251,.87),rgba(242,242,251,.92)),
+    url('/static/yanbi-background.webp') center / cover fixed,var(--bg);
 }

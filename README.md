@@ -1,40 +1,52 @@
 # BotTele-ByAnhKhoi · GLAZE Web Control
 
-Dashboard web quản lý tài khoản Zalo, liên kết hồ sơ Discord/Facebook bằng
-OAuth chính thức và gửi thông báo tới webhook Discord được cấp quyền. Dữ liệu
-quản trị và task dùng chung SQLite. Discord OAuth2 không cấp quyền gửi tin dưới
-danh tính tài khoản cá nhân. Telegram bot là tùy chọn và bị tắt trong blueprint
-Render hiện tại.
+Bảng điều khiển web quản lý tài khoản và tác vụ Zalo, Discord, Facebook. Đăng
+nhập quản trị bằng mật khẩu web hoặc phiên Telegram đã cấp quyền. Liên kết
+Discord bằng token và Facebook bằng cookie được kiểm tra với nhà cung cấp;
+thông tin nhạy cảm được mã hóa khi lưu. Giao diện không hiển thị lại token hoặc
+cookie đã lưu.
 
 ## Chạy trên Render
 
-Xem `render.yaml`, `.env.example` và `gunicorn.conf.py`. Runtime dùng Python
-3.11 ở chế độ web-only. Bắt buộc cấu hình `SECRET_KEY`, `ADMIN_PASS`,
-`OAUTH_PUBLIC_BASE_URL` HTTPS và `OAUTH_ENCRYPTION_KEY` Fernet. Cấu hình App
-ID/Secret của từng provider trong giao diện hoặc Environment. Đăng ký callback
-`/oauth/callback/discord` và `/oauth/callback/facebook` trong developer portal.
-Có thể bật `DISCORD_OAUTH_PKCE=1` để thêm S256; cần kiểm thử đăng nhập thật
-với ứng dụng Discord của bạn trước khi bật trong production.
-Nếu muốn giữ tài khoản và hàng đợi qua redeploy, cấu hình `DATABASE_PATH` và
-`APP_DATA_DIR` trên ổ lưu bền vững. Blueprint hiện dùng gói Starter và gắn `/var/data`;
-Render Free không bảo đảm xử lý nền liên tục hoặc lưu tệp qua redeploy.
+`render.yaml` hiện chạy Gunicorn/Python. Đặt `SECRET_KEY` và `ADMIN_PASS` trong
+Environment, không commit giá trị thật vào Git. Nếu cần giữ dữ liệu qua lần
+triển khai, đặt `APP_DATA_DIR` và `DATABASE_PATH` trên đĩa bền vững. Render Free
+có thể ngủ và ổ lưu tạm sẽ mất dữ liệu sau khi tạo lại instance. Đường kiểm tra
+sức khỏe là `/healthz`.
 
-Facebook được kết nối bằng Facebook Login/Graph API và Discord bằng OAuth2 chính thức.
-Cookie trình duyệt Facebook, mật khẩu, MFA và Discord user-token không được nhận hoặc lưu.
+Đường đăng nhập OAuth Discord/Zalo cũ đã được gỡ khỏi giao diện và trả về 410.
+Màn hình kết nối tài khoản dùng token Discord, cookie Facebook, cookie và IMEI
+Zalo. Mã QR Zalo có thể tải tệp phiên về thiết bị sau khi xác thực thành công.
 
-Lệnh chạy: `gunicorn app:app --config gunicorn.conf.py`. Đặt một Gunicorn
-worker; trong worker có năm luồng cho hàng đợi thông báo. Không đăng nhập
-Discord bằng mật khẩu trong bot và không nhập Discord user token.
+## Lớp web Rust thử nghiệm
+
+`rust-gateway/` dùng Axum để phục vụ HTML, CSS, JavaScript và chuyển tiếp API
+đến Python. Nó giữ luồng tác vụ và dữ liệu hiện tại trong Python; chưa phải bản
+chuyển toàn bộ ứng dụng sang Rust. Cổng `/healthz` chỉ báo thành công khi
+backend Python cũng trả về trạng thái khỏe.
+
+Chạy thử tại thư mục gốc của repo, sau khi cài Rust 1.100 trở lên và các
+dependency Python:
+
+```sh
+PORT=5001 BIND_HOST=127.0.0.1 gunicorn app:app --config gunicorn.conf.py
+# Trong terminal khác:
+cargo build --release --locked --manifest-path rust-gateway/Cargo.toml
+PORT=5000 YANBI_ROOT=. YANBI_PYTHON_UPSTREAM=http://127.0.0.1:5001 \
+  rust-gateway/target/release/yanbi-gateway
+```
+
+Cấu hình xác thực và dữ liệu cho tiến trình Python theo `.env.example`. Chưa
+chuyển `render.yaml` sang Rust khi chưa kiểm tra được dịch vụ Render đang phục
+vụ trang thực tế.
 
 ## Kiểm tra
 
-`python scripts/verify_startup.py`
+```sh
+python scripts/verify_startup.py
+python -m unittest discover -s tests -p 'test_*.py' -q
+cargo test --locked --manifest-path rust-gateway/Cargo.toml
+```
 
-`python -m unittest discover -s tests -p 'test_*.py' -q`
-
-`node tests/control-browser.cjs` dùng Playwright/Chromium và máy chủ kiểm thử
-ở cổng 5873; không gọi Discord/Zalo thật. Cách đo hàng đợi:
-`PYTHONPATH=. python scripts/benchmark_notifications.py`.
-
-Chi tiết phần đã làm, bằng chứng và giới hạn: [V4_DELIVERY.md](V4_DELIVERY.md).
-Audit ban đầu: [AUDIT_V4.md](AUDIT_V4.md).
+`node tests/control-browser.cjs` cần Playwright/Chromium và máy chủ thử nghiệm
+ở cổng 5873. Đặt `WEB_TEST_BASE_URL` để chạy cùng bài thử qua cổng Rust.

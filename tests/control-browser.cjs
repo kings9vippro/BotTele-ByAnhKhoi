@@ -1,5 +1,6 @@
 const {chromium}=require('playwright');
 const crypto=require('crypto'),assert=require('assert/strict');
+const baseUrl=process.env.WEB_TEST_BASE_URL||'http://127.0.0.1:5873';
 (async()=>{
  const values={auth_date:String(Math.floor(Date.now()/1000)),user:JSON.stringify({id:123})};
  const check=Object.keys(values).sort().map(k=>`${k}=${values[k]}`).join('\n');
@@ -9,7 +10,7 @@ const crypto=require('crypto'),assert=require('assert/strict');
  try{
  const webAdmin=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
  await webAdmin.route('https://telegram.org/**',route=>route.abort());
- await webAdmin.goto('http://127.0.0.1:5873/login',{waitUntil:'domcontentloaded'});
+ await webAdmin.goto(baseUrl+'/login',{waitUntil:'domcontentloaded'});
  assert.equal(await webAdmin.locator('.login-flora span').count(),5);
  assert.equal(await webAdmin.locator('.login-letter').count(),13);
  const toggle=webAdmin.locator('#login-motion-toggle');
@@ -23,12 +24,12 @@ const crypto=require('crypto'),assert=require('assert/strict');
  assert.equal(await webAdmin.locator('html').getAttribute('data-motion'),'on');
  await webAdmin.locator('#login-password').fill('ci-browser-only-password');
  await Promise.all([
-  webAdmin.waitForURL('http://127.0.0.1:5873/'),
+  webAdmin.waitForURL(baseUrl+'/'),
   webAdmin.locator('button[type="submit"]').click()
  ]);
  await webAdmin.waitForFunction(()=>['AUTHENTICATED','CONNECTED','PARTIAL'].includes(document.querySelector('#connection')?.dataset.state));
  assert.equal(await webAdmin.locator('#auth-gate').isVisible(),false,'web admin cookie session must unlock the dashboard');
- const liveSession=await webAdmin.request.get('http://127.0.0.1:5873/api/miniapp/session');
+ const liveSession=await webAdmin.request.get(baseUrl+'/api/miniapp/session');
  assert.equal(liveSession.status(),200);
  assert.equal((await liveSession.json()).auth_mode,'web_session');
  await webAdmin.locator('#bottom button[aria-label="Tác vụ"]').click();
@@ -38,12 +39,12 @@ const crypto=require('crypto'),assert=require('assert/strict');
  await webAdmin.close();
  const external=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
  await external.route('https://telegram.org/**',r=>r.abort());
- await external.goto('http://127.0.0.1:5873/miniapp',{waitUntil:'domcontentloaded'});
+ await external.goto(baseUrl+'/miniapp',{waitUntil:'domcontentloaded'});
  await external.waitForFunction(()=>document.body.classList.contains('auth-locked'));
  assert.equal(await external.locator('#auth-gate').isVisible(),true);
  assert.equal(await external.locator('#pages').isVisible(),false);
  assert.match(await external.locator('#auth-message').innerText(),/Telegram/);
- await external.goto('http://127.0.0.1:5873/',{waitUntil:'domcontentloaded'});
+ await external.goto(baseUrl+'/',{waitUntil:'domcontentloaded'});
  await external.locator('#auth-gate .auth-login-link').waitFor({state:'visible'});
  assert.equal(await external.locator('#startup-panel').isVisible(),false);
  await external.close();
@@ -56,8 +57,10 @@ const crypto=require('crypto'),assert=require('assert/strict');
   {id:9,platform:'facebook',uid:'5678',name:'Facebook fixture',status:'invalid',kind:'cookie',updated:linkedAt,checked_at:linkedAt,last_error:'Phiên hết hạn'}
  ]})}));
  await page.route('**/api/miniapp/credential_links/check',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,result:{id:8,status:'verified',name:'Discord fixture'}})}));
- await page.goto('http://127.0.0.1:5873/miniapp#tgWebAppData='+encodeURIComponent(auth),{waitUntil:'domcontentloaded'});
+ await page.goto(baseUrl+'/miniapp#tgWebAppData='+encodeURIComponent(auth),{waitUntil:'domcontentloaded'});
  assert.equal(await page.locator('html').getAttribute('data-theme'),'dark','new Mini App should default to the Yanbi Aurora dark theme');
+ assert.equal(await page.locator('header .brand-avatar').evaluate(image=>image.complete&&image.naturalWidth>0),true);
+ assert.match(await page.locator('body').evaluate(body=>getComputedStyle(body).backgroundImage),/yanbi-background\.webp/);
  await page.waitForFunction(()=>document.querySelector('#metrics').getAttribute('aria-busy')==='false');
  assert.equal(await page.locator('#tabs').count(),0);
  assert.equal(await page.locator('#bottom .bottom-nav-button').count(),4);
@@ -178,10 +181,8 @@ const crypto=require('crypto'),assert=require('assert/strict');
  assert.match(await page.locator('#file-list .file-category').last().innerText(),/KHO NGÔN/);
  assert.equal(await page.locator('#launch-form select[name=mode] option').count(),6);
  await page.locator('#bottom button[aria-label="Tác vụ"]').click();
- await page.getByRole('button',{name:'Dừng thông báo Discord của tôi',exact:true}).click();
- assert.equal(await page.locator('dialog').evaluate(x=>x.open),true);
- await page.keyboard.press('Escape');
- assert.equal(await page.locator('dialog').evaluate(x=>x.open),false);
+ assert.equal(await page.locator('#stop-all').isVisible(),false,'empty task list should not show a destructive action');
+ assert.equal(await page.locator('#task-summary').isVisible(),false,'empty task list should keep the console compact');
  // Browser-native horizontal paging keeps vertical panel scroll independent.
  await page.evaluate(()=>document.querySelector('#pages').scrollTo({left:0,behavior:'instant'}));
  await page.waitForFunction(()=>document.querySelector('#home').getAttribute('aria-hidden')==='false');
@@ -252,6 +253,10 @@ const crypto=require('crypto'),assert=require('assert/strict');
  assert.doesNotMatch(await page.locator('#task-list').innerText(),/legacy:otheracc/);
  assert.equal(await page.locator('#stop-all').isVisible(),false);
  assert.equal(await page.locator('#stop-all-zalo').isVisible(),true);
+ await page.locator('#stop-all-zalo').click();
+ assert.equal(await page.locator('dialog').evaluate(x=>x.open),true);
+ await page.keyboard.press('Escape');
+ assert.equal(await page.locator('dialog').evaluate(x=>x.open),false);
  await page.locator('#task-search').fill('nonexistent');
  assert.match(await page.locator('#task-list').innerText(),/Không có tác vụ/);
  await page.locator('#task-search').fill('box-two');
@@ -259,8 +264,8 @@ const crypto=require('crypto'),assert=require('assert/strict');
  assert.match(await page.locator('#task-list').innerText(),/legacy:task2/);
 
  await page.screenshot({path:'/tmp/glaze-v4.png'});
- const denied=await page.request.get('http://127.0.0.1:5873/api/miniapp/control');assert.equal(denied.status(),401);
- for(const path of ['/api/discord/reg_login','/api/messenger/login','/integrations/facebook'])assert.equal((await page.request.post('http://127.0.0.1:5873'+path)).status(),410);
+ const denied=await page.request.get(baseUrl+'/api/miniapp/control');assert.equal(denied.status(),401);
+ for(const path of ['/api/discord/reg_login','/api/messenger/login','/integrations/facebook'])assert.equal((await page.request.post(baseUrl+path)).status(),410);
  assert.deepEqual(errors,[]);
  console.log('Browser: authenticated GLAZE single navigation dock, More menu, mobile scroll, account/box selection, gestures, and task UI passed');
  }finally{await browser.close();}

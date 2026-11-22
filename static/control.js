@@ -31,7 +31,17 @@
   card.hidden=false;document.body.classList.add('auth-locked');setConnection(state);
  }
  function hideAuthGate(){const card=$('auth-gate');if(card)card.hidden=true;document.body.classList.remove('auth-locked');hideStartupPanel();}
- function toast(text){$('toasts').replaceChildren(element('div',text,'toast'));clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toasts').replaceChildren(),4500);}
+ function toast(text){
+  const message=String(text||'');
+  if($('sheet')?.open){
+   let status=$('sheet-status');
+   if(!status){status=element('p',undefined,'sheet-status');status.id='sheet-status';$('sheet-content').append(status);}
+   status.textContent=message;
+   return;
+  }
+  $('toasts').replaceChildren(element('div',message,'toast'));
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toasts').replaceChildren(),4500);
+ }
  class MiniAppError extends Error{constructor(message,{kind='temporary',status=0,retryAfterMs=0}={}){super(message);this.name='MiniAppError';this.kind=kind;this.status=status;this.retryAfterMs=retryAfterMs;}}
  function initData(){return String(tg?.initData||launch||'').trim();}
  function setConnection(state){const n=$('connection');n.dataset.state=state;n.textContent=connectionLabels[state]||connectionLabels.DISCONNECTED;n.classList.toggle('live',state==='CONNECTED');}
@@ -66,7 +76,7 @@
  }catch(e){if(e?.name==='AbortError'&&request.isTimeout())throw Object.assign(new Error('Yêu cầu vượt quá thời gian chờ.'),{code:'timeout'});throw e;}
  finally{request.cleanup();}}
  async function uploadFile(form,options={}){const h={'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId('upload')};if(csrfToken)h['X-CSRF-Token']=csrfToken;const request=requestSignal(options.signal,options.timeout||REQUEST_TIMEOUT_MS);try{const r=await fetch('/api/miniapp/upload_file',{method:'POST',headers:h,body:new FormData(form),signal:request.signal,cache:'no-store'});const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||'Tải tệp thất bại');return d;}finally{request.cleanup();}}
- function button(text,fn,cls){const b=element('button',text,cls);b.type='button';b.onclick=async()=>{if(b.disabled)return;b.disabled=true;b.setAttribute('aria-busy','true');try{await fn();}catch(e){failed(e);toast(e.message);}finally{b.disabled=false;b.removeAttribute('aria-busy');}};return b;}
+ function button(text,fn,cls){const b=element('button',text,cls);b.type='button';b.onclick=async()=>{if(b.disabled)return;b.disabled=true;b.setAttribute('aria-busy','true');try{await fn();}catch(e){failed(e);}finally{b.disabled=false;b.removeAttribute('aria-busy');}};return b;}
  function theme(){const mode=$('theme').value;document.documentElement.dataset.theme=mode==='system'?(tg?.colorScheme||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark')):mode;}
  function initTelegram(){const sdk=window.Telegram?.WebApp;if(!sdk||tg===sdk)return;tg=sdk;tg.ready();tg.expand();tg.onEvent?.('themeChanged',theme);tg.onEvent?.('viewportChanged',()=>{document.documentElement.style.setProperty('--safe',Math.max(tg.safeAreaInset?.bottom||0,tg.contentSafeAreaInset?.bottom||0)+'px');});tg.BackButton?.onClick(()=>{if($('sheet').open)$('sheet').close();else go('home');});theme();}
  initTelegram();$('telegram-sdk').addEventListener('load',initTelegram);$('theme').onchange=()=>{try{localStorage.setItem('glaze-theme',$('theme').value);}catch{}theme();};try{$('theme').value=localStorage.getItem('glaze-theme')||'dark';}catch{$('theme').value='dark';}theme();
@@ -92,8 +102,8 @@
    replayKineticTitle(active);observeReveals();
   });
  }
- try{motionInput.value=localStorage.getItem('glaze-motion')||'system';}
- catch{motionInput.value='system';}
+ try{motionInput.value=localStorage.getItem('glaze-motion')||'off';}
+ catch{motionInput.value='off';}
  if(!['system','on','off'].includes(motionInput.value))motionInput.value='system';
  motionInput.onchange=()=>{
   try{localStorage.setItem('glaze-motion',motionInput.value);}catch{}
@@ -238,6 +248,7 @@
   });
  }
  function observeReveals(){
+  if(active==='tasks')return;
   const observer=ensureRevealObserver();
   if(!observer)return;
   const section=$(active);
@@ -351,7 +362,7 @@
   });
  }
  let sheetReturnFocus;
- function sheet(title,content,actions=[]){sheetReturnFocus=document.activeElement;$('sheet-title').textContent=title;$('sheet-content').replaceChildren(typeof content==='string'?element('p',content):content);$('sheet-actions').replaceChildren(...actions);$('sheet').showModal();$('sheet-close').focus();}
+ function sheet(title,content,actions=[]){const dialog=$('sheet');if(dialog.open)dialog.close();$('toasts').replaceChildren();sheetReturnFocus=document.activeElement;$('sheet-title').textContent=title;$('sheet-content').replaceChildren(typeof content==='string'?element('p',content):content);$('sheet-actions').replaceChildren(...actions);dialog.showModal();$('sheet-close').focus();}
  function closeSheet(){if($('sheet').open)$('sheet').close();sheetReturnFocus?.focus?.();sheetReturnFocus=null;}
  $('sheet-close').onclick=closeSheet;$('sheet').addEventListener('close',()=>{sheetReturnFocus?.focus?.();sheetReturnFocus=null;});let dragY;
  $('sheet-handle').onpointerdown=e=>{dragY=e.clientY;e.target.setPointerCapture(e.pointerId);};$('sheet-handle').onpointermove=e=>{if(dragY!==undefined)$('sheet').style.transform=`translateY(${Math.max(0,e.clientY-dragY)}px)`;};$('sheet-handle').onpointerup=e=>{if(e.clientY-dragY>90)closeSheet();dragY=undefined;$('sheet').style.transform='';};$('sheet-handle').onpointercancel=()=>{dragY=undefined;$('sheet').style.transform='';};
@@ -489,7 +500,7 @@
   if(!account_id){toast('Chọn tài khoản Zalo trước.');return;}
   const b=$('refresh-boxes');b.disabled=true;
   try{const result=await api('scan_boxes',{account_id},{timeout:60000});toast(result.message||'Đã quét nhóm');boxPage=1;await loadLaunchBoxes(1);}
-  catch(error){failed(error);toast(error.message);}finally{b.disabled=false;}
+  catch(error){failed(error);}finally{b.disabled=false;}
  };
  let watchedBoxes=[],watchRefreshing=null,watchLastFetched=0,watchError='';
  function renderWatchedBoxes(){
@@ -563,9 +574,9 @@
    const body={...Object.fromEntries(new FormData(form)),box_ids:boxIds};
    const launched=await api('launch',body);
    toast(launched.message||'Đã tạo task');$('task-account-filter').value=String(body.account_id);await refreshRegistry();await refresh();go('tasks');
-  }catch(error){failed(error);toast(error.message);}finally{submit.disabled=false;}
+  }catch(error){failed(error);}finally{submit.disabled=false;}
  };
- let tasksSignature='',registryGeneration=0,registryTasks=[],registryState='loading',taskAccountInitialized=false,taskPage=1;
+ let tasksSignature='',registryGeneration=0,registryVersion=0,registryTasks=[],registryState='loading',taskAccountInitialized=false,taskPage=1;
  function renderTaskAccounts(){
   const target=$('task-account-filter'),before=target.value,available=new Set(['discord']);
   target.replaceChildren(element('option','Thông báo Discord'),element('option','Task chưa xác định cookie'));
@@ -582,7 +593,7 @@
  $('task-account-filter').onchange=()=>{
   taskPage=1;
   registryGeneration++;registryPending=null;registryFetchedAt=0;registryNextRetryAt=0;registryErrorCount=0;
-  registryTasks=[];registryState='loading';renderTasks();
+  registryTasks=[];registryVersion++;registryState='loading';renderTasks();
   refreshRegistry().catch(failed);
  };
  let registryPending=null,registryFetchedAt=0,registryNextRetryAt=0,registryErrorCount=0;
@@ -599,6 +610,7 @@
       account==='discord'?task.execution_source==='durable_notifications':
       account==='unassigned'?task.execution_source==='legacy_process'&&!(task.account_ids||[]).length:
        (task.account_ids||[]).map(String).includes(account));
+    registryVersion++;
     registryFetchedAt=Date.now();registryErrorCount=0;registryNextRetryAt=0;
     registryState='ready';
    }catch(error){
@@ -616,23 +628,24 @@
  function renderTasks(){
   const f=$('task-filter').value,target=$('task-list'),acc=$('task-account-filter').value;
   const query=$('task-search').value.trim().toLocaleLowerCase('vi');
-  const signature=JSON.stringify([f,acc,query,taskPage,registryTasks,registryState]);
-  const scope=acc==='discord'?'Chỉ hiển thị tác vụ thông báo Discord.':acc==='unassigned'?
-    'Task cũ chưa lưu ID cookie.':
-    'Cookie Zalo #'+acc+' · '+(accounts.find(a=>String(a.id)===acc)?.name||'')+' · Tác vụ đa cookie không thể dừng riêng.';
+  const signature=JSON.stringify([f,acc,query,taskPage,registryVersion,registryState]);
+  const scope=acc==='discord'?'Discord':acc==='unassigned'?'Task chưa gắn tài khoản':
+    'Zalo #'+acc+' · '+(accounts.find(a=>String(a.id)===acc)?.name||'');
   const age=registryFetchedAt?Math.floor((Date.now()-registryFetchedAt)/1000):null;
   $('task-account-status').textContent=scope+' · '+(age===null?'Chưa đồng bộ':
     registryState!=='ready'?'Không có dữ liệu mới; ảnh chụp cũ từ '+age+'s trước':
     'Cập nhật '+age+'s trước');
-  $('stop-all').hidden=acc!=='discord';
-  $('stop-all-zalo').hidden=acc==='discord'||!accounts.length;
+  if(signature===tasksSignature)return;
   const activeCount=registryTasks.filter(task=>['QUEUED','RUNNING','RETRYING','PAUSED','CANCELLING'].includes(task.status)).length;
   const errorCount=registryTasks.filter(task=>['FAILED','UNKNOWN','INTERRUPTED'].includes(task.status)).length;
+  $('stop-all').hidden=acc!=='discord'||activeCount===0;
+  $('stop-all-zalo').hidden=acc==='discord'||!accounts.length||activeCount===0;
+  if($('task-summary'))$('task-summary').hidden=registryTasks.length===0;
+  const filters=$('tasks').querySelector('.task-filters');if(filters)filters.hidden=registryTasks.length===0;
   $('task-summary')?.replaceChildren(...[['Đang xử lý',activeCount],['Cần xem',errorCount],['Tổng task',registryTasks.length]].map(([label,value])=>{
    const metric=element('div',undefined,'task-summary-item');metric.append(element('strong',value),element('span',label));return metric;
   }));
 
-  if(signature===tasksSignature)return;
   const focused=document.activeElement?.dataset?.taskAction;
   tasksSignature=signature;target.replaceChildren();
   if(registryState!=='ready'){
@@ -880,7 +893,7 @@
    },{timeout:15000});
    toast('Discord đã nhận tin · ID '+result.message_id);
    fields.content.value='';
-  }catch(error){toast(error.message);failed(error);}finally{submit.disabled=false;}
+  }catch(error){failed(error);}finally{submit.disabled=false;}
  };
  $('zalo-form').closest('details').open=true;
  $('upload-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');if(b.disabled)return;b.disabled=true;try{await uploadFile(e.currentTarget);toast('Đã tải tệp lên');await refresh();}catch(error){failed(error);}finally{b.disabled=false;}};
