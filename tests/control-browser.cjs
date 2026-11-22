@@ -57,7 +57,7 @@ const baseUrl=process.env.WEB_TEST_BASE_URL||'http://127.0.0.1:5873';
   if(r.request().method()==='POST'){
    savedCredential=r.request().postDataJSON();
    return r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,link:{
-    id:10,platform:'discord',uid:'9999',name:'New fixture',status:'verified',kind:'user',
+    id:10,platform:'discord',uid:'9999',name:'New fixture',status:'verified',kind:'bot',
     updated:linkedAt,checked_at:linkedAt,last_error:''}})});
   }
   return r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,links:[
@@ -105,7 +105,20 @@ const baseUrl=process.env.WEB_TEST_BASE_URL||'http://127.0.0.1:5873';
  await page.locator('#discord-credential-form button').click();
  await page.locator('#discord-links').getByText('New fixture',{exact:true}).waitFor();
  assert.equal(savedCredential.credential,'fixture-token');
+ assert.equal(savedCredential.kind,'bot');
  assert.equal(await page.locator('#discord-send-account option[value="10"]').count(),1);
+ const rejectToken=async route=>{
+  if(route.request().method()!=='POST')return route.fallback();
+  await route.fulfill({status:504,contentType:'application/json',body:JSON.stringify({
+   ok:false,code:'discord_timeout',error:'Máy chủ chưa nhận được phản hồi từ Discord (hết thời gian kết nối 8 giây)'})});
+ };
+ await page.route('**/api/miniapp/credential_links',rejectToken);
+ await page.locator('#discord-credential-form [name=credential]').fill('fixture-timeout');
+ await page.locator('#discord-credential-form button').click();
+ await page.waitForFunction(()=>document.querySelector('#discord-link-feedback').textContent.includes('Xác minh quá thời gian chờ'));
+ assert.equal(await page.locator('#discord-credential-form button').isEnabled(),true);
+ assert.equal(await page.locator('#discord-send-account option[value="10"]').count(),1);
+ await page.unroute('**/api/miniapp/credential_links',rejectToken);
  await page.locator('#bottom button[aria-label="Tài khoản"]').click();
  assert.equal(await page.locator('#facebook-links .credential-state').innerText(),'Phiên hết hạn');
  assert.equal(await page.locator('#music').count(),0);

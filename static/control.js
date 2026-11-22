@@ -73,7 +73,11 @@
  async function api(path,body,options={}){const h={'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId()};if(body!==undefined){h['Content-Type']='application/json';if(csrfToken)h['X-CSRF-Token']=csrfToken;}const request=requestSignal(options.signal,options.timeout||REQUEST_TIMEOUT_MS);try{const r=await fetch('/api/miniapp/'+path,{method:options.method||(body===undefined?'GET':'POST'),headers:h,body:body===undefined?undefined:JSON.stringify(body),signal:request.signal,cache:'no-store'});let d;try{d=await r.json();}catch{throw Object.assign(new Error('API trả về dữ liệu không phải JSON hợp lệ.'),{status:r.status,code:'invalid_json'});}
   if(!r.ok||d.ok===false)throw Object.assign(new Error(d.error||d.message||'Yêu cầu thất bại'),{status:r.status,code:d.code||'http_error',retryAfterMs:retryAfterMs(r)});
   return d;
- }catch(e){if(e?.name==='AbortError'&&request.isTimeout())throw Object.assign(new Error('Yêu cầu vượt quá thời gian chờ.'),{code:'timeout'});throw e;}
+ }catch(e){if(e?.name==='AbortError'&&request.isTimeout()){
+  const safePath=String(path).split('?')[0].replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi,':id');
+  throw Object.assign(new Error('API '+safePath+' vượt quá thời gian chờ.'),
+   {code:'timeout',endpoint:safePath});
+ }throw e;}
  finally{request.cleanup();}}
  function dashboardFailureLabel(error){
   if(error?.code==='timeout')return 'quá thời gian chờ';
@@ -765,8 +769,8 @@
   const chooser=$('discord-send-account');
   if(chooser){
    const previous=chooser.value;
-   chooser.replaceChildren(...identities.filter(item=>item.platform==='discord'&&item.status!=='invalid').map(item=>{
-    const option=element('option',item.name+' · '+(item.kind==='bot'?'Bot':'Tài khoản'));
+   chooser.replaceChildren(...identities.filter(item=>item.platform==='discord'&&item.kind==='bot'&&item.status==='verified').map(item=>{
+    const option=element('option',item.name+' · Bot đã xác minh');
     option.value=String(item.id);return option;
    }));
    if([...chooser.options].some(option=>option.value===previous))chooser.value=previous;
@@ -908,17 +912,25 @@
   e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');
   if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');
   const isLink=path==='credential_links',feedbackId=extra.platform+'-link-feedback';
-  if(isLink)inlineFeedback(feedbackId,'Đang kiểm tra token trên máy chủ...');
+  if(isLink)inlineFeedback(feedbackId,extra.platform==='discord'
+   ?'Đang xác minh Bot token với Discord (không gửi tin nhắn thử)...'
+   :'Đang kiểm tra phiên trên máy chủ...');
   try{
    const body={...Object.fromEntries(new FormData(form)),...extra};
-   const result=await api(path,body,{timeout:isLink?25000:REQUEST_TIMEOUT_MS});
+   const result=await api(path,body,{timeout:isLink&&extra.platform==='discord'?15000:isLink?25000:REQUEST_TIMEOUT_MS});
    after?.(result);
    if(isLink)inlineFeedback(feedbackId,'Đã xác minh và lưu: '+(result.link?.name||'tài khoản'));
    toast('Đã lưu trên máy chủ');
    if(onSaved)onSaved(result);else await refresh();
   }catch(error){
-   if(isLink)inlineFeedback(feedbackId,'Không kết nối được: '+(error?.message||'Lỗi máy chủ'));
-   failed(error);
+   if(isLink){
+    const timedOut=error?.code==='timeout'||error?.code==='discord_timeout';
+    const message=timedOut
+     ?'Xác minh quá thời gian chờ. Không gửi lại liên tục. Bấm “Kiểm tra đường kết nối Discord” để kiểm tra máy chủ.'
+     :(error?.message||'Lỗi máy chủ');
+    inlineFeedback(feedbackId,'Không kết nối được: '+message);
+   }
+   if(!isLink||extra.platform!=='discord'||error?.status===401)failed(error);
   }finally{submit.disabled=false;submit.removeAttribute('aria-busy');}
  };}
  form('channel-form','channels',{},()=>$('channel-form').reset());form('zalo-form','add_cookie',{},()=>$('zalo-form').reset());form('file-form','add_file');
@@ -937,8 +949,12 @@
     id:Number(fields.account_id.value),channel_id:fields.channel_id.value.trim(),content:fields.content.value
    },{timeout:15000});
    toast('Discord đã nhận tin · ID '+result.message_id);
+   inlineFeedback('discord-send-feedback','Đã gửi thành công · ID '+result.message_id);
    fields.content.value='';
-  }catch(error){failed(error);}finally{submit.disabled=false;}
+  }catch(error){
+   inlineFeedback('discord-send-feedback','Không gửi được tin: '+(error?.message||'Lỗi kết nối'));
+   if(error?.status===401)failed(error);
+  }finally{submit.disabled=false;}
  };
  for(const provider of ['discord','zalo']){
   const testButton=$(provider+'-connectivity');
