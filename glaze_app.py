@@ -15894,7 +15894,12 @@ def api_miniapp_accounts():
             "listener_started": _miniapp_listener_running(a["id"]),
             "listener_health": zalo_listener_status(a["id"]),
         })
-    return jsonify({"ok": True, "accounts": out, "snapshot_at": time.time(), "storage_id": storage_identity(db())})
+    connection = db()
+    try:
+        snapshot_storage_id = storage_identity(connection)
+    finally:
+        connection.close()
+    return jsonify({"ok": True, "accounts": out, "snapshot_at": time.time(), "storage_id": snapshot_storage_id})
 
 
 @app.get("/api/miniapp/account_health")
