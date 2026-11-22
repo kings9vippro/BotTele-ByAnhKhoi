@@ -75,6 +75,26 @@
   return d;
  }catch(e){if(e?.name==='AbortError'&&request.isTimeout())throw Object.assign(new Error('Yêu cầu vượt quá thời gian chờ.'),{code:'timeout'});throw e;}
  finally{request.cleanup();}}
+ function dashboardFailureLabel(error){
+  if(error?.code==='timeout')return 'quá thời gian chờ';
+  const status=Number(error?.status);
+  if(status>=400)return 'HTTP '+status;
+  return 'mất kết nối';
+ }
+ function shouldRetryDashboard(error){
+  const status=Number(error?.status);
+  return error?.code==='timeout'||status===429||status>=500||(!status&&error?.name!=='AbortError');
+ }
+ async function loadDashboardJob(job,options){
+  try{return await job.load();}
+  catch(error){
+   if(options.signal?.aborted||!shouldRetryDashboard(error))throw error;
+   const pause=Math.min(2500,Math.max(350,Number(error?.retryAfterMs)||350));
+   await new Promise(resolve=>setTimeout(resolve,pause));
+   if(options.signal?.aborted)throw Object.assign(new Error('Đã hủy'),{name:'AbortError'});
+   return job.load();
+  }
+ }
  async function uploadFile(form,options={}){const h={'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId('upload')};if(csrfToken)h['X-CSRF-Token']=csrfToken;const request=requestSignal(options.signal,options.timeout||REQUEST_TIMEOUT_MS);try{const r=await fetch('/api/miniapp/upload_file',{method:'POST',headers:h,body:new FormData(form),signal:request.signal,cache:'no-store'});const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||'Tải tệp thất bại');return d;}finally{request.cleanup();}}
  function button(text,fn,cls){const b=element('button',text,cls);b.type='button';b.onclick=async()=>{if(b.disabled)return;b.disabled=true;b.setAttribute('aria-busy','true');try{await fn();}catch(e){failed(e);}finally{b.disabled=false;b.removeAttribute('aria-busy');}};return b;}
  function theme(){const mode=$('theme').value;document.documentElement.dataset.theme=mode==='system'?(tg?.colorScheme||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark')):mode;}
@@ -841,19 +861,19 @@
    }
    jobs.push({name:'Tổng quan',load:()=>refreshControl(options),use:()=>{}});
    // Every independent service settles without blocking authenticated UI.
-   const results=await Promise.allSettled(jobs.map(job=>job.load()));
+   const results=await Promise.allSettled(jobs.map(job=>loadDashboardJob(job,options)));
    for(let i=0;i<jobs.length;i++){
     const result=results[i];
     if(result.status==='rejected'&&result.reason?.status===401)throw result.reason;
     if(result.status==='fulfilled'){
      try{jobs[i].use(result.value);}
-     catch(error){warnings.push(jobs[i].name);console.warn('GLAZE render issue:',jobs[i].name,error?.name||'Error');}
-    }else warnings.push(jobs[i].name);
+     catch(error){warnings.push(jobs[i].name+' (lỗi hiển thị)');console.warn('GLAZE render issue:',jobs[i].name,error?.name||'Error');}
+    }else warnings.push(jobs[i].name+' ('+dashboardFailureLabel(result.reason)+')');
    }
    try{await refreshRegistry(options);}
    catch(error){
     if(error?.status===401)throw error;
-    warnings.push('Tác vụ');
+    warnings.push('Tác vụ ('+dashboardFailureLabel(error)+')');
    }
    renderAccounts();paintMetrics();
    syncWarnings=warnings;
