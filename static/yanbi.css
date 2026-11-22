@@ -390,7 +390,8 @@ body.yanbi #pages section{
   overflow-y:auto!important;
   -webkit-overflow-scrolling:touch;
   overscroll-behavior-y:contain;
-  padding-bottom:calc(40px + max(10px,env(safe-area-inset-bottom,0px)));
+  padding-bottom:calc(120px + max(10px,env(safe-area-inset-bottom,0px)));
+  scroll-padding-bottom:calc(120px + max(10px,env(safe-area-inset-bottom,0px)));
 }
 body.yanbi #bottom,body.yanbi #bottom.bottom-nav{
   display:grid!important;
