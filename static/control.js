@@ -75,6 +75,26 @@
   return d;
  }catch(e){if(e?.name==='AbortError'&&request.isTimeout())throw Object.assign(new Error('Yêu cầu vượt quá thời gian chờ.'),{code:'timeout'});throw e;}
  finally{request.cleanup();}}
+ function dashboardFailureLabel(error){
+  if(error?.code==='timeout')return 'quá thời gian chờ';
+  const status=Number(error?.status);
+  if(status>=400)return 'HTTP '+status;
+  return 'mất kết nối';
+ }
+ function shouldRetryDashboard(error){
+  const status=Number(error?.status);
+  return error?.code==='timeout'||status===429||status>=500||(!status&&error?.name!=='AbortError');
+ }
+ async function loadDashboardJob(job,options){
+  try{return await job.load();}
+  catch(error){
+   if(options.signal?.aborted||!shouldRetryDashboard(error))throw error;
+   const pause=Math.min(2500,Math.max(350,Number(error?.retryAfterMs)||350));
+   await new Promise(resolve=>setTimeout(resolve,pause));
+   if(options.signal?.aborted)throw Object.assign(new Error('Đã hủy'),{name:'AbortError'});
+   return job.load();
+  }
+ }
  async function uploadFile(form,options={}){const h={'X-Telegram-Init-Data':tg?.initData||launch,'X-Request-ID':requestId('upload')};if(csrfToken)h['X-CSRF-Token']=csrfToken;const request=requestSignal(options.signal,options.timeout||REQUEST_TIMEOUT_MS);try{const r=await fetch('/api/miniapp/upload_file',{method:'POST',headers:h,body:new FormData(form),signal:request.signal,cache:'no-store'});const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||'Tải tệp thất bại');return d;}finally{request.cleanup();}}
  function button(text,fn,cls){const b=element('button',text,cls);b.type='button';b.onclick=async()=>{if(b.disabled)return;b.disabled=true;b.setAttribute('aria-busy','true');try{await fn();}catch(e){failed(e);}finally{b.disabled=false;b.removeAttribute('aria-busy');}};return b;}
  function theme(){const mode=$('theme').value;document.documentElement.dataset.theme=mode==='system'?(tg?.colorScheme||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark')):mode;}
@@ -841,19 +861,19 @@
    }
    jobs.push({name:'Tổng quan',load:()=>refreshControl(options),use:()=>{}});
    // Every independent service settles without blocking authenticated UI.
-   const results=await Promise.allSettled(jobs.map(job=>job.load()));
+   const results=await Promise.allSettled(jobs.map(job=>loadDashboardJob(job,options)));
    for(let i=0;i<jobs.length;i++){
     const result=results[i];
     if(result.status==='rejected'&&result.reason?.status===401)throw result.reason;
     if(result.status==='fulfilled'){
      try{jobs[i].use(result.value);}
-     catch(error){warnings.push(jobs[i].name);console.warn('GLAZE render issue:',jobs[i].name,error?.name||'Error');}
-    }else warnings.push(jobs[i].name);
+     catch(error){warnings.push(jobs[i].name+' (lỗi hiển thị)');console.warn('GLAZE render issue:',jobs[i].name,error?.name||'Error');}
+    }else warnings.push(jobs[i].name+' ('+dashboardFailureLabel(result.reason)+')');
    }
    try{await refreshRegistry(options);}
    catch(error){
     if(error?.status===401)throw error;
-    warnings.push('Tác vụ');
+    warnings.push('Tác vụ ('+dashboardFailureLabel(error)+')');
    }
    renderAccounts();paintMetrics();
    syncWarnings=warnings;
@@ -880,7 +900,27 @@
   });
   return refreshing;
  }
- function form(id,path,extra={},after,onSaved){$(id).onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');try{const body={...Object.fromEntries(new FormData(form)),...extra};const result=await api(path,body,{timeout:path==='credential_links'?25000:REQUEST_TIMEOUT_MS});after?.(result);toast('Đã lưu trên máy chủ');if(onSaved)onSaved(result);else await refresh();}catch(e){failed(e);}finally{submit.disabled=false;submit.removeAttribute('aria-busy');}};}
+ function inlineFeedback(id,message){
+  const target=$(id);if(!target)return;
+  target.hidden=false;target.textContent=message;
+ }
+ function form(id,path,extra={},after,onSaved){$(id).onsubmit=async e=>{
+  e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');
+  if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');
+  const isLink=path==='credential_links',feedbackId=extra.platform+'-link-feedback';
+  if(isLink)inlineFeedback(feedbackId,'Đang kiểm tra token trên máy chủ...');
+  try{
+   const body={...Object.fromEntries(new FormData(form)),...extra};
+   const result=await api(path,body,{timeout:isLink?25000:REQUEST_TIMEOUT_MS});
+   after?.(result);
+   if(isLink)inlineFeedback(feedbackId,'Đã xác minh và lưu: '+(result.link?.name||'tài khoản'));
+   toast('Đã lưu trên máy chủ');
+   if(onSaved)onSaved(result);else await refresh();
+  }catch(error){
+   if(isLink)inlineFeedback(feedbackId,'Không kết nối được: '+(error?.message||'Lỗi máy chủ'));
+   failed(error);
+  }finally{submit.disabled=false;submit.removeAttribute('aria-busy');}
+ };}
  form('channel-form','channels',{},()=>$('channel-form').reset());form('zalo-form','add_cookie',{},()=>$('zalo-form').reset());form('file-form','add_file');
  for(const platform of ['discord','facebook'])form(platform+'-credential-form','credential_links',{platform},()=>$(platform+'-credential-form').reset(),result=>{
   if(!result.link?.id)return;
@@ -900,6 +940,23 @@
    fields.content.value='';
   }catch(error){failed(error);}finally{submit.disabled=false;}
  };
+ for(const provider of ['discord','zalo']){
+  const testButton=$(provider+'-connectivity');
+  if(!testButton)continue;
+  testButton.onclick=async()=>{
+   if(testButton.disabled)return;testButton.disabled=true;
+   const feedbackId=provider+'-network-status';
+   inlineFeedback(feedbackId,'Đang kiểm tra kết nối từ máy chủ...');
+   try{
+    const status=await api('provider_health/'+provider,undefined,{timeout:12000});
+    inlineFeedback(feedbackId,status.message+(status.http_status?' (HTTP '+status.http_status+')':'')
+     +(status.reachable?' · đường truyền hoạt động':' · chưa thể kết nối'));
+   }catch(error){
+    inlineFeedback(feedbackId,'Không kiểm tra được đường truyền: '+(error?.message||'Lỗi API'));
+    failed(error);
+   }finally{testButton.disabled=false;}
+  };
+ }
  $('zalo-form').closest('details').open=true;
  $('upload-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');if(b.disabled)return;b.disabled=true;try{await uploadFile(e.currentTarget);toast('Đã tải tệp lên');await refresh();}catch(error){failed(error);}finally{b.disabled=false;}};
  $('send-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;try{await api('notifications',{channels:[...$('channel-options').querySelectorAll(':checked')].map(x=>x.value),content:e.currentTarget.elements.content.value});toast('Đã đưa vào hàng chờ');await refreshControl();}catch(e){failed(e);}finally{b.disabled=false;}};
@@ -964,11 +1021,11 @@
       setTimeout(poll,2500*transientFailures);
       return;
      }
-     finish();failed(error);
+     finish();$('qr-status').textContent='Lỗi kiểm tra QR: '+(error?.message||'Mất kết nối');failed(error);
     }
    };
    await poll();
-  }catch(error){finish();failed(error);}
+  }catch(error){finish();$('qr-status').textContent='Không tạo được QR: '+(error?.message||'Mất kết nối');failed(error);}
  };
  $('stop-all').onclick=()=>confirmAction('Dừng thông báo Discord của tôi?',()=>api('notifications/stop_all',{}));
  $('stop-all-zalo').onclick=()=>confirmAction('Dừng tác vụ trên mọi tài khoản Zalo?',()=>api('quick_action',{action:'stop_all'}));

@@ -40,7 +40,7 @@ class YanbiStudioTests(unittest.TestCase):
     def test_authentication_does_not_wait_for_every_service(self):
         self.assertIn("sessionValidated=true", self.js)
         self.assertIn("hideAuthGate();", self.js)
-        self.assertIn("Promise.allSettled(jobs.map(job=>job.load()))", self.js)
+        self.assertIn("Promise.allSettled(jobs.map(job=>loadDashboardJob(job,options)))", self.js)
         self.assertIn("setConnection('PARTIAL')", self.js)
         self.assertIn("csrfToken=viewer.csrf_token", self.js)
 

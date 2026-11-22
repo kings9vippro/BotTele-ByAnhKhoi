@@ -209,76 +209,63 @@ class VietnamSingaporeGeoRouter:
 
     @classmethod
     def inspect_outbound_ip_geo(cls, proxy_url="", timeout=2.5):
-        sess = requests.Session()
-        if proxy_url:
-            px_norm = cls.normalize_proxy_url(proxy_url)
-            if px_norm:
-                sess.proxies.update({"http": px_norm, "https": px_norm})
-        try:
-            r = sess.get(
-                "http://ip-api.com/json/?fields=status,country,countryCode,regionName,city,isp,query",
-                timeout=timeout,
-            )
-            if r.status_code == 200:
-                d = r.json()
-                if d.get("status") == "success" and d.get("countryCode"):
-                    return {
-                        "ok": True,
-                        "ip": str(d.get("query") or "116.88.104.22"),
-                        "country_code": "SG",
-                        "country": "Singapore",
-                        "city": "Singapore",
-                        "isp": str(d.get("isp") or "Singtel Fiber SG"),
-                        "is_vn_or_sg": True,
-                        "proxy_url": proxy_url or "",
-                    }
-        except Exception:
-            pass
-        return {
-            "ok": True,
-            "ip": "116.88.104.22",
-            "country_code": "SG",
-            "country": "Singapore",
-            "city": "Singapore",
-            "isp": "Singtel Fiber SG",
-            "is_vn_or_sg": True,
-            "proxy_url": proxy_url or "",
+        """Observe the actual outbound route. Unknown is never reported as Singapore."""
+        proxy = cls.normalize_proxy_url(proxy_url) if proxy_url else ""
+        route_mode = "custom_proxy" if proxy else "direct"
+        unknown = {
+            "ok": False, "ip": "", "country_code": "", "country": "",
+            "city": "", "isp": "", "is_vn_or_sg": False,
+            "proxy_url": proxy, "route_mode": route_mode + "_unverified",
         }
+        if proxy_url and not proxy:
+            return unknown
+        session = requests.Session()
+        if proxy:
+            session.proxies.update({"http": proxy, "https": proxy})
+        try:
+            response = session.get(
+                "https://ipapi.co/json/", timeout=(2, max(2.0, float(timeout))),
+                allow_redirects=False,
+            )
+            if response.status_code != 200:
+                return unknown
+            payload = response.json()
+            if not isinstance(payload, dict):
+                return unknown
+            address = str(payload.get("ip") or "").strip()
+            code = str(payload.get("country_code") or "").upper().strip()
+            if not address or not re.fullmatch(r"[A-Z]{2}", code):
+                return unknown
+            return {
+                "ok": True, "ip": address, "country_code": code,
+                "country": str(payload.get("country_name") or ""),
+                "city": str(payload.get("city") or ""),
+                "isp": str(payload.get("org") or ""),
+                "is_vn_or_sg": code in ("VN", "SG"),
+                "proxy_url": proxy, "route_mode": route_mode,
+            }
+        except (requests.RequestException, ValueError, TypeError):
+            return unknown
+        finally:
+            session.close()
 
     @classmethod
     def get_direct_server_geo(cls, force=False):
         now = time.time()
         with cls._LOCK:
-            if not force and cls._DIRECT_GEO_CACHE["info"] and (now - cls._DIRECT_GEO_CACHE["ts"] < 300.0):
-                return dict(cls._DIRECT_GEO_CACHE["info"])
-        info = {
-            "ok": True,
-            "ip": "116.88.104.22",
-            "country_code": "SG",
-            "country": "Singapore",
-            "city": "Singapore",
-            "isp": "Singtel Fiber SG",
-            "is_vn_or_sg": True,
-            "proxy_url": "",
-        }
+            cache = cls._DIRECT_GEO_CACHE
+            if not force and cache["info"] and now - cache["ts"] < 60:
+                return dict(cache["info"])
+        info = cls.inspect_outbound_ip_geo()
         with cls._LOCK:
-            cls._DIRECT_GEO_CACHE = {"ts": now, "info": info}
+            cls._DIRECT_GEO_CACHE = {"ts": now, "info": dict(info)}
         return info
 
     @classmethod
     def select_best_route_for_qr(cls, target_country="SG", custom_proxy=""):
-        px_clean = cls.normalize_proxy_url(custom_proxy) if (custom_proxy and str(custom_proxy).strip()) else ""
-        return {
-            "ok": True,
-            "ip": "116.88.104.22",
-            "country_code": "SG",
-            "country": "Singapore",
-            "city": "Singapore",
-            "isp": "Singtel Fiber SG",
-            "is_vn_or_sg": True,
-            "proxy_url": px_clean,
-            "route_mode": "custom_proxy" if px_clean else "direct_singapore",
-        }
+        # A geographic target cannot change the route without a configured proxy.
+        # Always report what was observed, including out-of-region results.
+        return cls.inspect_outbound_ip_geo(proxy_url=custom_proxy)
 
 
 VIETNAM_PC_PRESETS = {
@@ -3028,9 +3015,8 @@ def _execute_qr_login_sync(
         if isinstance(pre_identity, dict) and pre_identity.get("imei")
         else build_vietnam_pc_identity(region_code=eff_reg, vn_region=eff_reg, custom_pc_name=custom_pc_name or "")
     )
-    vn_id["country"] = "SG"
-    vn_id["vn_location"] = "Singapore"
-    vn_id["tz"] = "Asia/Singapore"
+    # A device preset is not proof of where the server connects from.
+    route = VietnamSingaporeGeoRouter.select_best_route_for_qr(custom_proxy=eff_proxy)
 
     ua = vn_id["ua"]
     sec_ch_ua = vn_id.get("sec_ch_ua") or '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
@@ -3222,12 +3208,12 @@ def _execute_qr_login_sync(
             "mac_address": mac_address,
             "region_code": vn_id["region_code"],
             "region_label": vn_id["region_label"],
-            "vn_location": "Singapore",
-            "vn_isp": vn_id["vn_isp"],
-            "vn_ip": vn_ip,
-            "route_mode": "direct_singapore",
-            "real_country_code": "SG",
-            "is_vn_or_sg": True,
+            "vn_location": route.get("city", ""),
+            "vn_isp": route.get("isp", ""),
+            "vn_ip": route.get("ip", ""),
+            "route_mode": route.get("route_mode", "direct_unverified"),
+            "real_country_code": route.get("country_code", ""),
+            "is_vn_or_sg": route.get("is_vn_or_sg", False),
             "user_agent": ua,
             "sec_ch_ua": sec_ch_ua,
             "sec_platform": sec_platform,

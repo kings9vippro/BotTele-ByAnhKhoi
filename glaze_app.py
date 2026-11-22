@@ -8896,6 +8896,7 @@ class ZaloQRLoginManager:
         png_b = st.get("qr_png_bytes") or b""
 
         def _do_write():
+            conn = None
             try:
                 conn = db()
                 conn.execute(
@@ -8911,7 +8912,10 @@ class ZaloQRLoginManager:
                 )
                 conn.commit()
             except Exception:
-                pass
+                app.logger.warning("QR state persistence unavailable", exc_info=False)
+            finally:
+                if conn is not None:
+                    conn.close()
 
         if async_write:
             threading.Thread(target=_do_write, daemon=True).start()
@@ -8922,6 +8926,7 @@ class ZaloQRLoginManager:
     def _load_qr_state_from_db(cls, session_id):
         if not session_id:
             return None
+        conn = None
         try:
             conn = db()
             row = conn.execute(
@@ -8932,8 +8937,11 @@ class ZaloQRLoginManager:
                 d = json.loads(row["state_json"])
                 d["qr_png_bytes"] = bytes(row["qr_png"]) if row["qr_png"] else b""
                 return d
-        except Exception:
-            pass
+        except (sqlite3.Error, ValueError, TypeError):
+            app.logger.warning("QR session state cannot be read")
+        finally:
+            if conn is not None:
+                conn.close()
         return None
 
     @classmethod
@@ -8968,7 +8976,7 @@ class ZaloQRLoginManager:
             f"{session_id}_{qr_nonce}", region_code=reg_code, custom_pc_name=custom_pc_name
         )
         reg_lbl = pc_dev.get("region_label", "TP. Hồ Chí Minh, Việt Nam")
-        vn_ip_val = pc_dev.get("vn_ip", "14.161.92.108")
+        vn_ip_val = ""  # Device preset IP is not verified outbound network information.
 
         # Tuyệt đối KHÔNG tự động gán Proxy từ ProxyPoolEngine vào phiên QR Zalo (tránh lệch IP làm hỏng phiên QR)
         eff_proxy = str(vn_proxy or "").strip()
@@ -8982,7 +8990,7 @@ class ZaloQRLoginManager:
             "region_label": reg_lbl,
             "vn_region": str(vn_region or "VN").upper(),
             "vn_location": pc_dev.get("vn_location", reg_lbl),
-            "vn_isp": pc_dev.get("vn_isp", "Viettel / VNPT / Singtel Fiber"),
+            "vn_isp": "",  # Set only after the provider route has been measured.
             "vn_ip": vn_ip_val,
             "country": pc_dev.get("country", "SG" if "SG" in str(reg_code).upper() else "VN"),
             "tz": pc_dev.get("tz", "Asia/Ho_Chi_Minh"),
@@ -8990,9 +8998,9 @@ class ZaloQRLoginManager:
             "device_model": pc_dev.get("device_model", pc_dev.get("pc_name", "MacBook Pro M3 Max")),
             "proxy_vn": eff_proxy,
             "vn_proxy": eff_proxy,
-            "route_mode": "checking",
-            "real_country_code": pc_dev.get("country", "VN"),
-            "is_vn_or_sg": True,
+            "route_mode": "unverified",
+            "real_country_code": "",
+            "is_vn_or_sg": False,
             "status": "generating",
             "step_num": 1,
             "message": f"Đang cấp phát máy tính {pc_dev['pc_name']} & định tuyến cổng QR Việt Nam / Singapore...",
@@ -9406,10 +9414,20 @@ class ZaloQRLoginManager:
                     user_info_dict=ext_res.get("user_info")
                 )
                 return
-            if st.get("status") in ("declined", "expired") or st["stop_ev"].is_set():
+            if st.get("status") in ("declined", "expired", "error", "success") or st["stop_ev"].is_set():
                 return
-        except Exception:
-            pass
+            if st.get("qr_base64"):
+                # The first provider already displayed a QR. Never silently
+                # replace it with a second code bound to a different session.
+                st["status"] = "expired"
+                st["message"] = "Phiên QR đã hết hạn, vui lòng tạo mã mới."
+                cls._persist_qr_state_to_db(st, async_write=False)
+                return
+        except Exception as error:
+            app.logger.warning("Primary QR transport failed (%s)", type(error).__name__)
+        if not st.get("qr_base64"):
+            st["message"] = "Cổng QR chính chưa trả mã; đang thử kết nối dự phòng..."
+            cls._persist_qr_state_to_db(st, async_write=True)
 
         # Luồng 2 (Tự thân khép kín 100% trong app.py khi chạy độc lập):
         # Sử dụng chuẩn `continue_url = "https://zalo.me/pc"` và `login_referer = "https://id.zalo.me/account?continue=https%3A%2F%2Fzalo.me%2Fpc"`
@@ -9480,6 +9498,7 @@ class ZaloQRLoginManager:
             return hdr
 
         try:
+            qr_failure = "unknown"
             for attempt in range(3):
                 if st["stop_ev"].is_set():
                     return
@@ -9525,20 +9544,23 @@ class ZaloQRLoginManager:
                         timeout=10,
                     )
                     cls._harvest_cookies(r_qr, s, cookie_jar_dict)
+                    qr_failure = f"HTTP {r_qr.status_code}"
                     j_qr = r_qr.json() if r_qr.content else {}
-                    qr_data = j_qr.get("data") or {}
+                    if isinstance(j_qr, dict) and j_qr.get("error_code") not in (None, 0):
+                        qr_failure = f"provider {str(j_qr['error_code'])[:12]}"
+                    qr_data = j_qr.get("data") or {} if isinstance(j_qr, dict) else {}
                     if isinstance(qr_data, dict):
                         qr_b64_raw = qr_data.get("image") or qr_data.get("qr_image") or ""
                         qr_code_id = qr_data.get("code") or qr_data.get("qr_id") or ""
                     if qr_b64_raw and qr_code_id:
                         break
-                except Exception:
-                    pass
+                except (requests.RequestException, ValueError, TypeError) as error:
+                    qr_failure = type(error).__name__
                 time.sleep(0.2)
 
             if not qr_b64_raw or not qr_code_id:
                 st["status"] = "error"
-                st["message"] = "Không kết nối được tới cổng QR id.zalo.me. Hãy bấm lại 'Tạo Mã QR Máy Tính Mới'!"
+                st["message"] = f"Cổng QR id.zalo.me không cấp mã ({qr_failure}). Kiểm tra kết nối Zalo từ máy chủ."
                 cls._persist_qr_state_to_db(st, async_write=False)
                 return
 
@@ -15894,7 +15916,12 @@ def api_miniapp_accounts():
             "listener_started": _miniapp_listener_running(a["id"]),
             "listener_health": zalo_listener_status(a["id"]),
         })
-    return jsonify({"ok": True, "accounts": out, "snapshot_at": time.time(), "storage_id": storage_identity(db())})
+    connection = db()
+    try:
+        snapshot_storage_id = storage_identity(connection)
+    finally:
+        connection.close()
+    return jsonify({"ok": True, "accounts": out, "snapshot_at": time.time(), "storage_id": snapshot_storage_id})
 
 
 @app.get("/api/miniapp/account_health")
@@ -16015,13 +16042,49 @@ def api_miniapp_add_cookie():
         return jsonify({"ok": False, "error": public_error_message("Không thể nạp tài khoản Zalo.")})
 
 
+@app.get("/api/miniapp/provider_health/<provider>")
+def api_miniapp_provider_health(provider):
+    """Read-only connectivity check from this web server, never from the user's browser."""
+    targets = {
+        "discord": "https://discord.com/api/v10/gateway",
+        "zalo": "https://id.zalo.me/account?continue=https%3A%2F%2Fchat.zalo.me%2F",
+    }
+    if provider not in targets:
+        return jsonify(ok=False, code="unsupported_provider", error="Nền tảng không được hỗ trợ"), 404
+    try:
+        response = requests.get(
+            targets[provider], timeout=(3, 5), allow_redirects=False,
+            headers={"Accept": "application/json" if provider == "discord" else "text/html"},
+        )
+        try:
+            status = response.status_code
+        finally:
+            response.close()
+        reachable = 200 <= status < 400
+        return jsonify(ok=True, provider=provider, reachable=reachable,
+                       http_status=status, checked_at=int(time.time()),
+                       message=("Máy chủ kết nối được tới " + provider) if reachable
+                       else (provider + " trả về HTTP " + str(status)))
+    except requests.RequestException as error:
+        # Do not expose proxy URLs, upstream headers or any credentials.
+        return jsonify(ok=True, provider=provider, reachable=False, http_status=None,
+                       code="provider_transport_unavailable", checked_at=int(time.time()),
+                       message="Không kết nối được tới " + provider
+                       + " từ máy chủ (" + type(error).__name__ + ")")
+
+
 @app.route("/api/miniapp/start_qr", methods=["POST"])
 def api_miniapp_start_qr():
     try:
         status = ZaloQRLoginManager.start_qr_session()
+        if not status.get("ok") or not status.get("session_id"):
+            return jsonify(ok=False, code="qr_start_failed",
+                           error=status.get("message") or "Máy chủ chưa tạo được phiên QR"), 503
         return jsonify({key: status.get(key) for key in ("ok", "session_id", "status", "message")})
-    except Exception:
-        return jsonify({"ok": False, "error": public_error_message("Không thể khởi tạo phiên QR.")})
+    except Exception as error:
+        app.logger.warning("QR start failed (%s)", type(error).__name__)
+        return jsonify(ok=False, code="qr_start_failed",
+                       error="Không thể khởi tạo phiên QR tại máy chủ."), 503
 
 
 @app.route("/api/miniapp/toggle_acc_cmd", methods=["POST"])
