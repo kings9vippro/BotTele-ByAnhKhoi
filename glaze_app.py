@@ -15939,34 +15939,51 @@ def api_miniapp_account_health():
 
 @app.route("/api/miniapp/credential_links", methods=["GET", "POST", "DELETE"])
 def api_miniapp_credential_links():
-    """Link a verified Discord token or Facebook cookie without exposing it."""
-    if miniapp_request_owner() != admin_principal_id():
+    """Verify provider tokens before taking a database connection from the pool."""
+    owner = miniapp_request_owner()
+    if owner != admin_principal_id():
         return jsonify(ok=False, error="Chỉ quản trị viên được quản lý phiên tài khoản"), 403
-    from credential_links import CredentialRejected, CredentialUnavailable, delete, list_links, save
+    from credential_links import (
+        CredentialRejected, CredentialTimeout, CredentialUnavailable,
+        delete, list_links, save, verify_discord,
+    )
+    body = request.get_json(silent=True) or {} if request.method != "GET" else {}
+    platform = str(body.get("platform") or "").strip().lower()
+    raw = str(body.get("credential") or "")
+    kind = str(body.get("kind") or "bot")
+    verified = None
+    # Upstream calls have bounded timeouts and must not hold SQLite connections.
+    if request.method == "POST" and platform == "discord":
+        try:
+            verified = verify_discord(raw, kind=kind)
+        except CredentialRejected as error:
+            return jsonify(ok=False, code="discord_invalid", error=str(error)), 400
+        except CredentialTimeout as error:
+            return jsonify(ok=False, code="discord_timeout", error=str(error)), 504
+        except CredentialUnavailable as error:
+            return jsonify(ok=False, code="discord_unavailable", error=str(error)), 503
     connection = db()
     try:
         if request.method == "GET":
-            return jsonify(ok=True, links=list_links(connection, miniapp_request_owner()))
-        body = request.get_json(silent=True) or {}
+            return jsonify(ok=True, links=list_links(connection, owner))
         if request.method == "DELETE":
             try:
                 link_id = int(body.get("id"))
             except (TypeError, ValueError):
                 return jsonify(ok=False, error="ID kết nối không hợp lệ"), 400
-            return jsonify(ok=True, deleted=delete(connection, miniapp_request_owner(), link_id))
-        platform = str(body.get("platform") or "").strip().lower()
-        raw = str(body.get("credential") or "")
+            return jsonify(ok=True, deleted=delete(connection, owner, link_id))
         try:
-            link = save(connection, miniapp_request_owner(), platform, raw, SECRET_KEY,
-                        kind=str(body.get("kind") or "user"))
+            link = save(connection, owner, platform, raw, SECRET_KEY,
+                        kind=kind, verified=verified)
+        except CredentialTimeout as error:
+            return jsonify(ok=False, code="discord_timeout", error=str(error)), 504
         except CredentialUnavailable as error:
-            return jsonify(ok=False, error=str(error)), 503
+            return jsonify(ok=False, code="credential_unavailable", error=str(error)), 503
         except CredentialRejected as error:
-            return jsonify(ok=False, error=str(error)), 400
+            return jsonify(ok=False, code="credential_invalid", error=str(error)), 400
         return jsonify(ok=True, link=link)
     finally:
         connection.close()
-
 
 @app.post("/api/miniapp/credential_links/check")
 def api_miniapp_credential_links_check():
