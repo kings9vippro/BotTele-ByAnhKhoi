@@ -115,7 +115,7 @@ const baseUrl=process.env.WEB_TEST_BASE_URL||'http://127.0.0.1:5873';
  await page.route('**/api/miniapp/credential_links',rejectToken);
  await page.locator('#discord-credential-form [name=credential]').fill('fixture-timeout');
  await page.locator('#discord-credential-form button').click();
- await page.waitForFunction(()=>document.querySelector('#discord-link-feedback').textContent.includes('8 giây'));
+ await page.waitForFunction(()=>document.querySelector('#discord-link-feedback').textContent.includes('Xác minh quá thời gian chờ'));
  assert.equal(await page.locator('#discord-credential-form button').isEnabled(),true);
  assert.equal(await page.locator('#discord-send-account option[value="10"]').count(),1);
  await page.unroute('**/api/miniapp/credential_links',rejectToken);
