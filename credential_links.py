@@ -99,8 +99,6 @@ def verify_discord(token, *, kind="user", http=requests):
     uid = str(profile.get("id") or "")
     if not uid.isdigit():
         raise CredentialUnavailable("Discord không trả về ID tài khoản")
-    if kind == "bot" and not profile.get("bot"):
-        raise CredentialRejected("Token xác minh được nhưng không thuộc tài khoản Bot")
     name = str(profile.get("global_name") or profile.get("username") or "Discord")[:100]
     return uid, name, authorization, kind
 
