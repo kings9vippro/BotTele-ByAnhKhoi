@@ -23,6 +23,10 @@ class CredentialUnavailable(ValueError):
     """The provider did not give a conclusive answer."""
 
 
+class CredentialTimeout(CredentialUnavailable):
+    """The upstream Discord check failed within its bounded network deadline."""
+
+
 def ensure_schema(connection):
     connection.execute("""CREATE TABLE IF NOT EXISTS credential_links (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,41 +70,57 @@ def _discord_authorization(token, kind):
         raw, selected = raw[4:].strip(), "bot"
     elif raw.lower().startswith("bearer "):
         raw, selected = raw[7:].strip(), "oauth2"
-    if selected not in ("user", "bot", "oauth2") or not raw or len(raw) > 500 or any(char.isspace() for char in raw):
-        raise CredentialRejected("Token Discord không hợp lệ. Hãy chọn Bot hoặc OAuth2.")
+    if selected == "user":
+        raise CredentialRejected("Token phiên đăng nhập tài khoản cá nhân không được hỗ trợ. Hãy dùng Bot token chính thức.")
+    if selected not in ("bot", "oauth2") or not raw or len(raw) > 500 or any(char.isspace() for char in raw):
+        raise CredentialRejected("Token Discord không hợp lệ. Hãy sử dụng Bot token hoặc OAuth2 chính thức.")
     prefix = "Bot " if selected == "bot" else "Bearer " if selected == "oauth2" else ""
     return prefix + raw, selected
 
 
-def verify_discord(token, *, kind="user", http=requests):
+def verify_discord(token, *, kind="bot", http=requests):
+    """One bounded verification request; no automatic retries or secret logging."""
     authorization, kind = _discord_authorization(token, kind)
     try:
         response = http.get(
             "https://discord.com/api/v10/users/@me",
             headers={"Authorization": authorization, "Accept": "application/json"},
-            timeout=(3, 8), allow_redirects=False,
+            timeout=(2, 6), allow_redirects=False,
         )
+    except (requests.ConnectTimeout, requests.ReadTimeout) as error:
+        raise CredentialTimeout("Máy chủ chưa nhận được phản hồi từ Discord (hết thời gian kết nối 8 giây)") from error
+    except requests.SSLError as error:
+        raise CredentialUnavailable("Kết nối HTTPS tới Discord lỗi chứng chỉ TLS") from error
     except requests.RequestException as error:
-        raise CredentialUnavailable("Không kết nối được Discord để kiểm tra token") from error
-    if response.status_code == 401:
-        raise CredentialRejected("Discord trả về HTTP 401: token không hợp lệ hoặc đã hết hạn")
-    if response.status_code == 403:
-        raise CredentialRejected("Discord trả về HTTP 403: token không có quyền truy cập")
-    if response.status_code == 429 or response.status_code >= 500:
-        raise CredentialUnavailable(f"Discord đang giới hạn hoặc gặp lỗi máy chủ (HTTP {response.status_code})")
-    if response.status_code != 200:
-        raise CredentialRejected("Discord không chấp nhận token này")
+        raise CredentialUnavailable("Máy chủ không kết nối được tới Discord. Kiểm tra đường truyền máy chủ.") from error
     try:
-        profile = response.json()
-    except ValueError as error:
-        raise CredentialUnavailable("Discord trả về hồ sơ không hợp lệ") from error
-    if not isinstance(profile, dict):
-        raise CredentialUnavailable("Discord trả về hồ sơ không hợp lệ")
-    uid = str(profile.get("id") or "")
-    if not uid.isdigit():
-        raise CredentialUnavailable("Discord không trả về ID tài khoản")
-    name = str(profile.get("global_name") or profile.get("username") or "Discord")[:100]
-    return uid, name, authorization, kind
+        if response.status_code == 401:
+            raise CredentialRejected("Discord trả về HTTP 401: token không hợp lệ hoặc đã hết hạn")
+        if response.status_code == 403:
+            raise CredentialRejected("Discord trả về HTTP 403: token không có quyền truy cập")
+        if response.status_code == 429:
+            raise CredentialUnavailable("Discord giới hạn yêu cầu (HTTP 429). Không kiểm tra lặp liên tục.")
+        if response.status_code >= 500:
+            raise CredentialUnavailable(f"Discord gặp lỗi tạm thời (HTTP {response.status_code})")
+        if response.status_code != 200:
+            raise CredentialRejected(f"Discord từ chối xác minh (HTTP {response.status_code})")
+        try:
+            profile = response.json()
+        except ValueError as error:
+            raise CredentialUnavailable("Discord trả về hồ sơ không hợp lệ") from error
+        if not isinstance(profile, dict):
+            raise CredentialUnavailable("Discord trả về hồ sơ không hợp lệ")
+        uid = str(profile.get("id") or "")
+        if not uid.isdigit():
+            raise CredentialUnavailable("Discord không trả về ID tài khoản")
+        if kind == "bot" and profile.get("bot") is False:
+            raise CredentialRejected("Đây không phải Bot token do Discord Developer Portal cấp")
+        name = str(profile.get("global_name") or profile.get("username") or "Discord")[:100]
+        return uid, name, authorization, kind
+    finally:
+        close = getattr(response, "close", None)
+        if callable(close):
+            close()
 
 
 def normalize_facebook_cookie(raw_cookie):
@@ -197,8 +217,9 @@ def _verify(platform, secret, kind, http):
     raise CredentialRejected("Nền tảng không được hỗ trợ")
 
 
-def save(connection, owner, platform, secret, secret_key, *, kind="user", http=requests):
-    uid, name, normalized, credential_kind = _verify(platform, secret, kind, http)
+def save(connection, owner, platform, secret, secret_key, *, kind="bot", http=requests, verified=None):
+    uid, name, normalized, credential_kind = (verified if verified is not None
+                                            else _verify(platform, secret, kind, http))
     encrypted = _cipher(secret_key).encrypt(normalized.encode()).decode()
     now = time.time()
     connection.execute("""INSERT INTO credential_links(owner,platform,uid,name,encrypted,updated)
@@ -264,6 +285,8 @@ def send_discord_message(connection, owner, link_id, channel_id, content, secret
     ).fetchone()
     if row is None:
         raise CredentialRejected("Không tìm thấy tài khoản Discord đã kết nối")
+    if row["kind"] != "bot":
+        raise CredentialRejected("Chỉ Bot token được phép gửi tin. OAuth2 chỉ xác minh danh tính; không thể gửi như tài khoản cá nhân.")
     if row["status"] == "invalid":
         raise CredentialRejected("Token đã hết hạn; hãy kết nối lại tài khoản")
     try:
