@@ -94,6 +94,20 @@ class ManagementTests(unittest.TestCase):
         dispatch.assert_not_called()
         self.assertEqual(saved['fixture-task']['status'], 'stopped')
 
+    def test_zalo_worker_auth_failure_is_visible_as_failed_task(self):
+        saved = {'fixture-task': {'id': 'fixture-task', 'status': 'running'}}
+        account = {'id': 2, 'platform': 'zalo', 'name': 'Fixture', 'imei': 'device', 'cookies': '{}'}
+        with patch.object(app, 'TASKS_RAM_STORE', saved), patch.object(app, 'ACTIVE_TASKS', {}), \
+                patch.object(app, 'get_all_accounts_from_ram', return_value=[account]), \
+                patch.object(app.Zalo, 'get_pooled_client', side_effect=ValueError('private-cookie-secret')), \
+                patch.object(app.HEALTH_MGR, 'report_error'), \
+                patch.object(app.WaveFairnessEngine, 'register_accounts_for_wave'):
+            app.task_supervisor('fixture-task', [{'id': 'box', 'type': 'group'}], ['hi'], {},
+                                False, threading.Event(), account_ids=[2])
+        self.assertEqual(saved['fixture-task']['status'], 'failed')
+        self.assertIn('Cookie và IMEI', saved['fixture-task']['error'])
+        self.assertNotIn('private-cookie-secret', saved['fixture-task']['error'])
+
     def test_discord_token_link_is_verified_encrypted_and_removable(self):
         profile = Mock(status_code=200)
         profile.json.return_value = {'id': '123456789', 'username': 'Fixture'}
@@ -166,6 +180,40 @@ class ManagementTests(unittest.TestCase):
         stored = app.db().execute('SELECT encrypted,status FROM credential_links').fetchone()
         self.assertEqual(stored['status'], 'invalid')
         self.assertNotIn('fixture-bot-token', stored['encrypted'])
+
+    def test_linked_discord_account_sends_and_reports_permission_failure(self):
+        profile = Mock(status_code=200)
+        profile.json.return_value = {'id': '123456789', 'username': 'Fixture'}
+        with patch('credential_links.requests.get', return_value=profile):
+            self.client.post('/api/miniapp/credential_links', json={
+                'platform': 'discord', 'kind': 'bot', 'credential': 'fixture-bot-token',
+            }).json['link']
+        link_id = self.client.get('/api/miniapp/credential_links').json['links'][0]['id']
+        message = Mock(status_code=200)
+        message.json.return_value = {'id': '987654321098765432'}
+        with patch('credential_links.requests.post', return_value=message) as send:
+            result = self.client.post('/api/miniapp/credential_links/send_discord', json={
+                'id': link_id, 'channel_id': '123456789012345678', 'content': 'Xin chào',
+            })
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json['message_id'], '987654321098765432')
+        self.assertEqual(send.call_args.kwargs['headers']['Authorization'], 'Bot fixture-bot-token')
+        self.assertEqual(send.call_args.kwargs['json']['allowed_mentions'], {'parse': []})
+        self.assertNotIn('fixture-bot-token', result.text)
+        denied = Mock(status_code=403)
+        with patch('credential_links.requests.post', return_value=denied):
+            result = self.client.post('/api/miniapp/credential_links/send_discord', json={
+                'id': link_id, 'channel_id': '123456789012345678', 'content': 'Xin chào',
+            })
+        self.assertEqual(result.status_code, 400)
+        self.assertIn('không có quyền', result.json['error'])
+        expired = Mock(status_code=401)
+        with patch('credential_links.requests.post', return_value=expired):
+            result = self.client.post('/api/miniapp/credential_links/send_discord', json={
+                'id': link_id, 'channel_id': '123456789012345678', 'content': 'Xin chào',
+            })
+        self.assertEqual(result.status_code, 400)
+        self.assertEqual(self.client.get('/api/miniapp/credential_links').json['links'][0]['status'], 'invalid')
 
     def test_existing_credential_vault_gains_health_columns_without_losing_links(self):
         import sqlite3

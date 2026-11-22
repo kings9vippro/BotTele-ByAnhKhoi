@@ -12,8 +12,13 @@
  const element=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  function hideStartupPanel(){$('startup-panel').hidden=true;}
  function showAuthGate(state,reason){
+  const card=$('auth-gate');
+  if(!card){
+   const startup=$('startup-panel');
+   if(startup)startup.hidden=false;
+   setConnection(state);return;
+  }
   hideStartupPanel();
-  const card=$('auth-gate');if(!card)return;
   const variants={
    missing:'Chưa có phiên quản trị. Đăng nhập bằng mật khẩu web để tiếp tục. Nếu sử dụng Telegram Mini App, hãy mở từ bot đã cấp quyền.',
    expired:'Phiên Telegram đã hết hạn. Đóng Mini App và mở lại từ bot để lấy phiên mới.',
@@ -25,7 +30,7 @@
   $('auth-heading').textContent=reason==='forbidden'?'Không đủ quyền':reason==='server'?'Chưa thể xác thực':'Đăng nhập quản trị';
   card.hidden=false;document.body.classList.add('auth-locked');setConnection(state);
  }
- function hideAuthGate(){hideStartupPanel();$('auth-gate').hidden=true;document.body.classList.remove('auth-locked');}
+ function hideAuthGate(){const card=$('auth-gate');if(card)card.hidden=true;document.body.classList.remove('auth-locked');hideStartupPanel();}
  function toast(text){$('toasts').replaceChildren(element('div',text,'toast'));clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toasts').replaceChildren(),4500);}
  class MiniAppError extends Error{constructor(message,{kind='temporary',status=0,retryAfterMs=0}={}){super(message);this.name='MiniAppError';this.kind=kind;this.status=status;this.retryAfterMs=retryAfterMs;}}
  function initData(){return String(tg?.initData||launch||'').trim();}
@@ -623,7 +628,7 @@
   $('stop-all-zalo').hidden=acc==='discord'||!accounts.length;
   const activeCount=registryTasks.filter(task=>['QUEUED','RUNNING','RETRYING','PAUSED','CANCELLING'].includes(task.status)).length;
   const errorCount=registryTasks.filter(task=>['FAILED','UNKNOWN','INTERRUPTED'].includes(task.status)).length;
-  $('task-summary').replaceChildren(...[['Đang xử lý',activeCount],['Cần xem',errorCount],['Tổng task',registryTasks.length]].map(([label,value])=>{
+  $('task-summary')?.replaceChildren(...[['Đang xử lý',activeCount],['Cần xem',errorCount],['Tổng task',registryTasks.length]].map(([label,value])=>{
    const metric=element('div',undefined,'task-summary-item');metric.append(element('strong',value),element('span',label));return metric;
   }));
 
@@ -723,6 +728,17 @@
    const target=$(platform+'-links');if(!target)continue;
    const linked=identities.filter(item=>item.platform===platform);
    target.replaceChildren(...(linked.length?linked.map(credentialCard):[element('p','Chưa có tài khoản đã kiểm tra.')]))
+  }
+  const chooser=$('discord-send-account');
+  if(chooser){
+   const previous=chooser.value;
+   chooser.replaceChildren(...identities.filter(item=>item.platform==='discord'&&item.status!=='invalid').map(item=>{
+    const option=element('option',item.name+' · '+(item.kind==='bot'?'Bot':'Tài khoản'));
+    option.value=String(item.id);return option;
+   }));
+   if([...chooser.options].some(option=>option.value===previous))chooser.value=previous;
+   $('discord-send-form').hidden=!chooser.options.length;
+   $('discord-send-empty').hidden=!!chooser.options.length;
   }
  }
  let channelSignature='';function renderControl(next){data=next;cursor=next.cursor||cursor;paintMetrics();if(next.reset)eventRows=[];for(const e of next.events||[])if(!eventRows.some(r=>r.seq===e.seq))eventRows.push(e);eventRows=eventRows.slice(-200);renderTasks();$('health').textContent=`${next.workers} worker · ${next.channels.length} kênh · API trung bình ${next.api_latency_seconds===null?'Chưa đo':next.api_latency_seconds.toFixed(3)+'s'}`;$('event-list').replaceChildren(...eventRows.slice().reverse().map(e=>row(e.status,`${e.task} · ${new Date(e.at*1000).toLocaleTimeString()}`)));$('commands').replaceChildren(...next.commands.map(c=>{const r=element('div',undefined,'row');r.append(element('strong','/'+c.name),element('small',c.description));return r;}));const signature=JSON.stringify(next.channels);if(signature!==channelSignature){channelSignature=signature;const chosen=new Set([...$('channel-options').querySelectorAll(':checked')].map(x=>x.value));$('channels').replaceChildren(...next.channels.map(c=>row(c.name,c.id)));$('channel-options').replaceChildren(element('legend','Chọn tối đa 5 kênh'));for(const c of next.channels){const label=element('label');const box=element('input');box.type='checkbox';box.value=c.id;box.checked=chosen.has(c.id);label.append(box,document.createTextNode(c.name));$('channel-options').append(label);}}
@@ -854,6 +870,18 @@
  function form(id,path,extra={},after){$(id).onsubmit=async e=>{e.preventDefault();const form=e.currentTarget,submit=form.querySelector('button');if(submit.disabled)return;submit.disabled=true;submit.setAttribute('aria-busy','true');try{const body={...Object.fromEntries(new FormData(form)),...extra};const result=await api(path,body);after?.(result);toast('Đã lưu trên máy chủ');await refresh();}catch(e){failed(e);}finally{submit.disabled=false;submit.removeAttribute('aria-busy');}};}
  form('channel-form','channels',{},()=>$('channel-form').reset());form('zalo-form','add_cookie',{},()=>$('zalo-form').reset());form('file-form','add_file');
  for(const platform of ['discord','facebook'])form(platform+'-credential-form','credential_links',{platform},()=>$(platform+'-credential-form').reset());
+ if($('discord-send-form'))$('discord-send-form').onsubmit=async e=>{
+  e.preventDefault();const submit=e.currentTarget.querySelector('button[type=submit]');
+  if(submit.disabled)return;submit.disabled=true;
+  try{
+   const fields=e.currentTarget.elements;
+   const result=await api('credential_links/send_discord',{
+    id:Number(fields.account_id.value),channel_id:fields.channel_id.value.trim(),content:fields.content.value
+   },{timeout:15000});
+   toast('Discord đã nhận tin · ID '+result.message_id);
+   fields.content.value='';
+  }catch(error){toast(error.message);failed(error);}finally{submit.disabled=false;}
+ };
  $('zalo-form').closest('details').open=true;
  $('upload-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');if(b.disabled)return;b.disabled=true;try{await uploadFile(e.currentTarget);toast('Đã tải tệp lên');await refresh();}catch(error){failed(error);}finally{b.disabled=false;}};
  $('send-form').onsubmit=async e=>{e.preventDefault();const b=e.currentTarget.querySelector('button');b.disabled=true;try{await api('notifications',{channels:[...$('channel-options').querySelectorAll(':checked')].map(x=>x.value),content:e.currentTarget.elements.content.value});toast('Đã đưa vào hàng chờ');await refreshControl();}catch(e){failed(e);}finally{b.disabled=false;}};
@@ -962,8 +990,11 @@
     &&accounts.length&&['accounts','tasks','zalo'].includes(active))refreshAccountHealth().catch(()=>{});},7000);
  setInterval(checkStreamHealth,5000);
  async function bootstrap(){
-   // Telegram's SDK loads asynchronously; defer the first authorized API request.
-   if(!tg?.initData&&!launch&&$('telegram-sdk')){
+   // A normal web browser can check its server session immediately. Only wait
+   // for the Telegram bridge when the page is actually inside Telegram.
+   const telegramContainer=/Telegram/i.test(navigator.userAgent)||!!window.TelegramWebviewProxy||
+    !!window.webkit?.messageHandlers?.TelegramWebviewProxy;
+   if(!tg?.initData&&!launch&&telegramContainer&&$('telegram-sdk')){
      await new Promise(resolve=>{
        const script=$('telegram-sdk');let settled=false;
        const done=()=>{if(settled)return;settled=true;clearTimeout(timer);resolve();};

@@ -10951,6 +10951,11 @@ def single_acc_multi_box_dispatcher(acc_dict, targets, blocks, runtime_opts, sto
     raw_acc_name = acc_dict.get("name") or f"Acc #{acc_id}"
     acc_key = f"{raw_acc_name} (#{acc_id})"
 
+    def start_failed(reason):
+        with lock:
+            counter["start_failures"] = counter.get("start_failures", 0) + 1
+            counter.setdefault("start_errors", []).append(f"{acc_key}: {reason}")
+
     my_targets = []
     for t in targets:
         t_type = t.get("type", "group")
@@ -10969,6 +10974,7 @@ def single_acc_multi_box_dispatcher(acc_dict, targets, blocks, runtime_opts, sto
         my_targets.append(t)
 
     if not my_targets:
+        start_failed("Không có box phù hợp với tài khoản")
         return
 
     client = None
@@ -10983,6 +10989,7 @@ def single_acc_multi_box_dispatcher(acc_dict, targets, blocks, runtime_opts, sto
             HEALTH_MGR.report_success(acc_id)
         except Exception as e:
             HEALTH_MGR.report_error(acc_id, str(e), is_auth_error=True)
+            start_failed("Không mở được phiên Zalo; kiểm tra Cookie và IMEI")
             return
     elif plat == "messenger":
         try:
@@ -10990,6 +10997,7 @@ def single_acc_multi_box_dispatcher(acc_dict, targets, blocks, runtime_opts, sto
             HEALTH_MGR.report_success(acc_id)
         except Exception as e:
             HEALTH_MGR.report_error(acc_id, str(e), is_auth_error=True)
+            start_failed("Không mở được phiên Messenger")
             return
     else:
         try:
@@ -11002,6 +11010,7 @@ def single_acc_multi_box_dispatcher(acc_dict, targets, blocks, runtime_opts, sto
             HEALTH_MGR.report_success(acc_id)
         except Exception as e:
             HEALTH_MGR.report_error(acc_id, str(e), is_auth_error=True)
+            start_failed("Không mở được phiên Discord")
             return
 
     with lock:
@@ -11094,7 +11103,7 @@ def task_supervisor(tid, targets, blocks, runtime_opts, multi_acc, stop_ev, spec
             TASKS_RAM_STORE[tid]["acc_count"] = len(selected_accs)
             TASKS_RAM_STORE[tid]["acc_names"] = acc_names_list
 
-    counter = {"sent": 0, "by_acc": {n: 0 for n in acc_names_list}}
+    counter = {"sent": 0, "by_acc": {n: 0 for n in acc_names_list}, "start_failures": 0, "start_errors": []}
     lock = threading.Lock()
     threads = []
 
@@ -11128,7 +11137,11 @@ def task_supervisor(tid, targets, blocks, runtime_opts, multi_acc, stop_ev, spec
         if tid in TASKS_RAM_STORE:
             TASKS_RAM_STORE[tid]["sent"] = counter["sent"]
             TASKS_RAM_STORE[tid]["by_acc"] = dict(counter.get("by_acc") or {})
-            TASKS_RAM_STORE[tid]["status"] = "stopped"
+            all_failed = counter["start_failures"] >= len(selected_accs)
+            TASKS_RAM_STORE[tid]["status"] = "failed" if all_failed else "stopped"
+            TASKS_RAM_STORE[tid]["fail"] = counter["start_failures"]
+            if all_failed:
+                TASKS_RAM_STORE[tid]["error"] = "; ".join(counter["start_errors"][:3])
             TASKS_RAM_STORE[tid]["dirty"] = True
     ACTIVE_TASKS.pop(tid, None)
 
@@ -15448,7 +15461,8 @@ def _flush_ram_tasks_to_db():
             if obj.get("dirty"):
                 row = (tid, obj.get("type", "task"), json.dumps(obj.get("meta") or {}, ensure_ascii=False),
                        obj.get("status", "running"), obj.get("started_at", time.time()),
-                       json.dumps({"sent": obj.get("sent", 0), "fail": obj.get("fail", 0)}))
+                       json.dumps({"sent": obj.get("sent", 0), "fail": obj.get("fail", 0),
+                                   "error": str(obj.get("error") or "")[:500]}))
                 pending.append((tid, obj, row))
     if not pending:
         return
@@ -15470,7 +15484,8 @@ def _flush_ram_tasks_to_db():
             current["persisted"] = True
             unchanged = (current.get("status", "running") == row[3]
                          and json.dumps(current.get("meta") or {}, ensure_ascii=False) == row[2]
-                         and json.dumps({"sent": current.get("sent", 0), "fail": current.get("fail", 0)}) == row[5])
+                         and json.dumps({"sent": current.get("sent", 0), "fail": current.get("fail", 0),
+                                         "error": str(current.get("error") or "")[:500]}) == row[5])
             if unchanged:
                 current["dirty"] = False
 
@@ -15496,10 +15511,12 @@ def _init_ram_stores_from_db():
                     "id": tid,
                     "type": r["type"] or "treo_nhay",
                     "meta": meta,
-                    "status": "stopped" if tid not in ACTIVE_TASKS else "running",
+                    "status": "running" if tid in ACTIVE_TASKS else
+                              ("failed" if r["status"] == "failed" else "stopped"),
                     "started_at": float(r["started_at"] or 0),
                     "sent": int(st_d.get("sent", 0)),
                     "fail": int(st_d.get("fail", 0)),
+                    "error": str(st_d.get("error") or "")[:500],
                     "delay": float(meta.get("delay", 1.0)),
                     "dirty": False,
                     "persisted": True,
@@ -15950,6 +15967,30 @@ def api_miniapp_credential_links_check():
         connection.close()
 
 
+@app.post("/api/miniapp/credential_links/send_discord")
+def api_miniapp_send_linked_discord():
+    if miniapp_request_owner() != admin_principal_id():
+        return jsonify(ok=False, error="Chỉ quản trị viên được gửi qua tài khoản đã kết nối"), 403
+    body = request.get_json(silent=True) or {}
+    try:
+        link_id = int(body.get("id"))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error="Chọn tài khoản Discord hợp lệ"), 400
+    from credential_links import CredentialRejected, CredentialUnavailable, send_discord_message
+    connection = db()
+    try:
+        try:
+            result = send_discord_message(connection, miniapp_request_owner(), link_id,
+                                          body.get("channel_id"), body.get("content"), SECRET_KEY)
+        except CredentialRejected as error:
+            return jsonify(ok=False, error=str(error)), 400
+        except CredentialUnavailable as error:
+            return jsonify(ok=False, error=str(error)), 503
+        return jsonify(ok=True, **result)
+    finally:
+        connection.close()
+
+
 @app.route("/api/miniapp/add_cookie", methods=["POST"])
 def api_miniapp_add_cookie():
     data = request.get_json(silent=True) or {}
@@ -16280,7 +16321,8 @@ def api_miniapp_launch():
         account_ids=[int(a["id"]) for a in accs],
         source_label="miniapp",
     )
-    return jsonify({"ok": True, "task_id": tid, "message": f"🚀 Đã chạy {mode.upper()} trên {len(target_boxes)} Box (#{tid})!"})
+    return jsonify({"ok": True, "task_id": tid,
+                    "message": f"Đã tạo {mode.upper()} cho {len(target_boxes)} box; xem trạng thái task (#{tid})."})
 
 
 @app.route("/api/miniapp/files")

@@ -316,3 +316,4 @@ header{padding:13px 15px;}
 .task-technical { width:100%; border-top:1px solid var(--line); padding-top:6px; color:var(--muted); font-size:11px; }
 .task-technical summary { cursor:pointer; width:max-content; font-weight:700; }
 .task-technical small { display:block; margin-top:5px; overflow-wrap:anywhere; }
+#discord-send-form[hidden],#discord-send-empty[hidden] { display:none!important; }

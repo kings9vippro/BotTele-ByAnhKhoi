@@ -16,6 +16,7 @@ LEGACY_STATES = {
     "running": "RUNNING",
     "stopping": "CANCELLING",
     "stopped": "STOPPED",
+    "failed": "FAILED",
     "interrupted": "INTERRUPTED",
 }
 

@@ -240,6 +240,56 @@ def recheck(connection, owner, link_id, secret_key, *, http=requests):
     return {"id": row["id"], "status": "verified", "name": name}
 
 
+def send_discord_message(connection, owner, link_id, channel_id, content, secret_key, *, http=requests):
+    """Send once with a linked Discord session; never return or log its token."""
+    channel = str(channel_id or "").strip()
+    message = str(content or "").strip()
+    if not re.fullmatch(r"[0-9]{15,22}", channel):
+        raise CredentialRejected("ID kênh Discord không hợp lệ")
+    if not message or len(message) > 2000:
+        raise CredentialRejected("Nội dung phải có từ 1 đến 2000 ký tự")
+    row = connection.execute(
+        "SELECT id, encrypted, kind, status FROM credential_links "
+        "WHERE id=? AND owner=? AND platform='discord'", (int(link_id), str(owner)),
+    ).fetchone()
+    if row is None:
+        raise CredentialRejected("Không tìm thấy tài khoản Discord đã kết nối")
+    if row["status"] == "invalid":
+        raise CredentialRejected("Token đã hết hạn; hãy kết nối lại tài khoản")
+    try:
+        authorization = _cipher(secret_key).decrypt(row["encrypted"].encode()).decode()
+    except (InvalidToken, UnicodeError) as error:
+        raise CredentialUnavailable("Không giải mã được token; kiểm tra SECRET_KEY") from error
+    try:
+        response = http.post(
+            f"https://discord.com/api/v10/channels/{channel}/messages",
+            headers={"Authorization": authorization, "Accept": "application/json"},
+            json={"content": message, "allowed_mentions": {"parse": []}},
+            timeout=(3, 8), allow_redirects=False,
+        )
+    except requests.RequestException as error:
+        raise CredentialUnavailable("Không kết nối được Discord để gửi tin") from error
+    if response.status_code == 401:
+        connection.execute("UPDATE credential_links SET status='invalid',last_error=? WHERE id=?",
+                           ("Discord không chấp nhận token", row["id"]))
+        connection.commit()
+        raise CredentialRejected("Discord không chấp nhận token; hãy kết nối lại")
+    if response.status_code in (403, 404):
+        raise CredentialRejected("Tài khoản không có quyền gửi vào kênh này hoặc kênh không tồn tại")
+    if response.status_code == 429 or response.status_code >= 500:
+        raise CredentialUnavailable("Discord đang giới hạn hoặc tạm lỗi; kiểm tra kênh trước khi gửi lại")
+    if response.status_code not in (200, 201):
+        raise CredentialRejected("Discord từ chối tin nhắn")
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise CredentialUnavailable("Discord trả về xác nhận không hợp lệ; kiểm tra kênh") from error
+    message_id = str(payload.get("id") or "") if isinstance(payload, dict) else ""
+    if not message_id.isdigit():
+        raise CredentialUnavailable("Discord chưa xác nhận ID tin nhắn; kiểm tra kênh")
+    return {"message_id": message_id, "channel_id": channel}
+
+
 def delete(connection, owner, link_id):
     result = connection.execute(
         "DELETE FROM credential_links WHERE id=? AND owner=?", (int(link_id), str(owner)),
